@@ -1,14 +1,13 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: tsr-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    expose:
+      - "5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -19,10 +18,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: tsr-redis
     restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -35,7 +33,6 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    container_name: tsr-api
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -61,7 +58,6 @@ services:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
-    container_name: tsr-worker
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -80,7 +76,6 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    container_name: tsr-web
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -92,10 +87,9 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    container_name: tsr-nginx
     restart: unless-stopped
     ports:
-      - "${NGINX_PORT:-8080}:80"
+      - "${NGINX_PORT:-9000}:80"
     depends_on:
       - web
       - api
@@ -107,4 +101,3 @@ volumes:
   postgres-data:
   redis-data:
   runtime-data:
-
