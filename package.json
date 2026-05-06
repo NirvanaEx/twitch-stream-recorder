@@ -1,0 +1,37 @@
+{
+  "name": "twitch-stream-recorder",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "apps/worker"
+  ],
+  "scripts": {
+    "build": "npm run build -w @tsr/api && npm run build -w @tsr/web && npm run build -w @tsr/worker",
+    "dev": "npm run dev:prepare && concurrently --kill-others-on-fail -n api,web,worker -c cyan,magenta,yellow \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
+    "dev:reset": "npm run dev:reset:prepare && concurrently --kill-others-on-fail -n api,web,worker -c cyan,magenta,yellow \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
+    "dev:prepare": "npm run dev:infra && npm run dev:cleanup && npm run dev:ports && npm run prisma:generate && npm run db:push",
+    "dev:reset:prepare": "npm run dev:prepare && npm run clean:web",
+    "dev:cleanup": "node scripts/kill-dev-processes.mjs",
+    "dev:ports": "node scripts/free-ports.mjs 3000 3001",
+    "dev:api": "dotenv -e .env -- cross-env PORT=3001 npm run start:dev -w @tsr/api",
+    "dev:web": "dotenv -e .env -- cross-env PORT=3000 NEXT_PUBLIC_API_BASE_URL=http://localhost:3001/api NEXT_PUBLIC_WS_BASE_URL=http://localhost:3001 npm run dev -w @tsr/web",
+    "dev:worker": "dotenv -e .env -- npm run dev -w @tsr/worker",
+    "dev:infra": "docker compose up -d postgres redis",
+    "dev:down": "docker compose stop postgres redis",
+    "db:push": "dotenv -e .env -- npm exec -w @tsr/api -- prisma db push --skip-generate --schema prisma/schema.prisma",
+    "prisma:generate": "dotenv -e .env -- npm exec -w @tsr/api -- prisma generate --schema prisma/schema.prisma",
+    "clean:web": "node scripts/clean-web.mjs",
+    "verify:smoke": "node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "dotenv-cli": "^8.0.0"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.6",
+    "express": "^5.2.1"
+  }
+}

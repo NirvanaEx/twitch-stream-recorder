@@ -1,0 +1,67 @@
+﻿generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Channel {
+  id               String    @id @default(cuid())
+  twitchUserId     String?
+  twitchLogin      String    @unique
+  displayName      String?
+  profileImageUrl  String?
+  isEnabled        Boolean   @default(true)
+  autoRecord       Boolean   @default(true)
+  manualStopUntilOffline Boolean @default(false)
+  preferredQuality String    @default("best")
+  isLive           Boolean   @default(false)
+  currentTitle     String?
+  currentGameName  String?
+  liveStartedAt    DateTime?
+  lastSeenLiveAt   DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  streamSessions   StreamSession[]
+}
+
+model StreamSession {
+  id                 String    @id @default(cuid())
+  channelId          String
+  twitchStreamId     String?
+  title              String?
+  categoryName       String?
+  startedAt          DateTime?
+  endedAt            DateTime?
+  status             String    @default("idle")
+  videoStatus        String    @default("idle")
+  chatStatus         String    @default("idle")
+  replayStatus       String    @default("idle")
+  isLive             Boolean   @default(false)
+  recordingSource    String?
+  recordingPath      String?
+  playbackPath       String?
+  previewImageUrl    String?
+  fileSizeBytes      String?
+  errorMessage       String?
+  chatAvailable      Boolean   @default(false)
+  chatPath           String?
+  stoppedByUser      Boolean   @default(false)
+  savedChatOffsetSec Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+}
+
+model AppSettings {
+  id                    String   @id @default("default")
+  retentionDays         Int      @default(30)
+  storageLimitGb        Int      @default(80)
+  recordChat            Boolean  @default(true)
+  keepDeletedMessages   Boolean  @default(true)
+  support7tv            Boolean  @default(true)
+  defaultChatOffsetSec  Int      @default(0)
+  updatedAt             DateTime @updatedAt
+}
