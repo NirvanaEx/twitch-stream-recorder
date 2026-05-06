@@ -48,10 +48,8 @@ services:
       TWITCH_EVENTSUB_SECRET: ${TWITCH_EVENTSUB_SECRET}
       DATA_DIR: /data
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
     volumes:
       - runtime-data:/data
 
@@ -66,10 +64,8 @@ services:
       REDIS_URL: redis://redis:6379
       DATA_DIR: /data
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - postgres
+      - redis
     volumes:
       - runtime-data:/data
 
