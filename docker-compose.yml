@@ -83,7 +83,9 @@ services:
       - api
 
   nginx:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: infra/nginx/Dockerfile
     restart: unless-stopped
     ports:
       - "${NGINX_PORT:-9000}:80"
@@ -91,7 +93,6 @@ services:
       - web
       - api
     volumes:
-      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - runtime-data:/data:ro
 
 volumes:
