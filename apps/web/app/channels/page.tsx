@@ -1,10 +1,21 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiSend } from "../lib/api";
+import { formatDuration } from "../lib/media";
 import { useRealtimeRefresh } from "../lib/use-realtime-refresh";
 import { useLanguage } from "../providers";
+import { IconButton, IconLink } from "../components/IconButton";
+import { Pagination } from "../components/Pagination";
+import {
+  FilmIcon,
+  MessageIcon,
+  PlayIcon,
+  PlusIcon,
+  RefreshIcon,
+  StopIcon,
+  TrashIcon,
+} from "../components/icons";
 
 type ChannelItem = {
   id: string;
@@ -31,40 +42,39 @@ type ChannelItem = {
   } | null;
 };
 
-type ChannelsResponse = {
-  items: ChannelItem[];
-};
-
-type CreateChannelResponse = {
-  item: ChannelItem;
-  warning?: string | null;
-};
-
+type ChannelsResponse = { items: ChannelItem[] };
+type CreateChannelResponse = { item: ChannelItem; warning?: string | null };
 type HealthResponse = {
-  integrations?: {
-    twitch?: {
-      apiReady: boolean;
-      mode: "api" | "public";
-      missing: string[];
-    };
-  };
+  integrations?: { twitch?: { mode: "api" | "public" } };
 };
 
-type ChannelAction = "start" | "stop" | "delete" | "sync" | "toggle-auto-record";
+type Action = "start" | "stop" | "delete" | "sync";
 
-function getStatus(
-  channel: ChannelItem,
-  t: ReturnType<typeof useLanguage>["t"],
-): { label: string; className: string } {
+const PAGE_SIZE = 12;
+
+function StatusBadge({
+  channel,
+  t,
+  now,
+}: {
+  channel: ChannelItem;
+  t: ReturnType<typeof useLanguage>["t"];
+  now: number;
+}) {
   if (channel.latestSession?.status === "recording") {
-    return { label: t.common.recording, className: "pill live" };
+    return (
+      <span className="badge recording">
+        {t.common.recording}
+        {channel.latestSession.startedAt
+          ? ` · ${formatDuration(channel.latestSession.startedAt, now)}`
+          : ""}
+      </span>
+    );
   }
-
-  if (channel.isLive) {
-    return { label: t.common.live, className: "pill warn" };
-  }
-
-  return { label: t.common.offline, className: "pill" };
+  if (channel.isLive) return <span className="badge live">{t.common.live}</span>;
+  if (channel.manualStopUntilOffline)
+    return <span className="badge warn">{t.common.offline}</span>;
+  return <span className="badge">{t.common.offline}</span>;
 }
 
 export default function ChannelsPage() {
@@ -73,29 +83,19 @@ export default function ChannelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [twitchMode, setTwitchMode] = useState<"api" | "public">("api");
-  const [initialLoading, setInitialLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [busyChannelAction, setBusyChannelAction] = useState<{
-    channelId: string;
-    action: ChannelAction;
-  } | null>(null);
+  const [busy, setBusy] = useState<{ id: string; action: Action } | null>(null);
   const [channelInput, setChannelInput] = useState("");
+  const [page, setPage] = useState(1);
+  const [now, setNow] = useState(() => Date.now());
 
-  const loadChannels = useCallback(async (mode: "initial" | "refresh" | "silent" = "silent") => {
-    if (mode === "initial") {
-      setInitialLoading(true);
-    }
-
+  const loadChannels = useCallback(async () => {
     try {
       const response = await apiGet<ChannelsResponse>("channels");
       setItems(response.items);
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
-    } finally {
-      if (mode === "initial") {
-        setInitialLoading(false);
-      }
     }
   }, [t.errors.apiUnavailable]);
 
@@ -109,51 +109,53 @@ export default function ChannelsPage() {
   }, []);
 
   useEffect(() => {
-    void loadChannels("initial");
+    void loadChannels();
     void loadHealth();
-    const timer = window.setInterval(() => {
-      void loadChannels("silent");
+    const refresh = window.setInterval(() => {
+      void loadChannels();
       void loadHealth();
     }, 15000);
-
-    return () => window.clearInterval(timer);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      window.clearInterval(refresh);
+      window.clearInterval(tick);
+    };
   }, [loadChannels, loadHealth]);
 
-  useRealtimeRefresh(() => loadChannels("silent"));
+  useRealtimeRefresh(loadChannels);
 
   const sortedItems = useMemo(() => {
-    return [...items].sort((left, right) => {
-      const leftScore =
-        (left.latestSession?.status === "recording" ? 8 : 0) +
-        (left.isLive ? 4 : 0) +
-        (left.manualStopUntilOffline ? 2 : 0) +
-        (left.latestSession?.videoUrl ? 1 : 0);
-      const rightScore =
-        (right.latestSession?.status === "recording" ? 8 : 0) +
-        (right.isLive ? 4 : 0) +
-        (right.manualStopUntilOffline ? 2 : 0) +
-        (right.latestSession?.videoUrl ? 1 : 0);
-
-      return rightScore - leftScore;
+    return [...items].sort((a, b) => {
+      const score = (c: ChannelItem) =>
+        (c.latestSession?.status === "recording" ? 8 : 0) +
+        (c.isLive ? 4 : 0) +
+        (c.manualStopUntilOffline ? 2 : 0) +
+        (c.latestSession?.videoUrl ? 1 : 0);
+      return score(b) - score(a);
     });
   }, [items]);
 
+  const pagedItems = useMemo(
+    () => sortedItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [sortedItems, page],
+  );
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(sortedItems.length / PAGE_SIZE));
+    if (page > totalPages) setPage(totalPages);
+  }, [sortedItems.length, page]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     setSaving(true);
     setSuccess(null);
     setError(null);
-
     try {
       const response = await apiSend<CreateChannelResponse>("channels", "POST", {
         channel: channelInput,
       });
-
       setChannelInput("");
-      await loadChannels("silent");
-      setError(null);
-
+      await loadChannels();
       setSuccess(
         response.warning
           ? `${t.channels.added} ${response.warning}`
@@ -168,11 +170,10 @@ export default function ChannelsPage() {
     }
   }
 
-  async function handleAction(
-    channelId: string,
-    action: "start" | "stop" | "delete" | "sync",
-  ) {
-    setBusyChannelAction({ channelId, action });
+  async function handleAction(channelId: string, action: Action) {
+    if (action === "delete" && !window.confirm(t.archives.deleteConfirm)) return;
+
+    setBusy({ id: channelId, action });
     setSuccess(null);
     setError(null);
 
@@ -182,278 +183,220 @@ export default function ChannelsPage() {
       } else {
         await apiSend(`channels/${channelId}/${action}`, "POST");
       }
-
-      await loadChannels("silent");
-      setError(null);
+      await loadChannels();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
     } finally {
-      setBusyChannelAction(null);
+      setBusy(null);
     }
   }
 
   async function handleAutoRecordChange(channel: ChannelItem, nextValue: boolean) {
     const previousItems = items;
-
-    setBusyChannelAction({
-      channelId: channel.id,
-      action: "toggle-auto-record",
-    });
-    setSuccess(null);
-    setError(null);
-    setItems((currentItems) =>
-      currentItems.map((currentChannel) =>
-        currentChannel.id === channel.id
-          ? {
-              ...currentChannel,
-              autoRecord: nextValue,
-            }
-          : currentChannel,
-      ),
+    setItems((current) =>
+      current.map((c) => (c.id === channel.id ? { ...c, autoRecord: nextValue } : c)),
     );
-
     try {
-      await apiSend(`channels/${channel.id}`, "PATCH", {
-        autoRecord: nextValue,
-      });
-      await loadChannels("silent");
+      await apiSend(`channels/${channel.id}`, "PATCH", { autoRecord: nextValue });
+      await loadChannels();
     } catch (requestError) {
       setItems(previousItems);
       setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
-    } finally {
-      setBusyChannelAction(null);
     }
   }
 
-  function getActionLabel(action: ChannelAction) {
-    switch (action) {
-      case "start":
-        return t.common.start;
-      case "stop":
-        return t.common.stop;
-      case "delete":
-        return t.common.delete;
-      case "sync":
-        return t.common.retry;
-      case "toggle-auto-record":
-        return t.channels.autoRecordLabel;
-      default:
-        return t.common.loading;
-    }
-  }
+  const isBusy = (id: string, action: Action) => busy?.id === id && busy.action === action;
+  const anyBusy = (id: string) => busy?.id === id;
 
   return (
-    <main className="page-shell dashboard-shell">
+    <main className="page-shell">
       <section className="page-header">
-        <h2 className="page-title">{t.channels.title}</h2>
-        <p className="page-copy">{t.channels.subtitle}</p>
+        <div>
+          <h2 className="page-title">{t.channels.title}</h2>
+          <p className="page-copy">{t.channels.subtitle}</p>
+        </div>
       </section>
 
-      {error ? <div className="notice error-notice">{error}</div> : null}
-      {success ? <div className="notice success-notice">{success}</div> : null}
+      {error ? <div className="notice error">{error}</div> : null}
+      {success ? <div className="notice success">{success}</div> : null}
+      {twitchMode === "public" ? (
+        <div className="notice warn">
+          <strong>{t.channels.twitchSetupTitle}</strong>{" "}
+          <a
+            href="https://dev.twitch.tv/console/apps"
+            target="_blank"
+            rel="noreferrer"
+            style={{ textDecoration: "underline" }}
+          >
+            {t.channels.twitchSetupAction}
+          </a>
+        </div>
+      ) : null}
 
-      <section className="panel section-card">
-        <div className="section-head">
+      <section className="panel">
+        <div className="panel-head">
           <h3 className="section-title">{t.channels.addTitle}</h3>
         </div>
-
-        {initialLoading ? <div className="notice info-notice">{t.common.loading}</div> : null}
-
-        {twitchMode === "public" ? (
-          <div className="notice warn-notice">
-            <strong>{t.channels.twitchSetupTitle}</strong>
-            <p>{t.channels.twitchSetupCopy}</p>
-            <p>{t.channels.twitchSetupRestart}</p>
-            <a
-              className="text-link"
-              href="https://dev.twitch.tv/console/apps"
-              rel="noreferrer"
-              target="_blank"
-            >
-              {t.channels.twitchSetupAction}
-            </a>
-          </div>
-        ) : null}
-
-        <form className="add-channel-form" onSubmit={handleSubmit}>
-          <label className="field add-channel-field">
-            <span>{t.channels.inputLabel}</span>
+        <div className="panel-body">
+          <form onSubmit={handleSubmit} className="input-row">
             <input
               value={channelInput}
               onChange={(event) => setChannelInput(event.target.value)}
               placeholder={t.channels.inputHint}
               required
             />
-          </label>
-          <button className="primary-button" type="submit" disabled={saving}>
-            {saving ? t.common.loading : t.channels.addButton}
-          </button>
-        </form>
-
-        <div className="hint-line">{t.channels.refreshHint}</div>
+            <button
+              type="submit"
+              className={`btn primary${saving ? " is-loading" : ""}`}
+              disabled={saving}
+            >
+              <PlusIcon size={14} />
+              {t.channels.addButton}
+            </button>
+          </form>
+        </div>
       </section>
 
-      <section className="list-grid">
-        {sortedItems.length ? (
-          sortedItems.map((channel) => {
-            const status = getStatus(channel, t);
-            const isRecording = channel.latestSession?.status === "recording";
-            const busyAction =
-              busyChannelAction?.channelId === channel.id ? busyChannelAction.action : null;
-            const isBusy = Boolean(busyAction);
-            const displayName = channel.displayName ?? channel.twitchLogin;
+      <section className="panel">
+        <div className="panel-head">
+          <h3 className="section-title">{t.common.channels}</h3>
+        </div>
 
-            return (
-              <div className="panel channel-ops-card" key={channel.id}>
-                <div className="channel-top">
-                  <div className="identity-block">
-                    <div className="avatar-shell">
-                      {channel.profileImageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={channel.profileImageUrl} alt={displayName} />
-                      ) : (
-                        <span>{displayName.slice(0, 1)}</span>
-                      )}
-                    </div>
-                    <div className="identity-copy">
-                      <p className="row-title">{displayName}</p>
-                      <p className="row-subtitle">@{channel.twitchLogin}</p>
-                    </div>
-                  </div>
-                  <div className={status.className}>{status.label}</div>
-                </div>
-
-                {channel.currentTitle ? (
-                  <div className="detail-block">
-                    <span>{t.channels.currentTitle}</span>
-                    <strong>{channel.currentTitle}</strong>
-                  </div>
-                ) : null}
-
-                <div className="channel-meta-row">
-                  {channel.currentGameName ? (
-                    <div className="detail-inline">
-                      <span>{t.channels.currentGame}</span>
-                      <strong>{channel.currentGameName}</strong>
-                    </div>
-                  ) : null}
-
-                  {channel.liveStartedAt ? (
-                    <div className="detail-inline">
-                      <span>{t.channels.liveSince}</span>
-                      <strong>{new Date(channel.liveStartedAt).toLocaleString()}</strong>
-                    </div>
-                  ) : null}
-                </div>
-
-                <label className="toggle-row channel-toggle-row">
-                  <div className="channel-toggle-copy">
-                    <span>{t.channels.autoRecordLabel}</span>
-                    <p className="hint-line">
-                      {busyAction === "toggle-auto-record"
-                        ? t.common.loading
-                        : channel.autoRecord
-                          ? t.common.enabled
-                          : t.common.disabled}
-                    </p>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={channel.autoRecord}
-                    disabled={isBusy}
-                    onChange={(event) =>
-                      void handleAutoRecordChange(channel, event.target.checked)
-                    }
-                  />
-                </label>
-
-                {channel.manualStopUntilOffline ? (
-                  <div className="hint-line">{t.channels.autoPaused}</div>
-                ) : null}
-
-                {channel.autoRecord && !channel.isLive && !channel.manualStopUntilOffline ? (
-                  <div className="hint-line">{t.channels.autoRecordWaiting}</div>
-                ) : null}
-
-                {channel.latestSession ? (
-                  <div className="detail-inline">
-                    <span>{t.channels.lastArchive}</span>
-                    <strong>{channel.latestSession.title ?? displayName}</strong>
-                  </div>
-                ) : null}
-
-                {isRecording && !channel.latestSession?.videoReady ? (
-                  <div className="hint-line">{t.recording.previewPending}</div>
-                ) : null}
-
-                {busyAction ? (
-                  <div className="channel-progress">
-                    <span className="progress-spinner" aria-hidden="true" />
-                    <span>{`${getActionLabel(busyAction)}...`}</span>
-                  </div>
-                ) : null}
-
-                <div className="card-actions">
-                  {isRecording ? (
-                    <Link className="secondary-button" href="/recording">
-                      {t.common.recordingPage}
-                    </Link>
-                  ) : null}
-
-                  {isRecording ? (
-                    <button
-                      type="button"
-                      className="danger-button"
-                      disabled={isBusy}
-                      onClick={() => void handleAction(channel.id, "stop")}
-                    >
-                      {busyAction === "stop" ? `${t.common.stop}...` : t.common.stop}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="primary-button"
-                      disabled={isBusy || !channel.isLive}
-                      onClick={() => void handleAction(channel.id, "start")}
-                    >
-                      {busyAction === "start" ? `${t.common.start}...` : t.common.start}
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={isBusy}
-                    onClick={() => void handleAction(channel.id, "sync")}
-                  >
-                    {busyAction === "sync" ? `${t.common.retry}...` : t.common.retry}
-                  </button>
-
-                  {channel.latestSession?.videoReady && channel.latestSession?.videoUrl ? (
-                    <>
-                      <Link className="secondary-button" href={`/archives/${channel.latestSession.id}?mode=video`}>
-                        {t.common.watchVideo}
-                      </Link>
-                      <Link className="secondary-button" href={`/archives/${channel.latestSession.id}?mode=chat`}>
-                        {t.common.watchWithChat}
-                      </Link>
-                    </>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    className="ghost-danger-button"
-                    disabled={isBusy}
-                    onClick={() => void handleAction(channel.id, "delete")}
-                  >
-                    {busyAction === "delete" ? `${t.common.delete}...` : t.common.delete}
-                  </button>
-                </div>
-              </div>
-            );
-          })
+        {sortedItems.length === 0 ? (
+          <div className="empty-state">{t.channels.empty}</div>
         ) : (
-          <div className="empty-state">{initialLoading ? t.common.loading : t.channels.empty}</div>
+          <>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>{t.common.channel}</th>
+                    <th className="col-status">{t.common.status}</th>
+                    <th>{t.channels.currentTitle}</th>
+                    <th className="col-status">{t.channels.autoRecordLabel}</th>
+                    <th className="col-actions">{t.common.actions}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedItems.map((channel) => {
+                    const isRecording = channel.latestSession?.status === "recording";
+                    const canStart = channel.isLive && !isRecording;
+                    const displayName = channel.displayName ?? channel.twitchLogin;
+                    const busyHere = anyBusy(channel.id);
+
+                    return (
+                      <tr key={channel.id}>
+                        <td>
+                          <div className="cell-channel">
+                            <div className="avatar">
+                              {channel.profileImageUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={channel.profileImageUrl} alt={displayName} />
+                              ) : (
+                                <span>{displayName.slice(0, 1).toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="cell-name">
+                              <strong>{displayName}</strong>
+                              <span>@{channel.twitchLogin}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="col-status">
+                          <StatusBadge channel={channel} t={t} now={now} />
+                        </td>
+                        <td className="col-truncate" title={channel.currentTitle ?? ""}>
+                          {channel.currentTitle || "—"}
+                        </td>
+                        <td className="col-status">
+                          <label className="switch">
+                            <input
+                              type="checkbox"
+                              checked={channel.autoRecord}
+                              disabled={busyHere}
+                              onChange={(event) =>
+                                void handleAutoRecordChange(channel, event.target.checked)
+                              }
+                            />
+                            <span className="slider" />
+                          </label>
+                        </td>
+                        <td className="col-actions">
+                          <div className="action-row">
+                            {isRecording ? (
+                              <IconButton
+                                title={t.common.stop}
+                                className="stop"
+                                loading={isBusy(channel.id, "stop")}
+                                disabled={busyHere}
+                                onClick={() => void handleAction(channel.id, "stop")}
+                              >
+                                <StopIcon />
+                              </IconButton>
+                            ) : (
+                              <IconButton
+                                title={t.common.start}
+                                className="live"
+                                loading={isBusy(channel.id, "start")}
+                                disabled={busyHere || !canStart}
+                                onClick={() => void handleAction(channel.id, "start")}
+                              >
+                                <PlayIcon />
+                              </IconButton>
+                            )}
+
+                            {channel.latestSession?.videoReady &&
+                            channel.latestSession?.videoUrl ? (
+                              <>
+                                <IconLink
+                                  href={`/archives/${channel.latestSession.id}?mode=video`}
+                                  title={t.common.watchVideo}
+                                >
+                                  <FilmIcon />
+                                </IconLink>
+                                <IconLink
+                                  href={`/archives/${channel.latestSession.id}?mode=chat`}
+                                  title={t.common.watchWithChat}
+                                >
+                                  <MessageIcon />
+                                </IconLink>
+                              </>
+                            ) : null}
+
+                            <IconButton
+                              title={t.common.retry}
+                              loading={isBusy(channel.id, "sync")}
+                              disabled={busyHere}
+                              onClick={() => void handleAction(channel.id, "sync")}
+                            >
+                              <RefreshIcon />
+                            </IconButton>
+
+                            <IconButton
+                              title={t.common.delete}
+                              className="danger"
+                              loading={isBusy(channel.id, "delete")}
+                              disabled={busyHere}
+                              onClick={() => void handleAction(channel.id, "delete")}
+                            >
+                              <TrashIcon />
+                            </IconButton>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <Pagination
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={sortedItems.length}
+              onPageChange={setPage}
+            />
+          </>
         )}
       </section>
     </main>

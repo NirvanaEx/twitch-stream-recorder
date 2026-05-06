@@ -20,8 +20,28 @@ Monorepo for a self-hosted Twitch stream recorder with realtime admin panel, bro
 For local development you do not need to rebuild all app containers on every change.
 
 1. Copy `.env.example` to `.env`
-2. Run `npm install`
-3. Run `npm run dev`
+2. Install recording dependencies on the host (see below)
+3. Run `npm install`
+4. Run `npm run dev`
+
+### Required system dependencies for recording
+
+The API spawns `streamlink` and `ffmpeg` as child processes. They must be available in `PATH` (or as `python -m streamlink`).
+
+Windows:
+
+- `winget install Gyan.FFmpeg` (or grab a static ffmpeg build and add it to PATH)
+- `pip install --user streamlink` (the API will fall back to `python -m streamlink` if `streamlink.exe` is not in PATH)
+
+macOS:
+
+- `brew install ffmpeg streamlink`
+
+Linux:
+
+- `sudo apt install ffmpeg && pip install --user streamlink`
+
+If either binary is missing the API will log `Recording disabled: ...` on startup and refuse to auto-record. This prevents creating dozens of empty session entries in the database.
 
 What `npm run dev` does:
 

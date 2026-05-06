@@ -35,6 +35,13 @@ type Dictionary = {
     stop: string;
     delete: string;
     retry: string;
+    diskFree: string;
+    actions: string;
+    status: string;
+    title: string;
+    channel: string;
+    duration: string;
+    sizeLabel: string;
   };
   dashboard: {
     title: string;
@@ -86,6 +93,7 @@ type Dictionary = {
     empty: string;
     category: string;
     recordedAt: string;
+    endedAt: string;
     size: string;
     deleted: string;
     deleteConfirm: string;
@@ -99,6 +107,7 @@ type Dictionary = {
     videoPending: string;
     recordingInProgress: string;
     deleteArchive: string;
+    theaterMode: string;
   };
   settings: {
     title: string;
@@ -115,6 +124,21 @@ type Dictionary = {
   errors: {
     apiUnavailable: string;
     requestFailed: string;
+  };
+  localReplay: {
+    title: string;
+    subtitle: string;
+    pickVideo: string;
+    pickVideoHint: string;
+    pickBundle: string;
+    pickBundleHint: string;
+    invalidBundle: string;
+    help: string;
+    openArchives: string;
+    changeFiles: string;
+    navLabel: string;
+    downloadVideo: string;
+    downloadBundle: string;
   };
 };
 
@@ -143,6 +167,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       stop: "Стоп",
       delete: "Удалить",
       retry: "Обновить",
+      diskFree: "Свободно",
+      actions: "Действия",
+      status: "Статус",
+      title: "Название",
+      channel: "Канал",
+      duration: "Длительность",
+      sizeLabel: "Размер",
     },
     dashboard: {
       title: "Состояние записи",
@@ -202,6 +233,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       size: "Размер",
       deleted: "Архив удалён.",
       deleteConfirm: "Удалить это видео из архива?",
+      endedAt: "Завершено",
     },
     replay: {
       withChat: "С чатом",
@@ -212,6 +244,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       videoPending: "Видео ещё не готово к просмотру.",
       recordingInProgress: "Запись ещё идёт. Страница обновляется, но архив не должен создаваться заново.",
       deleteArchive: "Удалить архив",
+      theaterMode: "Режим кинотеатра",
     },
     settings: {
       title: "Настройки",
@@ -228,6 +261,21 @@ const dictionaries: Record<Locale, Dictionary> = {
     errors: {
       apiUnavailable: "API недоступен.",
       requestFailed: "Запрос завершился ошибкой.",
+    },
+    localReplay: {
+      title: "Офлайн-просмотр",
+      subtitle: "Выберите локальные файлы: видео + бандл чата. Работает без подключения к серверу.",
+      pickVideo: "Видео (.mp4)",
+      pickVideoHint: "Нажмите или перетащите mp4-файл",
+      pickBundle: "Чат бандл (.tsr.json)",
+      pickBundleHint: "Скачанный с архива JSON с сообщениями",
+      invalidBundle: "Неверный формат бандла. Нужен файл *.tsr.json из раздела Архивы.",
+      help: "Чтобы скачать видео и бандл чата:",
+      openArchives: "Открыть Архивы →",
+      changeFiles: "Сменить файлы",
+      navLabel: "Локально",
+      downloadVideo: "Скачать видео",
+      downloadBundle: "Скачать чат (бандл)",
     },
   },
   en: {
@@ -254,6 +302,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       stop: "Stop",
       delete: "Delete",
       retry: "Refresh",
+      diskFree: "Free space",
+      actions: "Actions",
+      status: "Status",
+      title: "Title",
+      channel: "Channel",
+      duration: "Duration",
+      sizeLabel: "Size",
     },
     dashboard: {
       title: "Recording status",
@@ -313,6 +368,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       size: "Size",
       deleted: "Archive deleted.",
       deleteConfirm: "Delete this video from archives?",
+      endedAt: "Ended",
     },
     replay: {
       withChat: "With chat",
@@ -323,6 +379,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       videoPending: "The video is not ready for playback yet.",
       recordingInProgress: "Recording is still in progress. The page refreshes, but the archive should not restart.",
       deleteArchive: "Delete archive",
+      theaterMode: "Theater mode",
     },
     settings: {
       title: "Settings",
@@ -339,6 +396,21 @@ const dictionaries: Record<Locale, Dictionary> = {
     errors: {
       apiUnavailable: "API is unavailable.",
       requestFailed: "The request failed.",
+    },
+    localReplay: {
+      title: "Offline replay",
+      subtitle: "Pick local files: video + chat bundle. Works without a server connection.",
+      pickVideo: "Video (.mp4)",
+      pickVideoHint: "Click or drop an mp4 file",
+      pickBundle: "Chat bundle (.tsr.json)",
+      pickBundleHint: "Bundle JSON downloaded from the archive",
+      invalidBundle: "Invalid bundle. Need a *.tsr.json file from the Archives section.",
+      help: "To download the video and chat bundle:",
+      openArchives: "Open Archives →",
+      changeFiles: "Change files",
+      navLabel: "Local",
+      downloadVideo: "Download video",
+      downloadBundle: "Download chat bundle",
     },
   },
 };

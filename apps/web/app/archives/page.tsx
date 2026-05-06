@@ -1,11 +1,13 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiSend } from "../lib/api";
-import { formatFileSize } from "../lib/media";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { apiGet, apiSend, buildApiUrl } from "../lib/api";
+import { formatFileSize, formatPeriod } from "../lib/media";
 import { useRealtimeRefresh } from "../lib/use-realtime-refresh";
 import { useLanguage } from "../providers";
+import { IconButton, IconLink } from "../components/IconButton";
+import { Pagination } from "../components/Pagination";
+import { DownloadIcon, FilmIcon, MessageIcon, TrashIcon } from "../components/icons";
 
 type ArchiveItem = {
   id: string;
@@ -21,9 +23,9 @@ type ArchiveItem = {
   videoUrl: string | null;
 };
 
-type ArchivesResponse = {
-  items: ArchiveItem[];
-};
+type ArchivesResponse = { items: ArchiveItem[] };
+
+const PAGE_SIZE = 15;
 
 export default function ArchivesPage() {
   const { t } = useLanguage();
@@ -31,6 +33,7 @@ export default function ArchivesPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const loadArchives = useCallback(async () => {
     try {
@@ -48,10 +51,18 @@ export default function ArchivesPage() {
 
   useRealtimeRefresh(loadArchives);
 
+  const pagedItems = useMemo(
+    () => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [items, page],
+  );
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+    if (page > totalPages) setPage(totalPages);
+  }, [items.length, page]);
+
   async function handleDelete(archiveId: string) {
-    if (!window.confirm(t.archives.deleteConfirm)) {
-      return;
-    }
+    if (!window.confirm(t.archives.deleteConfirm)) return;
 
     setBusyArchiveId(archiveId);
     setSuccess(null);
@@ -69,64 +80,129 @@ export default function ArchivesPage() {
   }
 
   return (
-    <main className="page-shell dashboard-shell">
+    <main className="page-shell">
       <section className="page-header">
-        <h2 className="page-title">{t.archives.title}</h2>
-        <p className="page-copy">{t.archives.subtitle}</p>
+        <div>
+          <h2 className="page-title">{t.archives.title}</h2>
+          <p className="page-copy">{t.archives.subtitle}</p>
+        </div>
       </section>
 
-      {error ? <div className="notice error-notice">{error}</div> : null}
-      {success ? <div className="notice success-notice">{success}</div> : null}
+      {error ? <div className="notice error">{error}</div> : null}
+      {success ? <div className="notice success">{success}</div> : null}
 
-      <section className="list-grid">
-        {items.length ? (
-          items.map((archive) => (
-            <div className="panel archive-card-large" key={archive.id}>
-              <div>
-                <p className="row-title">{archive.title ?? archive.channelDisplayName}</p>
-                <p className="row-subtitle">@{archive.channelLogin}</p>
-              </div>
-
-              <div className="archive-meta-grid">
-                <span>
-                  {t.archives.category}: {archive.categoryName ?? "-"}
-                </span>
-                <span>
-                  {t.archives.recordedAt}:{" "}
-                  {archive.startedAt ? new Date(archive.startedAt).toLocaleString() : "-"}
-                </span>
-                <span>
-                  {t.archives.size}: {formatFileSize(archive.fileSizeBytes)}
-                </span>
-              </div>
-
-              <div className="card-actions">
-                {archive.videoReady && archive.videoUrl ? (
-                  <>
-                    <Link className="secondary-button" href={`/archives/${archive.id}?mode=video`}>
-                      {t.common.watchVideo}
-                    </Link>
-                    <Link className="secondary-button" href={`/archives/${archive.id}?mode=chat`}>
-                      {t.common.watchWithChat}
-                    </Link>
-                  </>
-                ) : (
-                  <div className="hint-line">{t.replay.videoPending}</div>
-                )}
-
-                <button
-                  type="button"
-                  className="ghost-danger-button"
-                  disabled={busyArchiveId === archive.id}
-                  onClick={() => void handleDelete(archive.id)}
-                >
-                  {busyArchiveId === archive.id ? `${t.common.delete}...` : t.common.delete}
-                </button>
-              </div>
-            </div>
-          ))
-        ) : (
+      <section className="panel">
+        {items.length === 0 ? (
           <div className="empty-state">{t.archives.empty}</div>
+        ) : (
+          <>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>{t.common.channel}</th>
+                    <th>{t.common.title}</th>
+                    <th className="col-meta">{t.archives.category}</th>
+                    <th className="col-meta">{t.archives.recordedAt}</th>
+                    <th className="col-meta">{t.common.duration}</th>
+                    <th className="col-meta">{t.common.sizeLabel}</th>
+                    <th className="col-actions">{t.common.actions}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedItems.map((archive) => (
+                    <tr key={archive.id}>
+                      <td>@{archive.channelLogin}</td>
+                      <td className="col-truncate" title={archive.title ?? ""}>
+                        {archive.title || archive.channelDisplayName}
+                      </td>
+                      <td className="col-meta">{archive.categoryName ?? "—"}</td>
+                      <td className="col-meta">
+                        {archive.startedAt ? new Date(archive.startedAt).toLocaleString() : "—"}
+                      </td>
+                      <td className="col-meta">
+                        {formatPeriod(archive.startedAt, archive.endedAt)}
+                      </td>
+                      <td className="col-meta">{formatFileSize(archive.fileSizeBytes)}</td>
+                      <td className="col-actions">
+                        <div className="action-row">
+                          {archive.videoReady && archive.videoUrl ? (
+                            <>
+                              <IconLink
+                                href={`/archives/${archive.id}?mode=video`}
+                                title={t.common.watchVideo}
+                              >
+                                <FilmIcon />
+                              </IconLink>
+                              <IconLink
+                                href={`/archives/${archive.id}?mode=chat`}
+                                title={t.common.watchWithChat}
+                              >
+                                <MessageIcon />
+                              </IconLink>
+                              <a
+                                className="icon-btn"
+                                href={buildApiUrl(`archives/${archive.id}/video?download=1`)}
+                                title={t.localReplay.downloadVideo}
+                                download
+                              >
+                                <DownloadIcon />
+                              </a>
+                              <a
+                                className="icon-btn"
+                                href={buildApiUrl(`archives/${archive.id}/bundle`)}
+                                title={t.localReplay.downloadBundle}
+                                download
+                                style={{ position: "relative" }}
+                              >
+                                <DownloadIcon />
+                                <span
+                                  style={{
+                                    position: "absolute",
+                                    bottom: 2,
+                                    right: 2,
+                                    fontSize: 8,
+                                    fontWeight: 700,
+                                    color: "var(--accent)",
+                                    background: "var(--panel)",
+                                    borderRadius: 2,
+                                    padding: "0 2px",
+                                    lineHeight: 1.1,
+                                  }}
+                                >
+                                  CHAT
+                                </span>
+                              </a>
+                            </>
+                          ) : (
+                            <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                              {t.replay.videoPending}
+                            </span>
+                          )}
+                          <IconButton
+                            title={t.common.delete}
+                            className="danger"
+                            loading={busyArchiveId === archive.id}
+                            disabled={busyArchiveId === archive.id}
+                            onClick={() => void handleDelete(archive.id)}
+                          >
+                            <TrashIcon />
+                          </IconButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <Pagination
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={items.length}
+              onPageChange={setPage}
+            />
+          </>
         )}
       </section>
     </main>

@@ -59,3 +59,28 @@ export function formatDuration(startedAt: string | null | undefined, now = Date.
 
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
+
+export function formatPeriod(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+): string {
+  if (!startedAt) return "—";
+  const startedMs = new Date(startedAt).getTime();
+  if (!Number.isFinite(startedMs) || startedMs <= 0) return "—";
+
+  const endedMs = endedAt ? new Date(endedAt).getTime() : null;
+  const totalSeconds =
+    endedMs && Number.isFinite(endedMs) && endedMs > startedMs
+      ? Math.floor((endedMs - startedMs) / 1000)
+      : 0;
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (totalSeconds <= 0) return "—";
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+

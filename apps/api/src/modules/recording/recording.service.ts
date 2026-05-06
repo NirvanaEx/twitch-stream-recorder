@@ -8,11 +8,13 @@ import {
 } from "@nestjs/common";
 import { Channel, StreamSession } from "@prisma/client";
 import { ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TwitchService } from "../twitch/twitch.service";
+import { ChatService } from "../chat/chat.service";
+import { SevenTvService } from "../chat/seventv.service";
 import { resolveSessionPlaybackState } from "./playback.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 
@@ -20,7 +22,8 @@ type ActiveRecording = {
   channelId: string;
   sessionId: string;
   streamlinkProcess: ChildProcess;
-  ffmpegProcess: ChildProcess;
+  remuxProcess: ChildProcess | null;
+  tsPath: string;
   outputPath: string;
   stopRequested: boolean;
 };
@@ -30,16 +33,21 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RecordingService.name);
   private readonly activeRecordings = new Map<string, ActiveRecording>();
   private monitorTimer: NodeJS.Timeout | null = null;
+  private dependenciesReady = false;
+  private dependenciesError: string | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly twitchService: TwitchService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly chatService: ChatService,
+    private readonly sevenTvService: SevenTvService,
   ) {}
 
   async onModuleInit() {
     this.ensureDataLayout();
     await this.markStaleRecordingsAsStopped();
+    await this.checkRecordingDependencies();
     await this.syncAllChannels();
 
     this.monitorTimer = setInterval(() => {
@@ -113,8 +121,31 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       manualStopUntilOffline: nextManualStopUntilOffline,
     });
 
-    if (liveStream && channel.autoRecord && !channel.manualStopUntilOffline && !isRecording) {
-      await this.startRecording(channel.id, "automatic");
+    if (
+      liveStream &&
+      channel.autoRecord &&
+      !channel.manualStopUntilOffline &&
+      !isRecording &&
+      this.dependenciesReady
+    ) {
+      const alreadyHandled = liveStream.id
+        ? await this.prisma.streamSession.findFirst({
+            where: { channelId: channel.id, twitchStreamId: liveStream.id },
+            select: { id: true },
+          })
+        : null;
+
+      if (!alreadyHandled) {
+        try {
+          await this.startRecording(channel.id, "automatic");
+        } catch (error) {
+          this.logger.warn(
+            `Auto-record failed for ${channel.twitchLogin}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
     }
 
     if (!liveStream && isRecording) {
@@ -165,8 +196,37 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Channel is currently offline.");
     }
 
+    if (liveStream.id) {
+      const duplicateSession = await this.prisma.streamSession.findFirst({
+        where: {
+          channelId: channel.id,
+          twitchStreamId: liveStream.id,
+        },
+        include: { channel: true },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (duplicateSession) {
+        if (trigger === "automatic") {
+          return {
+            item: this.serializeSession(duplicateSession, duplicateSession.channel),
+          };
+        }
+
+        if (duplicateSession.status === "recording") {
+          return {
+            item: this.serializeSession(duplicateSession, duplicateSession.channel),
+          };
+        }
+      }
+    }
+
+    const streamlinkCommand = await this.resolveStreamlinkCommand();
+    this.resolveFfmpegCommand();
+
     const recordingStartedAt = liveStream.startedAt ?? new Date().toISOString();
     const outputPath = this.buildRecordingPath(channel.twitchLogin, recordingStartedAt);
+    const tsPath = outputPath.replace(/\.mp4$/i, ".ts");
     mkdirSync(dirname(outputPath), { recursive: true });
 
     const session = await this.prisma.streamSession.create({
@@ -189,54 +249,64 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    const streamlinkCommand = await this.resolveStreamlinkCommand();
-    const ffmpegCommand = this.resolveFfmpegCommand();
     const quality = channel.preferredQuality || "best";
     const channelUrl = `https://www.twitch.tv/${channel.twitchLogin}`;
 
+    // Streamlink writes the live MPEG-TS directly to disk. We avoid stdin/stdout
+    // pipes entirely (which are the typical source of EPIPE crashes on Windows)
+    // and run an ffmpeg remux to .mp4 only after streamlink finishes.
     const streamlinkProcess = spawn(
       streamlinkCommand.command,
-      [...streamlinkCommand.args, "--stdout", channelUrl, quality],
+      [
+        ...streamlinkCommand.args,
+        "--force",
+        "--hls-live-restart",
+        "--stream-segment-threads",
+        "2",
+        "--loglevel",
+        "info",
+        "-o",
+        tsPath,
+        channelUrl,
+        quality,
+      ],
       {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
 
-    const ffmpegProcess = spawn(
-      ffmpegCommand.command,
-      [
-        ...ffmpegCommand.args,
-        "-y",
-        "-i",
-        "pipe:0",
-        "-c",
-        "copy",
-        "-movflags",
-        "+frag_keyframe+empty_moov+default_base_moof",
-        outputPath,
-      ],
-      {
-        stdio: ["pipe", "ignore", "pipe"],
-      },
-    );
-
-    if (!streamlinkProcess.stdout || !ffmpegProcess.stdin) {
-      throw new BadRequestException("Unable to attach recording pipeline.");
-    }
-
-    streamlinkProcess.stdout.pipe(ffmpegProcess.stdin);
+    streamlinkProcess.on("error", (error) => {
+      this.logger.warn(
+        `streamlink process error for ${channel.twitchLogin}: ${error.message}`,
+      );
+    });
 
     const activeRecording: ActiveRecording = {
       channelId: channel.id,
       sessionId: session.id,
       streamlinkProcess,
-      ffmpegProcess,
+      remuxProcess: null,
+      tsPath,
       outputPath,
       stopRequested: false,
     };
 
     this.activeRecordings.set(channel.id, activeRecording);
     this.bindRecordingLifecycle(channel, session, activeRecording);
+
+    // Start chat capture in parallel. The anchor is "now" (when streamlink
+    // actually started writing video), NOT session.startedAt — Twitch reports
+    // the original go-live time, which can be hours before we joined the stream.
+    // We need chat relativeTime to align with the recorded video timeline.
+    this.chatService.startCapture({
+      channelId: channel.id,
+      sessionId: session.id,
+      channelLogin: channel.twitchLogin,
+      captureAnchor: new Date(),
+    });
+
+    // Fetch a 7TV emote snapshot best-effort, in the background.
+    void this.captureEmoteSnapshot(session.id, channel.twitchUserId);
 
     await this.prisma.channel.update({
       where: { id: channel.id },
@@ -279,11 +349,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // Ignore already exited process.
     }
 
-    try {
-      activeRecording.ffmpegProcess.kill("SIGTERM");
-    } catch {
-      // Ignore already exited process.
-    }
+    this.chatService.stopCapture(channelId);
 
     await this.prisma.streamSession.update({
       where: { id: activeRecording.sessionId },
@@ -453,11 +519,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     const logPrefix = `[${channel.twitchLogin}/${session.id}]`;
 
     activeRecording.streamlinkProcess.stderr?.on("data", (chunk) => {
-      this.logger.debug(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
+      this.logger.log(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
     });
-
-    activeRecording.ffmpegProcess.stderr?.on("data", (chunk) => {
-      this.logger.debug(`${logPrefix} ffmpeg: ${chunk.toString().trim()}`);
+    activeRecording.streamlinkProcess.stdout?.on("data", (chunk) => {
+      this.logger.debug(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
     });
 
     const finalize = async (status: "completed" | "error") => {
@@ -466,20 +531,50 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.activeRecordings.delete(channel.id);
+      this.chatService.stopCapture(channel.id);
 
       const fileExists = existsSync(activeRecording.outputPath);
       const fileSizeBytes = fileExists ? statSync(activeRecording.outputPath).size : 0;
+
+      // Best-effort: also clean up the intermediate .ts file if it lingered.
+      if (existsSync(activeRecording.tsPath)) {
+        try {
+          unlinkSync(activeRecording.tsPath);
+        } catch {
+          // Ignore filesystem errors.
+        }
+      }
+      let finalStatus: "completed" | "error" = status;
+      let errorMessage: string | null =
+        status === "error" ? "Recording process exited unexpectedly." : null;
+
+      if (fileSizeBytes === 0) {
+        finalStatus = "error";
+        errorMessage =
+          "Recording produced no data. Check that streamlink and ffmpeg are installed and that the channel is live.";
+
+        if (fileExists) {
+          try {
+            unlinkSync(activeRecording.outputPath);
+          } catch {
+            // Best-effort cleanup; ignore filesystem errors.
+          }
+        }
+      }
 
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
           endedAt: new Date(),
-          status,
-          videoStatus: status === "completed" ? "ready" : "error",
-          replayStatus: status === "completed" ? "ready" : "error",
+          status: finalStatus,
+          videoStatus: finalStatus === "completed" ? "ready" : "error",
+          replayStatus: finalStatus === "completed" ? "ready" : "error",
           isLive: false,
           fileSizeBytes: String(fileSizeBytes),
-          errorMessage: status === "error" ? "Recording process exited unexpectedly." : null,
+          errorMessage,
+          ...(fileSizeBytes === 0
+            ? { recordingPath: null, playbackPath: null }
+            : {}),
         },
       });
 
@@ -516,20 +611,83 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     };
 
-    activeRecording.ffmpegProcess.once("exit", (code) => {
-      void finalize(activeRecording.stopRequested || code === 0 ? "completed" : "error");
+    activeRecording.streamlinkProcess.once("exit", (code) => {
+      this.logger.log(`${logPrefix} streamlink exited with code ${String(code)}`);
+      void this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
     });
 
-    activeRecording.ffmpegProcess.once("error", () => {
-      void finalize("error");
+    activeRecording.streamlinkProcess.once("error", (error) => {
+      this.logger.warn(`${logPrefix} streamlink failed: ${error.message}`);
     });
+  }
 
-    activeRecording.streamlinkProcess.once("error", () => {
-      try {
-        activeRecording.ffmpegProcess.kill("SIGTERM");
-      } catch {
-        // Ignore.
+  private async runRemuxAndFinalize(
+    channel: Channel,
+    session: StreamSession,
+    activeRecording: ActiveRecording,
+    finalize: (status: "completed" | "error") => Promise<void>,
+  ) {
+    const logPrefix = `[${channel.twitchLogin}/${session.id}]`;
+    const tsPath = activeRecording.tsPath;
+    const outputPath = activeRecording.outputPath;
+    const tsExists = existsSync(tsPath);
+    const tsSize = tsExists ? statSync(tsPath).size : 0;
+
+    if (!tsExists || tsSize === 0) {
+      this.logger.warn(
+        `${logPrefix} streamlink produced no data (${tsSize} bytes). Marking session as error.`,
+      );
+
+      if (tsExists) {
+        try {
+          unlinkSync(tsPath);
+        } catch {
+          // Ignore.
+        }
       }
+
+      await finalize("error");
+      return;
+    }
+
+    const ffmpegCommand = this.resolveFfmpegCommand();
+    const remuxProcess = spawn(
+      ffmpegCommand.command,
+      [
+        ...ffmpegCommand.args,
+        "-y",
+        "-i",
+        tsPath,
+        "-c",
+        "copy",
+        "-bsf:a",
+        "aac_adtstoasc",
+        "-movflags",
+        "+faststart",
+        outputPath,
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    activeRecording.remuxProcess = remuxProcess;
+
+    remuxProcess.stderr?.on("data", (chunk) => {
+      this.logger.debug(`${logPrefix} ffmpeg: ${chunk.toString().trim()}`);
+    });
+
+    remuxProcess.on("error", (error) => {
+      this.logger.warn(`${logPrefix} ffmpeg remux failed to start: ${error.message}`);
+    });
+
+    remuxProcess.once("exit", async (code) => {
+      this.logger.log(`${logPrefix} ffmpeg remux exited with code ${String(code)}`);
+
+      const success =
+        code === 0 && existsSync(outputPath) && statSync(outputPath).size > 0;
+
+      await finalize(success ? "completed" : "error");
     });
   }
 
@@ -583,6 +741,76 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   private resolveFfmpegCommand() {
     return { command: "ffmpeg", args: [] };
+  }
+
+  private async captureEmoteSnapshot(sessionId: string, twitchUserId: string | null) {
+    try {
+      const snapshot = await this.sevenTvService.fetchSnapshot(twitchUserId);
+
+      if (!snapshot) {
+        return;
+      }
+
+      await this.prisma.emoteSnapshot.upsert({
+        where: { streamSessionId: sessionId },
+        create: {
+          streamSessionId: sessionId,
+          provider: snapshot.provider,
+          payloadJson: JSON.stringify(snapshot),
+        },
+        update: {
+          provider: snapshot.provider,
+          payloadJson: JSON.stringify(snapshot),
+        },
+      });
+
+      this.logger.log(
+        `Saved 7TV snapshot for session ${sessionId} (${snapshot.emotes.length} emotes).`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to save 7TV snapshot for session ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async checkRecordingDependencies() {
+    const errors: string[] = [];
+
+    try {
+      await resolveStreamlinkCommand();
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+
+    const ffmpegOk = await new Promise<boolean>((resolvePromise) => {
+      try {
+        const probe = spawn("ffmpeg", ["-version"], { stdio: "ignore" });
+        probe.once("exit", (code) => resolvePromise(code === 0));
+        probe.once("error", () => resolvePromise(false));
+      } catch {
+        resolvePromise(false);
+      }
+    });
+
+    if (!ffmpegOk) {
+      errors.push("ffmpeg is not installed or not in PATH.");
+    }
+
+    if (errors.length > 0) {
+      this.dependenciesReady = false;
+      this.dependenciesError = errors.join(" ");
+      this.logger.error(
+        `Recording disabled: ${this.dependenciesError} Install streamlink and ffmpeg, then restart the API.`,
+      );
+      return;
+    }
+
+    this.dependenciesReady = true;
+    this.dependenciesError = null;
+    this.logger.log("Recording dependencies are available (streamlink + ffmpeg).");
   }
 
   private serializeSession(session: StreamSession, channel: Pick<Channel, "displayName" | "twitchLogin">) {

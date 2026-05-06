@@ -3,8 +3,20 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiSend } from "./lib/api";
+import { formatDuration } from "./lib/media";
 import { useRealtimeRefresh } from "./lib/use-realtime-refresh";
 import { useLanguage } from "./providers";
+import { IconButton, IconLink } from "./components/IconButton";
+import {
+  CircleDotIcon,
+  FilmIcon,
+  MessageIcon,
+  PlayIcon,
+  PlusIcon,
+  RefreshIcon,
+  StopIcon,
+  TrashIcon,
+} from "./components/icons";
 
 type ChannelCard = {
   id: string;
@@ -20,6 +32,7 @@ type ChannelCard = {
     status: string;
     videoReady: boolean;
     videoUrl: string | null;
+    startedAt?: string | null;
   } | null;
 };
 
@@ -40,23 +53,37 @@ type DashboardResponse = {
   }>;
 };
 
-function getChannelStatus(channel: ChannelCard, t: ReturnType<typeof useLanguage>["t"]) {
+function ChannelStatusBadge({
+  channel,
+  t,
+  now,
+}: {
+  channel: ChannelCard;
+  t: ReturnType<typeof useLanguage>["t"];
+  now: number;
+}) {
   if (channel.latestSession?.status === "recording") {
-    return { label: t.common.recording, className: "pill live" };
+    return (
+      <span className="badge recording">
+        {t.common.recording}
+        {channel.latestSession.startedAt
+          ? ` · ${formatDuration(channel.latestSession.startedAt, now)}`
+          : ""}
+      </span>
+    );
   }
-
-  if (channel.isLive) {
-    return { label: t.common.live, className: "pill warn" };
-  }
-
-  return { label: t.common.offline, className: "pill" };
+  if (channel.isLive) return <span className="badge live">{t.common.live}</span>;
+  return <span className="badge">{t.common.offline}</span>;
 }
+
+type Action = "start" | "stop" | "sync" | "delete";
 
 export default function DashboardPage() {
   const { t } = useLanguage();
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busyChannelId, setBusyChannelId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ id: string; action: Action } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     try {
@@ -70,206 +97,252 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => {
-      void load();
-    }, 15000);
-
-    return () => window.clearInterval(timer);
+    const refresh = window.setInterval(() => void load(), 15000);
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      window.clearInterval(refresh);
+      window.clearInterval(tick);
+    };
   }, [load]);
 
   useRealtimeRefresh(load);
 
   const channels = useMemo(() => {
-    return [...(data?.channels ?? [])].sort((left, right) => {
-      const leftScore =
-        (left.latestSession?.status === "recording" ? 4 : 0) +
-        (left.isLive ? 2 : 0) +
-        (left.latestSession?.videoUrl ? 1 : 0);
-      const rightScore =
-        (right.latestSession?.status === "recording" ? 4 : 0) +
-        (right.isLive ? 2 : 0) +
-        (right.latestSession?.videoUrl ? 1 : 0);
-
-      return rightScore - leftScore;
+    return [...(data?.channels ?? [])].sort((a, b) => {
+      const score = (c: ChannelCard) =>
+        (c.latestSession?.status === "recording" ? 4 : 0) +
+        (c.isLive ? 2 : 0) +
+        (c.latestSession?.videoUrl ? 1 : 0);
+      return score(b) - score(a);
     });
   }, [data?.channels]);
 
-  async function handleChannelAction(channelId: string, action: "start" | "stop" | "sync") {
-    setBusyChannelId(channelId);
+  async function handleAction(channelId: string, action: Action) {
+    if (action === "delete" && !window.confirm(t.archives.deleteConfirm)) return;
 
+    setBusy({ id: channelId, action });
     try {
-      await apiSend(`channels/${channelId}/${action}`, "POST");
+      if (action === "delete") {
+        await apiSend(`channels/${channelId}`, "DELETE");
+      } else {
+        await apiSend(`channels/${channelId}/${action}`, "POST");
+      }
       await load();
       setError(null);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
     } finally {
-      setBusyChannelId(null);
+      setBusy(null);
     }
   }
 
+  const isBusy = (id: string, action: Action) => busy?.id === id && busy.action === action;
+  const anyBusy = (id: string) => busy?.id === id;
+
   return (
-    <main className="page-shell dashboard-shell">
-      <section className="page-header compact-header">
+    <main className="page-shell">
+      <section className="page-header">
         <div>
           <h2 className="page-title">{t.dashboard.title}</h2>
           <p className="page-copy">{t.dashboard.subtitle}</p>
         </div>
-        <Link className="primary-button" href="/channels">
+        <Link className="btn primary" href="/channels">
+          <PlusIcon size={14} />
           {t.dashboard.manageChannels}
         </Link>
       </section>
 
-      {error ? <div className="notice error-notice">{error}</div> : null}
+      {error ? <div className="notice error">{error}</div> : null}
 
-      <section className="summary-grid">
-        <div className="summary-card">
-          <span>{t.dashboard.trackedChannels}</span>
-          <strong>{data?.trackedChannels ?? "-"}</strong>
+      <section className="stats-row">
+        <div className="stat-card">
+          <span className="stat-label">{t.dashboard.trackedChannels}</span>
+          <span className="stat-value">{data?.trackedChannels ?? "—"}</span>
         </div>
-        <div className="summary-card">
-          <span>{t.dashboard.liveNow}</span>
-          <strong>{data?.liveChannels ?? "-"}</strong>
+        <div className="stat-card">
+          <span className="stat-label">
+            <CircleDotIcon size={11} /> {t.dashboard.liveNow}
+          </span>
+          <span className="stat-value live">{data?.liveChannels ?? "—"}</span>
         </div>
-        <div className="summary-card">
-          <span>{t.dashboard.recordingNow}</span>
-          <strong>{data?.activeRecordings ?? "-"}</strong>
+        <div className="stat-card">
+          <span className="stat-label">{t.dashboard.recordingNow}</span>
+          <span className="stat-value recording">{data?.activeRecordings ?? "—"}</span>
         </div>
       </section>
 
-      <section className="section-grid">
-        <div className="panel section-card">
-          <div className="section-head">
-            <h3 className="section-title">{t.dashboard.liveNow}</h3>
-            <Link className="text-link" href="/channels">
-              {t.dashboard.manageChannels}
-            </Link>
-          </div>
+      <section className="panel">
+        <div className="panel-head">
+          <h3 className="section-title">{t.dashboard.liveNow}</h3>
+          <Link className="btn" href="/channels">
+            {t.dashboard.manageChannels}
+          </Link>
+        </div>
 
-          <div className="list-grid">
-            {channels.length ? (
-              channels.map((channel) => {
-                const status = getChannelStatus(channel, t);
-                const isRecording = channel.latestSession?.status === "recording";
-                const isBusy = busyChannelId === channel.id;
+        {channels.length === 0 ? (
+          <div className="empty-state">{t.dashboard.noChannels}</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t.common.channel}</th>
+                  <th className="col-status">{t.common.status}</th>
+                  <th>{t.common.title}</th>
+                  <th className="col-actions">{t.common.actions}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channels.map((channel) => {
+                  const isRecording = channel.latestSession?.status === "recording";
+                  const canStart = channel.isLive && !isRecording;
+                  const busyHere = anyBusy(channel.id);
 
-                return (
-                  <div className="channel-card compact-card" key={channel.id}>
-                    <div className="channel-top">
-                      <div className="identity-block">
-                        <div className="avatar-shell">
-                          {channel.profileImageUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={channel.profileImageUrl} alt={channel.displayName} />
+                  return (
+                    <tr key={channel.id}>
+                      <td>
+                        <div className="cell-channel">
+                          <div className="avatar">
+                            {channel.profileImageUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={channel.profileImageUrl} alt={channel.displayName} />
+                            ) : (
+                              <span>{channel.displayName.slice(0, 1).toUpperCase()}</span>
+                            )}
+                          </div>
+                          <div className="cell-name">
+                            <strong>{channel.displayName}</strong>
+                            <span>@{channel.twitchLogin}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="col-status">
+                        <ChannelStatusBadge channel={channel} t={t} now={now} />
+                      </td>
+                      <td className="col-truncate" title={channel.currentTitle ?? ""}>
+                        {channel.currentTitle || "—"}
+                      </td>
+                      <td className="col-actions">
+                        <div className="action-row">
+                          {isRecording ? (
+                            <IconButton
+                              title={t.common.stop}
+                              className="stop"
+                              loading={isBusy(channel.id, "stop")}
+                              disabled={busyHere}
+                              onClick={() => void handleAction(channel.id, "stop")}
+                            >
+                              <StopIcon />
+                            </IconButton>
                           ) : (
-                            <span>{channel.displayName.slice(0, 1)}</span>
+                            <IconButton
+                              title={t.common.start}
+                              className="live"
+                              loading={isBusy(channel.id, "start")}
+                              disabled={busyHere || !canStart}
+                              onClick={() => void handleAction(channel.id, "start")}
+                            >
+                              <PlayIcon />
+                            </IconButton>
                           )}
+
+                          {channel.latestSession?.videoReady && channel.latestSession?.videoUrl ? (
+                            <IconLink
+                              href={`/archives/${channel.latestSession.id}?mode=chat`}
+                              title={t.common.watchWithChat}
+                            >
+                              <FilmIcon />
+                            </IconLink>
+                          ) : null}
+
+                          <IconButton
+                            title={t.common.retry}
+                            loading={isBusy(channel.id, "sync")}
+                            disabled={busyHere}
+                            onClick={() => void handleAction(channel.id, "sync")}
+                          >
+                            <RefreshIcon />
+                          </IconButton>
+
+                          <IconButton
+                            title={t.common.delete}
+                            className="danger"
+                            loading={isBusy(channel.id, "delete")}
+                            disabled={busyHere}
+                            onClick={() => void handleAction(channel.id, "delete")}
+                          >
+                            <TrashIcon />
+                          </IconButton>
                         </div>
-                        <div className="identity-copy">
-                          <p className="row-title">{channel.displayName}</p>
-                          <p className="row-subtitle">@{channel.twitchLogin}</p>
-                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h3 className="section-title">{t.dashboard.recentArchives}</h3>
+          <Link className="btn" href="/archives">
+            {t.common.archives}
+          </Link>
+        </div>
+
+        {data?.latestArchives.length === 0 ? (
+          <div className="empty-state">{t.dashboard.noArchives}</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t.common.channel}</th>
+                  <th>{t.common.title}</th>
+                  <th className="col-meta">{t.archives.recordedAt}</th>
+                  <th className="col-actions">{t.common.actions}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data?.latestArchives.map((archive) => (
+                  <tr key={archive.id}>
+                    <td>@{archive.channelLogin}</td>
+                    <td className="col-truncate" title={archive.title ?? ""}>
+                      {archive.title || archive.channelDisplayName}
+                    </td>
+                    <td className="col-meta">{new Date(archive.createdAt).toLocaleString()}</td>
+                    <td className="col-actions">
+                      <div className="action-row">
+                        {archive.videoReady && archive.videoUrl ? (
+                          <>
+                            <IconLink
+                              href={`/archives/${archive.id}?mode=video`}
+                              title={t.common.watchVideo}
+                            >
+                              <FilmIcon />
+                            </IconLink>
+                            <IconLink
+                              href={`/archives/${archive.id}?mode=chat`}
+                              title={t.common.watchWithChat}
+                            >
+                              <MessageIcon />
+                            </IconLink>
+                          </>
+                        ) : (
+                          <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                            {t.replay.videoPending}
+                          </span>
+                        )}
                       </div>
-                      <div className={status.className}>{status.label}</div>
-                    </div>
-
-                    {channel.currentTitle ? <p className="stream-line">{channel.currentTitle}</p> : null}
-
-                    {channel.manualStopUntilOffline ? (
-                      <div className="hint-line">{t.channels.autoPaused}</div>
-                    ) : null}
-
-                    {isRecording && !channel.latestSession?.videoReady ? (
-                      <div className="hint-line">{t.recording.previewPending}</div>
-                    ) : null}
-
-                    <div className="card-actions">
-                      {isRecording ? (
-                        <Link className="secondary-button" href="/recording">
-                          {t.common.recordingPage}
-                        </Link>
-                      ) : null}
-
-                      {isRecording ? (
-                        <button
-                          type="button"
-                          className="danger-button"
-                          disabled={isBusy}
-                          onClick={() => void handleChannelAction(channel.id, "stop")}
-                        >
-                          {t.common.stop}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="primary-button"
-                          disabled={isBusy || !channel.isLive}
-                          onClick={() => void handleChannelAction(channel.id, "start")}
-                        >
-                          {t.common.start}
-                        </button>
-                      )}
-
-                      {channel.latestSession?.videoReady && channel.latestSession?.videoUrl ? (
-                        <Link className="secondary-button" href={`/archives/${channel.latestSession.id}`}>
-                          {t.common.watch}
-                        </Link>
-                      ) : null}
-
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        disabled={isBusy}
-                        onClick={() => void handleChannelAction(channel.id, "sync")}
-                      >
-                        {t.common.retry}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="empty-state">{t.dashboard.noChannels}</div>
-            )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
-
-        <div className="panel section-card">
-          <div className="section-head">
-            <h3 className="section-title">{t.dashboard.recentArchives}</h3>
-            <Link className="text-link" href="/archives">
-              {t.common.watch}
-            </Link>
-          </div>
-
-          <div className="list-grid">
-            {data?.latestArchives.length ? (
-              data.latestArchives.map((archive) => (
-                <div className="archive-card" key={archive.id}>
-                  <p className="row-title">{archive.title ?? archive.channelDisplayName}</p>
-                  <p className="row-subtitle">@{archive.channelLogin}</p>
-                  <div className="meta">{new Date(archive.createdAt).toLocaleString()}</div>
-                  <div className="card-actions">
-                    {archive.videoReady && archive.videoUrl ? (
-                      <>
-                        <Link className="secondary-button" href={`/archives/${archive.id}?mode=video`}>
-                          {t.common.watchVideo}
-                        </Link>
-                        <Link className="secondary-button" href={`/archives/${archive.id}?mode=chat`}>
-                          {t.common.watchWithChat}
-                        </Link>
-                      </>
-                    ) : (
-                      <div className="hint-line">{t.replay.videoPending}</div>
-                    )}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="empty-state">{t.dashboard.noArchives}</div>
-            )}
-          </div>
-        </div>
+        )}
       </section>
     </main>
   );

@@ -1,4 +1,6 @@
 import { Injectable } from "@nestjs/common";
+import { statfs } from "node:fs/promises";
+import { resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { resolveSessionPlaybackState } from "../recording/playback.utils";
 import { SettingsService } from "../settings/settings.service";
@@ -11,7 +13,7 @@ export class DashboardService {
   ) {}
 
   async getOverview() {
-    const [trackedChannels, liveChannels, activeRecordings, latestArchivesRaw, channelsRaw, settings] =
+    const [trackedChannels, liveChannels, activeRecordings, latestArchivesRaw, channelsRaw, settings, diskUsage] =
       await Promise.all([
       this.prisma.channel.count(),
       this.prisma.channel.count({
@@ -56,6 +58,7 @@ export class DashboardService {
         },
       }),
       this.settingsService.getSettings(),
+      this.getDiskUsage(),
     ]);
 
     const latestArchives = latestArchivesRaw as Array<{
@@ -95,6 +98,8 @@ export class DashboardService {
                 status: latestSession.status,
                 videoReady: playback?.videoReady ?? false,
                 videoUrl: playback?.videoUrl ?? null,
+                startedAt: latestSession.startedAt,
+                endedAt: latestSession.endedAt,
               }
             : null,
         };
@@ -115,6 +120,32 @@ export class DashboardService {
         };
       }),
       settings,
+      diskUsage,
     };
+  }
+
+  private async getDiskUsage(): Promise<{
+    totalBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+    path: string;
+  } | null> {
+    const dataDir = resolve(process.env.DATA_DIR ?? "./data");
+
+    try {
+      const stats = await statfs(dataDir);
+      const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+      const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+      const usedBytes = Math.max(0, totalBytes - freeBytes);
+
+      return {
+        totalBytes,
+        freeBytes,
+        usedBytes,
+        path: dataDir,
+      };
+    } catch {
+      return null;
+    }
   }
 }

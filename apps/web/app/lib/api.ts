@@ -1,4 +1,4 @@
-function buildApiUrl(path: string) {
+export function buildApiUrl(path: string) {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
   const normalizedPath = path.replace(/^\/+/, "").replace(/^api\/+/, "");
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ArchivesModule } from "./archives/archives.module";
+import { ChatModule } from "./chat/chat.module";
 import { AuthModule } from "./auth/auth.module";
 import { ChannelsModule } from "./channels/channels.module";
 import { DashboardModule } from "./dashboard/dashboard.module";
@@ -16,6 +17,7 @@ import { TwitchModule } from "./twitch/twitch.module";
     HealthModule,
     AuthModule,
     TwitchModule,
+    ChatModule,
     RecordingModule,
     DashboardModule,
     ChannelsModule,

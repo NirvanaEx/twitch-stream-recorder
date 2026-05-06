@@ -55,6 +55,33 @@ model StreamSession {
   channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
 }
 
+model ChatMessage {
+  id                String   @id @default(cuid())
+  streamSessionId   String
+  providerMessageId String?
+  authorLogin       String
+  authorDisplayName String?
+  authorColor       String?
+  badgesJson        String?
+  textRaw           String
+  emotesJson        String?
+  messageTimestamp  DateTime
+  relativeTimeSec   Int
+  isDeleted         Boolean  @default(false)
+  deletedAt         DateTime?
+  createdAt         DateTime @default(now())
+
+  @@index([streamSessionId, relativeTimeSec])
+}
+
+model EmoteSnapshot {
+  id              String   @id @default(cuid())
+  streamSessionId String   @unique
+  provider        String
+  payloadJson     String
+  createdAt       DateTime @default(now())
+}
+
 model AppSettings {
   id                    String   @id @default("default")
   retentionDays         Int      @default(30)

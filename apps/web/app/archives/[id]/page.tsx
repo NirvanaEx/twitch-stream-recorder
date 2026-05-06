@@ -3,10 +3,14 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiSend } from "../../lib/api";
+import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
 import { buildMediaUrl, formatFileSize } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
+import { useVideoShortcuts } from "../../lib/use-video-shortcuts";
 import { useLanguage } from "../../providers";
+import { ChatReplay } from "../../components/ChatReplay";
+import { DownloadIcon, MaximizeIcon, TrashIcon } from "../../components/icons";
+import { formatPeriod } from "../../lib/media";
 
 type ArchiveDetailResponse = {
   item: {
@@ -40,6 +44,7 @@ export default function ArchiveReplayPage() {
   const [chatMode, setChatMode] = useState<"with" | "without">(
     searchParams.get("mode") === "chat" ? "with" : "without",
   );
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -56,14 +61,8 @@ export default function ArchiveReplayPage() {
   }, [load]);
 
   useEffect(() => {
-    if (data?.item.status !== "recording") {
-      return undefined;
-    }
-
-    const timer = window.setInterval(() => {
-      void load();
-    }, 15000);
-
+    if (data?.item.status !== "recording") return undefined;
+    const timer = window.setInterval(() => void load(), 15000);
     return () => window.clearInterval(timer);
   }, [data?.item.status, load]);
 
@@ -72,19 +71,14 @@ export default function ArchiveReplayPage() {
   }, [searchParams]);
 
   useRealtimeRefresh(load);
+  useVideoShortcuts(videoElement);
 
-  const videoSrc = useMemo(() => {
-    return buildMediaUrl(data?.videoUrl);
-  }, [data?.videoUrl]);
+  const videoSrc = useMemo(() => buildMediaUrl(data?.videoUrl), [data?.videoUrl]);
 
   async function handleDelete() {
-    if (!data || !window.confirm(t.archives.deleteConfirm)) {
-      return;
-    }
-
+    if (!data || !window.confirm(t.archives.deleteConfirm)) return;
     setBusyDelete(true);
     setError(null);
-
     try {
       await apiSend(`archives/${data.item.id}`, "DELETE");
       router.push("/archives");
@@ -96,83 +90,155 @@ export default function ArchiveReplayPage() {
   }
 
   return (
-    <main className="page-shell dashboard-shell">
-      <section className="page-header compact-header">
+    <main className={chatMode === "with" ? "page-shell page-shell--wide" : "page-shell"}>
+      <section className="page-header">
         <div>
-          <div className="eyebrow">{data?.item.channelDisplayName ?? t.common.archives}</div>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-faint)",
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+            }}
+          >
+            {data?.item.channelDisplayName ?? t.common.archives}
+          </span>
           <h2 className="page-title">{data?.item.title ?? data?.item.channelDisplayName ?? "Replay"}</h2>
           <p className="page-copy">{data?.item.categoryName ?? ""}</p>
         </div>
-        <div className="card-actions">
-          {data?.item.status === "recording" ? (
-            <Link className="secondary-button" href="/recording">
-              {t.common.recordingPage}
-            </Link>
-          ) : null}
+        <div className="action-row">
+          <Link className="btn" href="/archives">
+            ← {t.replay.backToArchives}
+          </Link>
+          <div style={{ display: "inline-flex", border: "1px solid var(--border)", borderRadius: 6 }}>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                border: "none",
+                background: chatMode === "without" ? "var(--accent-soft)" : "transparent",
+                borderRadius: 0,
+              }}
+              onClick={() => setChatMode("without")}
+            >
+              {t.replay.withoutChat}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                border: "none",
+                background: chatMode === "with" ? "var(--accent-soft)" : "transparent",
+                borderRadius: 0,
+              }}
+              onClick={() => setChatMode("with")}
+            >
+              {t.replay.withChat}
+            </button>
+          </div>
+          <a
+            className="icon-btn"
+            href={buildApiUrl(`archives/${params.id}/video?download=1`)}
+            title={t.localReplay.downloadVideo}
+            download
+          >
+            <DownloadIcon />
+          </a>
+          <a
+            className="icon-btn"
+            href={buildApiUrl(`archives/${params.id}/bundle`)}
+            title={t.localReplay.downloadBundle}
+            download
+            style={{ position: "relative" }}
+          >
+            <DownloadIcon />
+            <span
+              style={{
+                position: "absolute",
+                bottom: 2,
+                right: 2,
+                fontSize: 8,
+                fontWeight: 700,
+                color: "var(--accent)",
+                background: "var(--panel)",
+                borderRadius: 2,
+                padding: "0 2px",
+                lineHeight: 1.1,
+              }}
+            >
+              CHAT
+            </span>
+          </a>
+          <Link
+            className="icon-btn"
+            href={`/archives/${params.id}/theater?chat=${chatMode === "with" ? 1 : 0}`}
+            title={t.replay.theaterMode}
+          >
+            <MaximizeIcon />
+          </Link>
           <button
             type="button"
-            className="ghost-danger-button"
+            className="icon-btn danger"
             disabled={busyDelete || data?.item.status === "recording"}
+            title={t.replay.deleteArchive}
             onClick={() => void handleDelete()}
           >
-            {busyDelete ? `${t.common.delete}...` : t.replay.deleteArchive}
+            <TrashIcon />
           </button>
-          <Link className="secondary-button" href="/archives">
-            {t.replay.backToArchives}
-          </Link>
         </div>
       </section>
 
-      {error ? <div className="notice error-notice">{error}</div> : null}
+      {error ? <div className="notice error">{error}</div> : null}
       {data?.item.status === "recording" ? (
-        <div className="notice info-notice">{t.replay.recordingInProgress}</div>
+        <div className="notice info">{t.replay.recordingInProgress}</div>
       ) : null}
 
       <section className={chatMode === "with" ? "replay-grid with-chat" : "replay-grid"}>
-        <div className="panel replay-panel">
-          <div className="section-head">
-            <div className="offset-controls">
-              <button
-                type="button"
-                className={chatMode === "without" ? "active-button" : ""}
-                onClick={() => setChatMode("without")}
-              >
-                {t.replay.withoutChat}
-              </button>
-              <button
-                type="button"
-                className={chatMode === "with" ? "active-button" : ""}
-                onClick={() => setChatMode("with")}
-              >
-                {t.replay.withChat}
-              </button>
-            </div>
-            <div className="archive-meta-grid">
+        <div className="panel">
+          <div className="panel-body">
+            {data?.videoReady && videoSrc ? (
+              <video
+                ref={setVideoElement}
+                className="replay-video"
+                controls
+                preload="metadata"
+                src={videoSrc}
+              />
+            ) : (
+              <div className="empty-state">{t.replay.videoPending}</div>
+            )}
+            <div className="replay-meta" style={{ marginTop: 12 }}>
               <span>
-                {t.archives.recordedAt}:{" "}
-                {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "-"}
+                {t.archives.recordedAt}:
+                <strong>
+                  {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "—"}
+                </strong>
+              </span>
+              {data?.item.endedAt ? (
+                <span>
+                  {t.archives.endedAt}:
+                  <strong>{new Date(data.item.endedAt).toLocaleString()}</strong>
+                </span>
+              ) : null}
+              <span>
+                {t.common.duration}:
+                <strong>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</strong>
               </span>
               <span>
-                {t.archives.size}: {formatFileSize(data?.item.fileSizeBytes)}
+                {t.archives.size}:
+                <strong>{formatFileSize(data?.item.fileSizeBytes)}</strong>
               </span>
             </div>
           </div>
-
-          {data?.videoReady && videoSrc ? (
-            <video className="replay-video" controls preload="metadata" src={videoSrc} />
-          ) : (
-            <div className="empty-state">{t.replay.videoPending}</div>
-          )}
         </div>
 
-        {chatMode === "with" ? (
+        {chatMode === "with" && data ? (
           <aside className="panel chat-panel">
-            <h3 className="section-title">{t.replay.withChat}</h3>
-            <div className="empty-state">
-              {data?.item.chatStatus === "not_configured"
-                ? t.replay.chatNotConfigured
-                : t.replay.chatUnavailable}
-            </div>
+            <ChatReplay
+              archiveId={data.item.id}
+              videoElement={videoElement}
+              isLive={data.item.status === "recording"}
+            />
           </aside>
         ) : null}
       </section>
