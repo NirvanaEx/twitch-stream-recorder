@@ -238,3 +238,135 @@ export function HardDriveIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function PauseIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none" />
+      <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function SkipBack5Icon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M11.5 4.5a8 8 0 1 0 7.5 5.5" />
+      <polyline points="11.5 1.5 11.5 4.5 14.5 4.5" />
+      <text
+        x="12"
+        y="16"
+        textAnchor="middle"
+        fontSize="8"
+        fontWeight="700"
+        fill="currentColor"
+        stroke="none"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+      >
+        5
+      </text>
+    </svg>
+  );
+}
+
+export function SkipForward5Icon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M12.5 4.5a8 8 0 1 1-7.5 5.5" />
+      <polyline points="12.5 1.5 12.5 4.5 9.5 4.5" />
+      <text
+        x="12"
+        y="16"
+        textAnchor="middle"
+        fontSize="8"
+        fontWeight="700"
+        fill="currentColor"
+        stroke="none"
+        fontFamily="ui-sans-serif, system-ui, sans-serif"
+      >
+        5
+      </text>
+    </svg>
+  );
+}
+
+export function VolumeHighIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <polygon points="11 5 6 9 3 9 3 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+      <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+    </svg>
+  );
+}
+
+export function VolumeLowIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <polygon points="11 5 6 9 3 9 3 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+      <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+    </svg>
+  );
+}
+
+export function VolumeMutedIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <polygon points="11 5 6 9 3 9 3 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+      <line x1="22" y1="9" x2="16" y2="15" />
+      <line x1="16" y1="9" x2="22" y2="15" />
+    </svg>
+  );
+}
+
+export function TheaterIcon(props: IconProps) {
+  // "Cinema" / theater rectangle with two side bars (matches YouTube cinema mode glyph).
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <line x1="6" y1="6" x2="6" y2="18" />
+      <line x1="18" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+export function FullscreenIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M4 9V4h5" />
+      <path d="M20 9V4h-5" />
+      <path d="M4 15v5h5" />
+      <path d="M20 15v5h-5" />
+    </svg>
+  );
+}
+
+export function FullscreenExitIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M9 4v5H4" />
+      <path d="M15 4v5h5" />
+      <path d="M9 20v-5H4" />
+      <path d="M15 20v-5h5" />
+    </svg>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </svg>
+  );
+}

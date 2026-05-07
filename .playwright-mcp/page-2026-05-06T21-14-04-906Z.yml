@@ -1,0 +1,26 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Сайты без VPN" [level=1] [ref=e4]
+      - link "Выйти" [ref=e5] [cursor=pointer]:
+        - /url: /logout
+  - main [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - textbox "example.com или *.example.com" [ref=e9]
+        - textbox "Комментарий" [ref=e10]
+        - button "Добавить" [ref=e11] [cursor=pointer]
+      - generic [ref=e12]:
+        - link "Список для роутера" [ref=e13] [cursor=pointer]:
+          - /url: /domains.txt?token=Iq8D6GnWdoyhSYLYEQbV8aw1dJLSrRe5phFlRRL3
+        - generic [ref=e14]: 0 записей
+      - table [ref=e15]:
+        - rowgroup [ref=e16]:
+          - row "Домен Комментарий Добавлено" [ref=e17]:
+            - columnheader "Домен" [ref=e18]
+            - columnheader "Комментарий" [ref=e19]
+            - columnheader "Добавлено" [ref=e20]
+            - columnheader [ref=e21]
+        - rowgroup [ref=e22]:
+          - row "Пока список пуст" [ref=e23]:
+            - cell "Пока список пуст" [ref=e24]

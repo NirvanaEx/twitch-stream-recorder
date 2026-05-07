@@ -1,0 +1,174 @@
+- generic [ref=e89]:
+  - generic [ref=e91]:
+    - generic [ref=e92]:
+      - link [ref=e93] [cursor=pointer]:
+        - /url: https://www.gl-inet.com/
+        - img [ref=e94]
+      - generic [ref=e108]:
+        - text: Admin Panel
+        - generic [ref=e109] [cursor=pointer]: v4.3.28
+        - generic [ref=e110]: CN
+    - generic [ref=e111]:
+      - generic [ref=e112]:
+        - link "" [ref=e113] [cursor=pointer]:
+          - /url: https://docs.gl-inet.com/router/en/4
+          - generic [ref=e114]: 
+        - generic [ref=e115] [cursor=pointer]: 
+        - generic [ref=e116] [cursor=pointer]: 
+        - generic [ref=e119]:
+          - generic [ref=e121] [cursor=pointer]: 
+          - list [ref=e122]:
+            - listitem [ref=e123] [cursor=pointer]: default
+            - listitem [ref=e124] [cursor=pointer]: Classic
+            - listitem [ref=e125] [cursor=pointer]: Dark
+        - generic [ref=e127] [cursor=pointer]:
+          - generic [ref=e130]: en
+          - list [ref=e131]:
+            - listitem [ref=e132]: English
+            - listitem [ref=e133]: 简体中文
+            - listitem [ref=e134]: 繁體中文
+            - listitem [ref=e135]: Deutsch
+            - listitem [ref=e136]: Español
+            - listitem [ref=e137]: Italiano
+            - listitem [ref=e138]: 日本語
+            - listitem [ref=e139]: 한국어
+      - text: 
+  - generic [ref=e140]:
+    - generic [ref=e142]:
+      - menubar [ref=e143]:
+        - menuitem " Internet" [ref=e144] [cursor=pointer]:
+          - generic [ref=e145]: 
+          - generic [ref=e146]: Internet
+        - menuitem " Wireless" [ref=e147] [cursor=pointer]:
+          - generic [ref=e148]: 
+          - generic [ref=e149]: Wireless
+        - menuitem " Clients" [ref=e150] [cursor=pointer]:
+          - generic [ref=e151]: 
+          - generic [ref=e152]: Clients
+        - menuitem " Applications " [ref=e153]:
+          - generic [ref=e154] [cursor=pointer]:
+            - generic [ref=e155]: 
+            - generic [ref=e156]: Applications
+            - generic [ref=e157]: 
+        - menuitem " Network " [expanded] [ref=e158]:
+          - generic [ref=e159] [cursor=pointer]:
+            - generic [ref=e160]: 
+            - generic [ref=e161]: Network
+            - generic [ref=e162]: 
+          - menu [ref=e351]:
+            - listitem [ref=e352]:
+              - list [ref=e353]:
+                - menuitem "Firewall" [ref=e354] [cursor=pointer]:
+                  - generic [ref=e355]: Firewall
+                - menuitem "Multi-WAN" [ref=e356] [cursor=pointer]:
+                  - generic [ref=e357]: Multi-WAN
+                - menuitem "LAN" [ref=e358] [cursor=pointer]:
+                  - generic [ref=e359]: LAN
+                - menuitem "DNS" [ref=e360] [cursor=pointer]:
+                  - generic [ref=e361]: DNS
+                - menuitem "Network Mode" [ref=e362] [cursor=pointer]:
+                  - generic [ref=e363]: Network Mode
+                - menuitem "IPv6" [ref=e364] [cursor=pointer]:
+                  - generic [ref=e365]: IPv6
+                - menuitem "MAC Address" [ref=e366] [cursor=pointer]:
+                  - generic [ref=e367]: MAC Address
+                - menuitem "Drop-in Gateway" [ref=e368] [cursor=pointer]:
+                  - generic [ref=e369]: Drop-in Gateway
+                - menuitem "IGMP Snooping" [ref=e370] [cursor=pointer]:
+                  - generic [ref=e371]: IGMP Snooping
+                - menuitem "Network Acceleration" [ref=e372] [cursor=pointer]:
+                  - generic [ref=e373]: Network Acceleration
+        - menuitem " System  " [ref=e163]:
+          - generic [ref=e164] [cursor=pointer]:
+            - generic [ref=e165]: 
+            - generic [ref=e166]:
+              - text: System
+              - generic [ref=e167]: 
+            - generic [ref=e168]: 
+          - text: 
+      - text:  
+    - generic [ref=e169]:
+      - generic [ref=e171]:
+        - generic [ref=e172]:
+          - text:   
+          - list [ref=e174]:
+            - listitem [ref=e175]:
+              - generic [ref=e177] [cursor=pointer]: 
+            - listitem [ref=e179]:
+              - generic [ref=e181] [cursor=pointer]: 
+            - listitem [ref=e183]:
+              - generic [ref=e185] [cursor=pointer]: 
+            - listitem [ref=e187]:
+              - generic [ref=e189] [cursor=pointer]: 
+          - generic [ref=e192]:
+            - img [ref=e195]
+            - generic [ref=e247]: GL-SFT1200
+            - list [ref=e248]:
+              - listitem [ref=e249] [cursor=pointer]:
+                - generic [ref=e250]: 
+                - text: IPv6
+            - list [ref=e251] [cursor=pointer]:
+              - listitem [ref=e252]:
+                - generic [ref=e253]: 
+              - listitem [ref=e254]:
+                - generic [ref=e255]: 
+              - listitem [ref=e256]:
+                - generic [ref=e257]: 
+              - listitem [ref=e258]:
+                - generic [ref=e259]: 
+          - list [ref=e262]:
+            - listitem [ref=e263]:
+              - generic [ref=e265] [cursor=pointer]:
+                - generic [ref=e266]: 
+                - generic [ref=e267]: "0"
+            - listitem [ref=e268]:
+              - generic [ref=e270] [cursor=pointer]:
+                - generic [ref=e271]: 
+                - generic [ref=e272]: "1"
+        - generic [ref=e273]:
+          - generic [ref=e276]:
+            - generic [ref=e278]: Ethernet
+            - generic [ref=e282]:
+              - generic [ref=e283]:
+                - list [ref=e284]:
+                  - listitem [ref=e285]:
+                    - generic [ref=e286]: Protocol
+                    - generic [ref=e287]: DHCP
+                - tabpanel "IPv4" [ref=e291]:
+                  - list [ref=e292]:
+                    - listitem [ref=e293]:
+                      - generic [ref=e294]: IP Address
+                      - generic [ref=e295]: 192.168.31.187
+                    - listitem [ref=e296]:
+                      - generic [ref=e297]: Gateway
+                      - generic [ref=e298]: 192.168.31.1
+                    - listitem [ref=e299]:
+                      - generic [ref=e300]: DNS Server
+                      - generic [ref=e301]: 1.1.1.1 , 8.8.8.8
+                - button "Modify" [ref=e303] [cursor=pointer]
+              - text: 
+            - generic [ref=e305]: Using as WAN, Change to LAN
+          - generic [ref=e307]:
+            - generic [ref=e308]:
+              - generic [ref=e309]:
+                - generic [ref=e313]: Repeater
+                - generic [ref=e315] [cursor=pointer]: 
+              - generic [ref=e318]:
+                - generic [ref=e320]: 
+                - generic [ref=e321]: Repeater (STA) is disabled.Connect
+            - generic:  
+          - generic [ref=e324]:
+            - generic [ref=e328]: Tethering
+            - generic [ref=e331]:
+              - generic [ref=e333]: 
+              - text: No Tethering device found, Plug in your smartphone or USB Modem to start.
+          - generic [ref=e336]:
+            - generic [ref=e340]: Cellular
+            - generic [ref=e343]:
+              - generic [ref=e345]: 
+              - generic [ref=e346]: No Modem device found. Plug in your USB modem to start.
+      - heading "Copyright © 2025 GL.iNet. All Rights Reserved" [level=6] [ref=e349]:
+        - text: Copyright © 2025
+        - link "GL.iNet." [ref=e350] [cursor=pointer]:
+          - /url: https://www.gl-inet.com/
+        - text: All Rights Reserved

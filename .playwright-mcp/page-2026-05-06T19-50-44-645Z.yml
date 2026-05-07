@@ -1,0 +1,27 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]: 欢迎使用小米路由器
+    - generic [ref=e6]: 扫描二维码，下载米家APP
+    - generic [ref=e9]: 随时随地管理你的路由器
+    - generic [ref=e11]:
+      - textbox "请输入路由器管理密码" [ref=e13]
+      - emphasis [ref=e14]
+  - generic [ref=e17]:
+    - paragraph [ref=e18]:
+      - text: © 2022 小米路由器|
+      - link "官方网站" [ref=e19] [cursor=pointer]:
+        - /url: http://www1.miwifi.com
+      - text: "|"
+      - link "官方微博" [ref=e20] [cursor=pointer]:
+        - /url: http://weibo.com/xiaomiluyouqi
+      - text: "|"
+      - link "官方微信" [ref=e21] [cursor=pointer]:
+        - /url: /xiaoqiang/web/img/wx_code.png
+      - text: "|"
+      - link "用户社区" [ref=e22] [cursor=pointer]:
+        - /url: https://www.xiaomi.cn/board/557962
+      - text: "|"
+      - link "常见问题" [ref=e23] [cursor=pointer]:
+        - /url: http://www1.miwifi.com/miwifi_faq.html
+      - text: "|服务热线 400-100-5678"
+    - paragraph

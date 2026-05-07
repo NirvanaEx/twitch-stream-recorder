@@ -9,11 +9,13 @@ type ActiveCapture = {
   startedAt: number;
   socket: WebSocket;
   reconnectTimer: NodeJS.Timeout | null;
+  reconnectAttempts: number;
   closed: boolean;
   buffer: string;
 };
 
 const TWITCH_IRC_WS_URL = "wss://irc-ws.chat.twitch.tv:443";
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 @Injectable()
 export class ChatService {
@@ -25,7 +27,7 @@ export class ChatService {
     private readonly realtimeGateway: RealtimeGateway,
   ) {}
 
-  startCapture(input: {
+  async startCapture(input: {
     channelId: string;
     sessionId: string;
     channelLogin: string;
@@ -33,8 +35,35 @@ export class ChatService {
   }) {
     const { channelId, sessionId, channelLogin, captureAnchor } = input;
 
-    if (this.captures.has(channelId)) {
+    // Honor the user's "record chat" toggle. We still flip the session
+    // state to "not_configured" so the UI tells the user why the chat is
+    // empty.
+    const settings = await this.prisma.appSettings
+      .findUnique({ where: { id: "default" } })
+      .catch(() => null);
+    if (settings && settings.recordChat === false) {
+      this.logger.log(
+        `[chat:${channelLogin}] capture skipped — recordChat is disabled in settings.`,
+      );
+      void this.prisma.streamSession
+        .update({
+          where: { id: sessionId },
+          data: { chatStatus: "not_configured", chatAvailable: false },
+        })
+        .catch(() => undefined);
       return;
+    }
+
+    // If a previous capture is still bound to this channel (e.g. the
+    // recorder restarted without firing finalize), tear it down before
+    // we register the new one. Otherwise the duplicate-check below would
+    // silently skip the new auto-recording's chat.
+    const existing = this.captures.get(channelId);
+    if (existing) {
+      this.logger.warn(
+        `[chat:${channelLogin}] tearing down stale capture before starting a new one (sessionId=${existing.sessionId}).`,
+      );
+      this.stopCapture(channelId);
     }
 
     const capture: ActiveCapture = {
@@ -44,6 +73,7 @@ export class ChatService {
       startedAt: captureAnchor.getTime(),
       socket: null as unknown as WebSocket,
       reconnectTimer: null,
+      reconnectAttempts: 0,
       closed: false,
       buffer: "",
     };
@@ -101,11 +131,23 @@ export class ChatService {
     }
 
     const nick = `justinfan${Math.floor(Math.random() * 80000) + 1000}`;
-    const socket = new WebSocket(TWITCH_IRC_WS_URL);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(TWITCH_IRC_WS_URL);
+    } catch (error) {
+      this.logger.warn(
+        `[chat:${capture.channelLogin}] failed to open socket: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      this.scheduleReconnect(capture);
+      return;
+    }
     capture.socket = socket;
 
     socket.addEventListener("open", () => {
       this.logger.log(`[chat:${capture.channelLogin}] connected as ${nick}`);
+      capture.reconnectAttempts = 0;
       socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
       socket.send(`NICK ${nick}`);
       socket.send(`JOIN #${capture.channelLogin}`);
@@ -131,22 +173,43 @@ export class ChatService {
           ? String((event as { message?: unknown }).message ?? "unknown")
           : "unknown";
       this.logger.warn(`[chat:${capture.channelLogin}] socket error: ${message}`);
+      // The "close" handler will schedule the reconnect — per the WebSocket
+      // spec an "error" is always followed by a "close". Some embedded
+      // clients fire "error" alone though, so we also kick a reconnect from
+      // here as a safety net (scheduleReconnect is idempotent on the timer).
+      try {
+        capture.socket?.close();
+      } catch {
+        // Ignore — some implementations can throw on closing twice.
+      }
     });
 
     socket.addEventListener("close", (event) => {
       if (capture.closed) {
         return;
       }
-
       this.logger.warn(
-        `[chat:${capture.channelLogin}] socket closed (code=${event.code}). Reconnecting in 5s.`,
+        `[chat:${capture.channelLogin}] socket closed (code=${event.code}). Reconnecting…`,
       );
-
-      capture.reconnectTimer = setTimeout(() => {
-        capture.reconnectTimer = null;
-        this.connect(capture);
-      }, 5000);
+      this.scheduleReconnect(capture);
     });
+  }
+
+  private scheduleReconnect(capture: ActiveCapture) {
+    if (capture.closed) return;
+    if (capture.reconnectTimer) return; // already scheduled
+
+    capture.reconnectAttempts += 1;
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s.
+    const delay = Math.min(
+      MAX_RECONNECT_DELAY_MS,
+      1000 * 2 ** Math.min(capture.reconnectAttempts - 1, 5),
+    );
+
+    capture.reconnectTimer = setTimeout(() => {
+      capture.reconnectTimer = null;
+      this.connect(capture);
+    }, delay);
   }
 
   private handleLine(capture: ActiveCapture, line: string) {

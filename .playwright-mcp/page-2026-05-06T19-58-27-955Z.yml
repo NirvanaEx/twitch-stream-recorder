@@ -1,0 +1,164 @@
+- generic [ref=e89]:
+  - generic [ref=e91]:
+    - generic [ref=e92]:
+      - link [ref=e93] [cursor=pointer]:
+        - /url: https://www.gl-inet.com/
+        - img [ref=e94]
+      - generic [ref=e108]:
+        - text: Admin Panel
+        - generic [ref=e109] [cursor=pointer]: v4.3.28
+        - generic [ref=e110]: CN
+    - generic [ref=e111]:
+      - generic [ref=e112]:
+        - link "" [ref=e113] [cursor=pointer]:
+          - /url: https://docs.gl-inet.com/router/en/4
+          - generic [ref=e114]: 
+        - generic [ref=e115] [cursor=pointer]: 
+        - generic [ref=e116] [cursor=pointer]: 
+        - generic [ref=e119]:
+          - generic [ref=e121] [cursor=pointer]: 
+          - list [ref=e122]:
+            - listitem [ref=e123] [cursor=pointer]: default
+            - listitem [ref=e124] [cursor=pointer]: Classic
+            - listitem [ref=e125] [cursor=pointer]: Dark
+        - generic [ref=e127] [cursor=pointer]:
+          - generic [ref=e130]: en
+          - list [ref=e131]:
+            - listitem [ref=e132]: English
+            - listitem [ref=e133]: 简体中文
+            - listitem [ref=e134]: 繁體中文
+            - listitem [ref=e135]: Deutsch
+            - listitem [ref=e136]: Español
+            - listitem [ref=e137]: Italiano
+            - listitem [ref=e138]: 日本語
+            - listitem [ref=e139]: 한국어
+      - text: 
+  - generic [ref=e140]:
+    - generic [ref=e142]:
+      - menubar [ref=e143]:
+        - menuitem " Internet" [ref=e144] [cursor=pointer]:
+          - generic [ref=e145]: 
+          - generic [ref=e146]: Internet
+        - menuitem " Wireless" [ref=e147] [cursor=pointer]:
+          - generic [ref=e148]: 
+          - generic [ref=e149]: Wireless
+        - menuitem " Clients" [ref=e150] [cursor=pointer]:
+          - generic [ref=e151]: 
+          - generic [ref=e152]: Clients
+        - menuitem " Applications " [ref=e153]:
+          - generic [ref=e154] [cursor=pointer]:
+            - generic [ref=e155]: 
+            - generic [ref=e156]: Applications
+            - generic [ref=e157]: 
+        - menuitem " Network " [expanded] [ref=e158]:
+          - generic [ref=e159] [cursor=pointer]:
+            - generic [ref=e160]: 
+            - generic [ref=e161]: Network
+            - generic [ref=e162]: 
+          - menu [ref=e351]:
+            - listitem [ref=e352]:
+              - list [ref=e353]:
+                - menuitem "Firewall" [ref=e354] [cursor=pointer]:
+                  - generic [ref=e355]: Firewall
+                - menuitem "Multi-WAN" [active] [ref=e356] [cursor=pointer]:
+                  - generic [ref=e357]: Multi-WAN
+                - menuitem "LAN" [ref=e358] [cursor=pointer]:
+                  - generic [ref=e359]: LAN
+                - menuitem "DNS" [ref=e360] [cursor=pointer]:
+                  - generic [ref=e361]: DNS
+                - menuitem "Network Mode" [ref=e362] [cursor=pointer]:
+                  - generic [ref=e363]: Network Mode
+                - menuitem "IPv6" [ref=e364] [cursor=pointer]:
+                  - generic [ref=e365]: IPv6
+                - menuitem "MAC Address" [ref=e366] [cursor=pointer]:
+                  - generic [ref=e367]: MAC Address
+                - menuitem "Drop-in Gateway" [ref=e368] [cursor=pointer]:
+                  - generic [ref=e369]: Drop-in Gateway
+                - menuitem "IGMP Snooping" [ref=e370] [cursor=pointer]:
+                  - generic [ref=e371]: IGMP Snooping
+                - menuitem "Network Acceleration" [ref=e372] [cursor=pointer]:
+                  - generic [ref=e373]: Network Acceleration
+        - menuitem " System  " [ref=e163]:
+          - generic [ref=e164] [cursor=pointer]:
+            - generic [ref=e165]: 
+            - generic [ref=e166]:
+              - text: System
+              - generic [ref=e167]: 
+            - generic [ref=e168]: 
+          - text: 
+      - text:  
+    - generic [ref=e169]:
+      - generic [ref=e374]:
+        - generic [ref=e376]: Multi-WAN
+        - generic [ref=e377]:
+          - generic [ref=e379]: Interface Status Tracking Method
+          - generic [ref=e381]:
+            - generic [ref=e382]:
+              - generic [ref=e383]: 
+              - generic [ref=e384]: The router will track the status of the connection to the destination IP to determine if the interface is available.
+            - list [ref=e385]:
+              - listitem [ref=e386]:
+                - generic [ref=e387]: Ethernet
+                - generic [ref=e390]:
+                  - generic [ref=e392]:
+                    - generic [ref=e393]: ping
+                    - generic [ref=e394]: 223.5.5.5 , 223.6.6.6 , 119.29.29.29 , 182.254.118.118
+                  - generic [ref=e395] [cursor=pointer]: 
+              - listitem [ref=e396]:
+                - generic [ref=e397]: Repeater
+                - generic [ref=e400]:
+                  - generic [ref=e402]:
+                    - generic [ref=e403]: ping
+                    - generic [ref=e404]: 223.5.5.5 , 223.6.6.6 , 119.29.29.29 , 182.254.118.118
+                  - generic [ref=e405] [cursor=pointer]: 
+              - listitem [ref=e406]:
+                - generic [ref=e407]: Tethering
+                - generic [ref=e410]:
+                  - generic [ref=e412]:
+                    - generic [ref=e413]: ping
+                    - generic [ref=e414]: 223.5.5.5 , 223.6.6.6 , 119.29.29.29 , 182.254.118.118
+                  - generic [ref=e415] [cursor=pointer]: 
+        - generic [ref=e418]:
+          - generic [ref=e419]:
+            - generic [ref=e420]: 
+            - generic [ref=e421]:
+              - paragraph [ref=e422]: The router supports connecting multiple network interfaces at the same time. You can set how to use it.
+              - paragraph [ref=e423]: "Failover: When the link being used fails, the router will automatically switch to another interface."
+              - paragraph [ref=e424]: "Load Balance: Use multiple interfaces at the same time to increase the total bandwidth of the router."
+          - list [ref=e425]:
+            - listitem [ref=e426]:
+              - generic [ref=e427]:
+                - text: Mode
+                - generic [ref=e428]: 
+              - list [ref=e430]:
+                - listitem [ref=e432] [cursor=pointer]: Failover
+                - listitem [ref=e433] [cursor=pointer]: Load Balance
+            - listitem [ref=e434]:
+              - generic [ref=e435]:
+                - text: Forced Refresh Streams
+                - generic [ref=e436]: 
+              - switch [ref=e438] [cursor=pointer]
+            - listitem [ref=e440]: Interface Priority
+          - list [ref=e441]:
+            - listitem [ref=e442]:
+              - generic [ref=e443]:
+                - generic [ref=e444]: "1"
+                - text: Ethernet
+              - generic [ref=e446]: 
+            - listitem [ref=e447]:
+              - generic [ref=e448]:
+                - generic [ref=e449]: "2"
+                - text: Repeater
+              - generic [ref=e451]: 
+            - listitem [ref=e452]:
+              - generic [ref=e453]:
+                - generic [ref=e454]: "3"
+                - text: Tethering
+              - generic [ref=e456]: 
+          - text:   
+          - button "Apply" [disabled] [ref=e458]
+      - heading "Copyright © 2025 GL.iNet. All Rights Reserved" [level=6] [ref=e349]:
+        - text: Copyright © 2025
+        - link "GL.iNet." [ref=e350] [cursor=pointer]:
+          - /url: https://www.gl-inet.com/
+        - text: All Rights Reserved

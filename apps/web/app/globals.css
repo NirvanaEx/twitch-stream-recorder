@@ -739,43 +739,157 @@ textarea {
   color: var(--text);
 }
 
-/* ---------- Theater mode ---------- */
+/* ---------- Replay stage (replay page wrapper, 3 modes) ---------- */
 
-.theater-frame {
+/* Normal mode is just a flex column inside the regular page-shell. */
+.replay-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+}
+
+.replay-stage__player {
+  min-width: 0;
+}
+
+.replay-stage__chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Normal layout, with chat: 2 columns. */
+.replay-stage--normal.has-chat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header header"
+    "player chat";
+  gap: 18px;
+  align-items: stretch;
+}
+
+.replay-stage--normal.has-chat .replay-stage__header { grid-area: header; }
+.replay-stage--normal.has-chat .replay-stage__player { grid-area: player; min-width: 0; }
+.replay-stage--normal.has-chat .replay-stage__chat   {
+  grid-area: chat;
+  height: 100%;
+  min-height: 480px;
+  max-height: calc(100vh - 220px);
+}
+
+.replay-stage--normal .replay-stage__chat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+/* Notices (error / "still recording") that live inside the stage should
+   span the full width when the layout becomes a grid. */
+.replay-stage--normal.has-chat > .notice {
+  grid-column: 1 / -1;
+}
+
+.replay-stage--theater > .notice { display: none; }
+
+.replay-stage--normal:not(.has-chat) .replay-stage__player {
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* Keep the player from overflowing on tall, narrow content widths in
+   normal mode — match the chat panel's max-height. */
+.replay-stage--normal .replay-stage__player .vp {
+  max-height: calc(100vh - 220px);
+}
+
+/* Theater: covers entire viewport, hides the page header. */
+.replay-stage--theater {
   position: fixed;
   inset: 0;
+  z-index: 100;
   background: #000;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   grid-template-rows: 100%;
+  gap: 0;
   overflow: hidden;
-  z-index: 100;
 }
 
-.theater-frame.no-chat {
+.replay-stage--theater:not(.has-chat) {
   grid-template-columns: 1fr;
 }
 
-.theater-video-wrap {
-  display: flex;
-  flex-direction: column;
-  background: #000;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  position: relative;
+.replay-stage--theater .replay-stage__header {
+  display: none;
 }
 
-.theater-video-wrap video {
-  flex: 1;
+.replay-stage--theater .replay-stage__player {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.replay-stage--theater .replay-stage__chat {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Fullscreen: parent is a normal page; the player itself becomes the
+   fullscreen element via the native fullscreen API. The page header / chat
+   stay in the DOM but are hidden by the browser's fullscreen rendering. */
+
+/* ---------- VideoPlayer ---------- */
+
+.vp {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  color: #fff;
+  user-select: none;
+}
+
+.vp--theater,
+.vp--fullscreen {
+  border-radius: 0;
+  aspect-ratio: auto;
+  height: 100%;
+  width: 100%;
+}
+
+.vp__video {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  display: block;
   background: #000;
+  cursor: pointer;
 }
 
-.theater-bar {
+.vp__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-style: italic;
+}
+
+/* Top bar (theater / fullscreen) */
+.vp__top-bar {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -783,19 +897,37 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
-  z-index: 10;
+  z-index: 4;
   pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
 }
 
-.theater-bar > * {
-  pointer-events: auto;
-}
+.vp__top-bar > * { pointer-events: auto; }
 
-.theater-title {
-  background: rgba(0, 0, 0, 0.6);
+.vp__top-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  border-radius: var(--radius);
-  padding: 6px 12px;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.vp__top-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.vp__top-title {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
   font-size: 13px;
   color: #fff;
   max-width: 60%;
@@ -804,32 +936,330 @@ textarea {
   white-space: nowrap;
 }
 
-.theater-actions {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 6px;
+.vp--hide.vp--playing .vp__top-bar {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
 }
 
-.theater-actions .icon-btn {
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
+/* Buffering spinner */
+.vp__buffering {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  border-color: transparent;
+  pointer-events: none;
+  z-index: 3;
 }
 
-.theater-actions .icon-btn:hover {
-  background: rgba(0, 0, 0, 0.8);
+/* Center play/pause flash */
+.vp__center-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 3;
 }
 
-.theater-chat {
-  background: var(--panel);
-  border-left: 1px solid var(--border);
+.vp__center-hint > svg {
+  width: 86px;
+  height: 86px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 50%;
+  padding: 22px;
+  color: #fff;
+  animation: vp-flash 0.6s ease-out forwards;
+}
+
+@keyframes vp-flash {
+  0% { opacity: 1; transform: scale(0.65); }
+  100% { opacity: 0; transform: scale(1.2); }
+}
+
+/* Big initial play button */
+.vp__big-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.15s;
+  z-index: 3;
+}
+
+.vp__big-play:hover {
+  background: var(--accent);
+  color: #0b0d10;
+  transform: translate(-50%, -50%) scale(1.05);
+}
+
+/* Controls dock */
+.vp__controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0 12px 6px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
+  z-index: 4;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.vp--hide.vp--playing .vp__controls {
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
+.vp--hide.vp--playing { cursor: none; }
+
+/* Progress bar */
+.vp__progress {
+  position: relative;
+  height: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.vp__progress-track,
+.vp__progress-buffered,
+.vp__progress-played {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+  transition: height 0.15s;
+}
+
+.vp__progress-track {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.vp__progress-buffered {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.vp__progress-played {
+  background: var(--accent);
+}
+
+.vp__progress:hover .vp__progress-track,
+.vp__progress:hover .vp__progress-buffered,
+.vp__progress:hover .vp__progress-played {
+  height: 6px;
+}
+
+.vp__progress-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  pointer-events: none;
+  transition: transform 0.15s ease;
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.25);
+}
+
+.vp__progress:hover .vp__progress-thumb {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.vp__scrub-preview {
+  position: absolute;
+  bottom: 22px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Bottom bar */
+.vp__bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: #fff;
+  font-size: 13px;
+  height: 40px;
+}
+
+.vp__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+
+.vp__btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.vp__btn:active {
+  transform: scale(0.92);
+}
+
+.vp__btn--text {
+  width: auto;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.vp__btn--active {
+  color: var(--accent);
+}
+
+/* Volume */
+.vp__volume {
+  display: inline-flex;
+  align-items: center;
+}
+
+.vp__volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  max-width: 0;
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.3);
+  transition: width 0.2s, max-width 0.2s, margin 0.2s;
+  vertical-align: middle;
+}
+
+.vp__volume:hover .vp__volume-slider,
+.vp__volume:focus-within .vp__volume-slider {
+  width: 80px;
+  max-width: 80px;
+  margin: 0 8px 0 4px;
+}
+
+.vp__volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  border: none;
+}
+
+.vp__volume-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  border: none;
+}
+
+/* Time / live */
+.vp__time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.vp__time-sep { opacity: 0.5; margin: 0 2px; }
+
+.vp__live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--live);
+  margin-right: 4px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.vp__spacer { flex: 1; }
+
+/* Playback rate menu */
+.vp__rate-wrap { position: relative; }
+
+.vp__menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: rgba(20, 22, 27, 0.96);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
+  min-width: 92px;
+  z-index: 5;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.vp__menu-item {
+  background: transparent;
+  border: none;
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 13px;
+  text-align: right;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vp__menu-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.vp__menu-item.is-active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Native fullscreen target */
+.vp:fullscreen,
+.vp:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  aspect-ratio: auto;
 }
 
 /* Manual offset input */

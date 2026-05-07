@@ -1,0 +1,5 @@
+- generic [ref=e2]:
+  - heading "Вход в панель" [level=1] [ref=e3]
+  - textbox "Логин" [active] [ref=e4]
+  - textbox "Пароль" [ref=e5]
+  - button "Войти" [ref=e6] [cursor=pointer]
