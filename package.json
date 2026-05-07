@@ -24,7 +24,7 @@
     "prisma:generate": "dotenv -e .env -- npm exec -w @tsr/api -- prisma generate --schema prisma/schema.prisma",
     "clean:web": "node scripts/clean-web.mjs",
     "verify:smoke": "node scripts/smoke-test.mjs",
-    "verify:precommit": "npm run build && docker compose config --quiet"
+    "verify:precommit": "npm exec -w @tsr/api -- tsc -p tsconfig.json --noEmit --incremental false && npm run build -w @tsr/web && npm exec -w @tsr/worker -- tsc -p tsconfig.json --noEmit --incremental false && docker compose config --quiet"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
