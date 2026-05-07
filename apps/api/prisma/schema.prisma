@@ -92,3 +92,27 @@ model AppSettings {
   defaultChatOffsetSec  Int      @default(0)
   updatedAt             DateTime @updatedAt
 }
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  // Stored as a Postgres text[]; the application validates entries against
+  // the hardcoded ALL_PERMISSIONS list (see permissions.ts).
+  permissions String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  // Superadmin bypasses permission checks and cannot be deleted or demoted.
+  isSuperadmin Boolean  @default(false)
+  roleId       String?
+  role         Role?    @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}

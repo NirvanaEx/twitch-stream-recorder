@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { AuthProvider } from "./lib/auth-context";
 
 type Locale = "ru" | "en";
 
@@ -150,6 +151,90 @@ type Dictionary = {
     navLabel: string;
     downloadVideo: string;
     downloadBundle: string;
+  };
+  publicSite: {
+    brand: string;
+    tagline: string;
+    searchPlaceholder: string;
+    searchAction: string;
+    empty: string;
+    emptyHint: string;
+    emptyForQuery: string;
+    durationLabel: string;
+    enterAdmin: string;
+    backHome: string;
+    backToList: string;
+    notFound: string;
+    notFoundHint: string;
+  };
+  auth: {
+    login: string;
+    logout: string;
+    loginTitle: string;
+    loginSubtitle: string;
+    usernameLabel: string;
+    passwordLabel: string;
+    submitButton: string;
+    submitting: string;
+    invalid: string;
+    backToPublic: string;
+    youAreSuperadmin: string;
+    accountLabel: string;
+  };
+  admin: {
+    panelLabel: string;
+    sectionUsers: string;
+    sectionAccess: string;
+    sectionAccount: string;
+    forbidden: string;
+    forbiddenHint: string;
+    needsLogin: string;
+  };
+  users: {
+    title: string;
+    subtitle: string;
+    addTitle: string;
+    usernameLabel: string;
+    passwordLabel: string;
+    roleLabel: string;
+    roleNone: string;
+    addButton: string;
+    empty: string;
+    columnUsername: string;
+    columnRole: string;
+    columnCreated: string;
+    columnActions: string;
+    superadminBadge: string;
+    resetPassword: string;
+    resetPasswordPrompt: string;
+    deleteConfirm: string;
+    saved: string;
+    cannotDeleteSelf: string;
+  };
+  access: {
+    title: string;
+    subtitle: string;
+    addTitle: string;
+    nameLabel: string;
+    descriptionLabel: string;
+    addButton: string;
+    permissionsLabel: string;
+    saveRole: string;
+    deleteRole: string;
+    deleteConfirm: string;
+    empty: string;
+    usersUsing: string;
+    saved: string;
+  };
+  account: {
+    title: string;
+    subtitle: string;
+    currentPasswordLabel: string;
+    newPasswordLabel: string;
+    confirmPasswordLabel: string;
+    saveButton: string;
+    saved: string;
+    mismatch: string;
   };
 };
 
@@ -299,6 +384,90 @@ const dictionaries: Record<Locale, Dictionary> = {
       downloadVideo: "Скачать видео",
       downloadBundle: "Скачать чат (бандл)",
     },
+    publicSite: {
+      brand: "Twitch Stream Recorder",
+      tagline: "Архив записанных стримов.",
+      searchPlaceholder: "Поиск по названию стрима…",
+      searchAction: "Найти",
+      empty: "Пока нет ни одной записи.",
+      emptyHint: "Как только администратор добавит каналы и появятся записи, они отобразятся здесь.",
+      emptyForQuery: "По вашему запросу ничего не найдено.",
+      durationLabel: "Длительность",
+      enterAdmin: "Войти в админку",
+      backHome: "На главную",
+      backToList: "← Все стримы",
+      notFound: "Запись не найдена.",
+      notFoundHint: "Возможно, она была удалена или ещё не готова.",
+    },
+    auth: {
+      login: "Войти",
+      logout: "Выйти",
+      loginTitle: "Вход в админку",
+      loginSubtitle: "Войдите, чтобы управлять каналами, записями и пользователями.",
+      usernameLabel: "Логин",
+      passwordLabel: "Пароль",
+      submitButton: "Войти",
+      submitting: "Входим…",
+      invalid: "Неверный логин или пароль.",
+      backToPublic: "← Назад к стримам",
+      youAreSuperadmin: "Суперадмин",
+      accountLabel: "Аккаунт",
+    },
+    admin: {
+      panelLabel: "Админка",
+      sectionUsers: "Пользователи",
+      sectionAccess: "Доступы",
+      sectionAccount: "Аккаунт",
+      forbidden: "Недостаточно прав.",
+      forbiddenHint: "Попросите администратора выдать вашей роли нужные права.",
+      needsLogin: "Эту страницу видят только вошедшие пользователи.",
+    },
+    users: {
+      title: "Пользователи",
+      subtitle: "Список пользователей панели. Каждому можно назначить роль с набором прав.",
+      addTitle: "Добавить пользователя",
+      usernameLabel: "Логин",
+      passwordLabel: "Пароль",
+      roleLabel: "Роль",
+      roleNone: "Без роли",
+      addButton: "Создать",
+      empty: "Пока нет ни одного пользователя.",
+      columnUsername: "Логин",
+      columnRole: "Роль",
+      columnCreated: "Создан",
+      columnActions: "Действия",
+      superadminBadge: "Суперадмин",
+      resetPassword: "Сбросить пароль",
+      resetPasswordPrompt: "Новый пароль (минимум 4 символа):",
+      deleteConfirm: "Удалить этого пользователя?",
+      saved: "Сохранено.",
+      cannotDeleteSelf: "Нельзя удалить самого себя.",
+    },
+    access: {
+      title: "Доступы",
+      subtitle: "Создавайте роли и отмечайте, какие действия они открывают. Привязка ролей к пользователям — на странице «Пользователи».",
+      addTitle: "Новая роль",
+      nameLabel: "Название",
+      descriptionLabel: "Описание (необязательно)",
+      addButton: "Создать роль",
+      permissionsLabel: "Права",
+      saveRole: "Сохранить",
+      deleteRole: "Удалить роль",
+      deleteConfirm: "Удалить роль? Если она привязана к пользователю — удалить нельзя.",
+      empty: "Ролей пока нет. Создайте первую — без неё новые пользователи будут «без прав».",
+      usersUsing: "пользователей",
+      saved: "Сохранено.",
+    },
+    account: {
+      title: "Аккаунт",
+      subtitle: "Смена собственного пароля. Старый пароль обязателен для подтверждения.",
+      currentPasswordLabel: "Текущий пароль",
+      newPasswordLabel: "Новый пароль",
+      confirmPasswordLabel: "Повторите новый пароль",
+      saveButton: "Сменить пароль",
+      saved: "Пароль обновлён.",
+      mismatch: "Пароли не совпадают.",
+    },
   },
   en: {
     common: {
@@ -445,6 +614,90 @@ const dictionaries: Record<Locale, Dictionary> = {
       downloadVideo: "Download video",
       downloadBundle: "Download chat bundle",
     },
+    publicSite: {
+      brand: "Twitch Stream Recorder",
+      tagline: "Archive of recorded streams.",
+      searchPlaceholder: "Search by stream title…",
+      searchAction: "Search",
+      empty: "No recordings yet.",
+      emptyHint: "Once the admin adds channels and recordings appear, they will show up here.",
+      emptyForQuery: "Nothing matches your search.",
+      durationLabel: "Duration",
+      enterAdmin: "Open admin",
+      backHome: "Home",
+      backToList: "← All streams",
+      notFound: "Recording not found.",
+      notFoundHint: "It may have been deleted or is not ready yet.",
+    },
+    auth: {
+      login: "Sign in",
+      logout: "Sign out",
+      loginTitle: "Sign in to admin",
+      loginSubtitle: "Sign in to manage channels, recordings and users.",
+      usernameLabel: "Username",
+      passwordLabel: "Password",
+      submitButton: "Sign in",
+      submitting: "Signing in…",
+      invalid: "Invalid username or password.",
+      backToPublic: "← Back to streams",
+      youAreSuperadmin: "Superadmin",
+      accountLabel: "Account",
+    },
+    admin: {
+      panelLabel: "Admin",
+      sectionUsers: "Users",
+      sectionAccess: "Access",
+      sectionAccount: "Account",
+      forbidden: "You do not have access.",
+      forbiddenHint: "Ask an administrator to grant your role the needed permissions.",
+      needsLogin: "This page is visible to signed-in users only.",
+    },
+    users: {
+      title: "Users",
+      subtitle: "Panel users. Each one can be assigned a role with a permission set.",
+      addTitle: "Add user",
+      usernameLabel: "Username",
+      passwordLabel: "Password",
+      roleLabel: "Role",
+      roleNone: "No role",
+      addButton: "Create",
+      empty: "No users yet.",
+      columnUsername: "Username",
+      columnRole: "Role",
+      columnCreated: "Created",
+      columnActions: "Actions",
+      superadminBadge: "Superadmin",
+      resetPassword: "Reset password",
+      resetPasswordPrompt: "New password (min 4 chars):",
+      deleteConfirm: "Delete this user?",
+      saved: "Saved.",
+      cannotDeleteSelf: "You cannot delete yourself.",
+    },
+    access: {
+      title: "Access",
+      subtitle: "Create roles and tick which actions they unlock. Attach roles to users on the Users page.",
+      addTitle: "New role",
+      nameLabel: "Name",
+      descriptionLabel: "Description (optional)",
+      addButton: "Create role",
+      permissionsLabel: "Permissions",
+      saveRole: "Save",
+      deleteRole: "Delete role",
+      deleteConfirm: "Delete this role? Roles in use by users cannot be deleted.",
+      empty: "No roles yet. Create one — until then new users will have no permissions.",
+      usersUsing: "users",
+      saved: "Saved.",
+    },
+    account: {
+      title: "Account",
+      subtitle: "Change your own password. Current password is required for confirmation.",
+      currentPasswordLabel: "Current password",
+      newPasswordLabel: "New password",
+      confirmPasswordLabel: "Repeat new password",
+      saveButton: "Update password",
+      saved: "Password updated.",
+      mismatch: "Passwords do not match.",
+    },
   },
 };
 
@@ -479,7 +732,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
     [locale],
   );
 
-  return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
+  return (
+    <LanguageContext.Provider value={value}>
+      <AuthProvider>{children}</AuthProvider>
+    </LanguageContext.Provider>
+  );
 }
 
 export function useLanguage() {

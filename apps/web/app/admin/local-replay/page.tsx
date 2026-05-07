@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChatReplay } from "../components/ChatReplay";
-import { VideoPlayer, type PlayerMode } from "../components/VideoPlayer";
-import { FolderOpenIcon } from "../components/icons";
-import { useLanguage } from "../providers";
+import { ChatReplay } from "../../components/ChatReplay";
+import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
+import { FolderOpenIcon } from "../../components/icons";
+import { useLanguage } from "../../providers";
 
 type EmoteEntry = {
   id: string;
@@ -181,7 +181,7 @@ export default function LocalReplayPage() {
               }}
             >
               {t.localReplay.help}{" "}
-              <Link href="/archives" style={{ color: "var(--accent)" }}>
+              <Link href="/admin/archives" style={{ color: "var(--accent)" }}>
                 {t.localReplay.openArchives}
               </Link>
             </div>

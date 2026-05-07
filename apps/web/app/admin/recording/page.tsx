@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiSend } from "../lib/api";
-import { formatDuration, formatFileSize } from "../lib/media";
-import { useRealtimeRefresh } from "../lib/use-realtime-refresh";
-import { useLanguage } from "../providers";
-import { IconButton, IconLink } from "../components/IconButton";
-import { FilmIcon, MessageIcon, StopIcon } from "../components/icons";
+import { apiGet, apiSend } from "../../lib/api";
+import { formatDuration, formatFileSize } from "../../lib/media";
+import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
+import { useLanguage } from "../../providers";
+import { IconButton, IconLink } from "../../components/IconButton";
+import { FilmIcon, MessageIcon, StopIcon } from "../../components/icons";
 
 type ActiveRecording = {
   id: string;
@@ -117,13 +117,13 @@ export default function RecordingPage() {
                         {session.videoReady && session.videoUrl ? (
                           <>
                             <IconLink
-                              href={`/archives/${session.id}?mode=video`}
+                              href={`/admin/archives/${session.id}?mode=video`}
                               title={t.common.watchVideo}
                             >
                               <FilmIcon />
                             </IconLink>
                             <IconLink
-                              href={`/archives/${session.id}?mode=chat`}
+                              href={`/admin/archives/${session.id}?mode=chat`}
                               title={t.common.watchWithChat}
                             >
                               <MessageIcon />

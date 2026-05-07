@@ -1,8 +1,10 @@
 import { Controller, Delete, Get, Param, Req, Res } from "@nestjs/common";
 import { createReadStream } from "node:fs";
+import { RequirePermissions } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
 import { RecordingService } from "../recording/recording.service";
 
+@RequirePermissions("view_archives")
 @Controller("archives")
 export class ArchivesController {
   constructor(
@@ -110,6 +112,7 @@ export class ArchivesController {
     return this.recordingService.getArchiveById(id);
   }
 
+  @RequirePermissions("manage_archives")
   @Delete(":id")
   deleteArchive(@Param("id") id: string) {
     return this.recordingService.deleteArchive(id);

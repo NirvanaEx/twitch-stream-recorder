@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiSend, buildApiUrl } from "../lib/api";
-import { formatFileSize, formatPeriod } from "../lib/media";
-import { useRealtimeRefresh } from "../lib/use-realtime-refresh";
-import { useLanguage } from "../providers";
-import { IconButton, IconLink } from "../components/IconButton";
-import { Pagination } from "../components/Pagination";
-import { DownloadIcon, FilmIcon, MessageIcon, TrashIcon } from "../components/icons";
+import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
+import { formatFileSize, formatPeriod } from "../../lib/media";
+import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
+import { useLanguage } from "../../providers";
+import { IconButton, IconLink } from "../../components/IconButton";
+import { Pagination } from "../../components/Pagination";
+import { DownloadIcon, FilmIcon, MessageIcon, TrashIcon } from "../../components/icons";
 
 type ArchiveItem = {
   id: string;
@@ -129,13 +129,13 @@ export default function ArchivesPage() {
                           {archive.videoReady && archive.videoUrl ? (
                             <>
                               <IconLink
-                                href={`/archives/${archive.id}?mode=video`}
+                                href={`/admin/archives/${archive.id}?mode=video`}
                                 title={t.common.watchVideo}
                               >
                                 <FilmIcon />
                               </IconLink>
                               <IconLink
-                                href={`/archives/${archive.id}?mode=chat`}
+                                href={`/admin/archives/${archive.id}?mode=chat`}
                                 title={t.common.watchWithChat}
                               >
                                 <MessageIcon />
