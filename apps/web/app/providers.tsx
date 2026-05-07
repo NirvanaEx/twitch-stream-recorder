@@ -108,6 +108,17 @@ type Dictionary = {
     recordingInProgress: string;
     deleteArchive: string;
     theaterMode: string;
+    fullscreenMode: string;
+    normalMode: string;
+    exitTheater: string;
+    play: string;
+    pause: string;
+    skipBack: string;
+    skipForward: string;
+    mute: string;
+    unmute: string;
+    playbackSpeed: string;
+    closeOverlay: string;
   };
   settings: {
     title: string;
@@ -244,7 +255,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       videoPending: "Видео ещё не готово к просмотру.",
       recordingInProgress: "Запись ещё идёт. Страница обновляется, но архив не должен создаваться заново.",
       deleteArchive: "Удалить архив",
-      theaterMode: "Режим кинотеатра",
+      theaterMode: "Режим кинотеатра (T)",
+      fullscreenMode: "Полный экран (F)",
+      normalMode: "Обычный режим",
+      exitTheater: "Выйти из кинотеатра (Esc)",
+      play: "Воспроизвести (k)",
+      pause: "Пауза (k)",
+      skipBack: "Назад 5 сек (← / J)",
+      skipForward: "Вперёд 5 сек (→ / L)",
+      mute: "Без звука (M)",
+      unmute: "Включить звук (M)",
+      playbackSpeed: "Скорость",
+      closeOverlay: "Закрыть",
     },
     settings: {
       title: "Настройки",
@@ -379,7 +401,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       videoPending: "The video is not ready for playback yet.",
       recordingInProgress: "Recording is still in progress. The page refreshes, but the archive should not restart.",
       deleteArchive: "Delete archive",
-      theaterMode: "Theater mode",
+      theaterMode: "Theater mode (T)",
+      fullscreenMode: "Fullscreen (F)",
+      normalMode: "Normal mode",
+      exitTheater: "Exit theater (Esc)",
+      play: "Play (k)",
+      pause: "Pause (k)",
+      skipBack: "Back 5s (← / J)",
+      skipForward: "Forward 5s (→ / L)",
+      mute: "Mute (M)",
+      unmute: "Unmute (M)",
+      playbackSpeed: "Speed",
+      closeOverlay: "Close",
     },
     settings: {
       title: "Settings",

@@ -298,7 +298,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     // actually started writing video), NOT session.startedAt — Twitch reports
     // the original go-live time, which can be hours before we joined the stream.
     // We need chat relativeTime to align with the recorded video timeline.
-    this.chatService.startCapture({
+    void this.chatService.startCapture({
       channelId: channel.id,
       sessionId: session.id,
       channelLogin: channel.twitchLogin,

@@ -1,0 +1,723 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CloseIcon,
+  FullscreenExitIcon,
+  FullscreenIcon,
+  MessageIcon,
+  PauseIcon,
+  PlayIcon,
+  SkipBack5Icon,
+  SkipForward5Icon,
+  SpinnerIcon,
+  TheaterIcon,
+  VolumeHighIcon,
+  VolumeLowIcon,
+  VolumeMutedIcon,
+} from "./icons";
+
+export type PlayerMode = "normal" | "theater" | "fullscreen";
+
+type VideoPlayerProps = {
+  src: string;
+  autoPlay?: boolean;
+  poster?: string;
+  mode: PlayerMode;
+  onModeChange: (mode: PlayerMode) => void;
+  onChatToggle?: () => void;
+  chatVisible?: boolean;
+  showChatButton?: boolean;
+  onVideoElement?: (element: HTMLVideoElement | null) => void;
+  isLive?: boolean;
+  emptyText?: string;
+  /** Optional title shown in the top-left when in theater / fullscreen modes. */
+  title?: string;
+  /** When set, overrides the in-page back behaviour for the X icon in theater / fullscreen. */
+  onClose?: () => void;
+  className?: string;
+};
+
+const SKIP_SECONDS = 5;
+const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const HIDE_DELAY_MS = 2500;
+
+/**
+ * YouTube-style video player. Handles its own controls + global keyboard
+ * shortcuts (space / k, j / l, arrows, m, f, t, c, 0-9, < / >, Home / End).
+ *
+ * Modes are owned by the parent — the player only requests changes via
+ * `onModeChange`. The `mode === "fullscreen"` handling additionally calls
+ * the native Fullscreen API on its own container element.
+ */
+export function VideoPlayer({
+  src,
+  autoPlay = false,
+  poster,
+  mode,
+  onModeChange,
+  onChatToggle,
+  chatVisible = false,
+  showChatButton = false,
+  onVideoElement,
+  isLive = false,
+  emptyText,
+  title,
+  onClose,
+  className,
+}: VideoPlayerProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const centerIconTimerRef = useRef<number | null>(null);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [bufferedEnd, setBufferedEnd] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showRateMenu, setShowRateMenu] = useState(false);
+  const [scrubPreview, setScrubPreview] = useState<{ time: number; left: number } | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [centerHint, setCenterHint] = useState<"play" | "pause" | null>(null);
+
+  // Bubble video element up so external code (chat replay, etc.) can listen
+  // to it. We send the element on mount and null on unmount.
+  const setVideoNode = useCallback(
+    (node: HTMLVideoElement | null) => {
+      videoRef.current = node;
+      onVideoElement?.(node);
+    },
+    [onVideoElement],
+  );
+
+  // Wire video → state.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onTime = () => setCurrentTime(v.currentTime);
+    const onDuration = () => setDuration(Number.isFinite(v.duration) ? v.duration : 0);
+    const onProgress = () => {
+      if (v.buffered.length > 0) {
+        setBufferedEnd(v.buffered.end(v.buffered.length - 1));
+      }
+    };
+    const onWaiting = () => setWaiting(true);
+    const onPlaying = () => setWaiting(false);
+    const onVolume = () => {
+      setVolume(v.volume);
+      setMuted(v.muted);
+    };
+    const onRate = () => setPlaybackRate(v.playbackRate);
+
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPause);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("durationchange", onDuration);
+    v.addEventListener("loadedmetadata", onDuration);
+    v.addEventListener("progress", onProgress);
+    v.addEventListener("waiting", onWaiting);
+    v.addEventListener("playing", onPlaying);
+    v.addEventListener("seeking", onWaiting);
+    v.addEventListener("seeked", onPlaying);
+    v.addEventListener("volumechange", onVolume);
+    v.addEventListener("ratechange", onRate);
+
+    onDuration();
+    onVolume();
+    onRate();
+
+    return () => {
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("durationchange", onDuration);
+      v.removeEventListener("loadedmetadata", onDuration);
+      v.removeEventListener("progress", onProgress);
+      v.removeEventListener("waiting", onWaiting);
+      v.removeEventListener("playing", onPlaying);
+      v.removeEventListener("seeking", onWaiting);
+      v.removeEventListener("seeked", onPlaying);
+      v.removeEventListener("volumechange", onVolume);
+      v.removeEventListener("ratechange", onRate);
+    };
+  }, [src]);
+
+  // Restore stored volume / muted across visits.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      const stored = window.localStorage.getItem("tsr-player-vol");
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as { volume?: number; muted?: boolean };
+      if (typeof parsed.volume === "number") v.volume = Math.max(0, Math.min(1, parsed.volume));
+      if (typeof parsed.muted === "boolean") v.muted = parsed.muted;
+    } catch {
+      // Ignore broken localStorage.
+    }
+  }, [src]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tsr-player-vol", JSON.stringify({ volume, muted }));
+    } catch {
+      // Ignore storage errors (e.g. private mode).
+    }
+  }, [volume, muted]);
+
+  // ---- Player actions ---------------------------------------------------
+
+  const flashCenterHint = useCallback((kind: "play" | "pause") => {
+    setCenterHint(kind);
+    if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
+    centerIconTimerRef.current = window.setTimeout(() => setCenterHint(null), 600);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused || v.ended) {
+      void v.play().catch(() => undefined);
+      flashCenterHint("play");
+    } else {
+      v.pause();
+      flashCenterHint("pause");
+    }
+  }, [flashCenterHint]);
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      const v = videoRef.current;
+      if (!v) return;
+      const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
+      v.currentTime = Math.max(0, Math.min(cap, v.currentTime + delta));
+    },
+    [],
+  );
+
+  const seekTo = useCallback((time: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
+    v.currentTime = Math.max(0, Math.min(cap, time));
+  }, []);
+
+  const adjustVolume = useCallback((delta: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = false;
+    v.volume = Math.max(0, Math.min(1, v.volume + delta));
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+  }, []);
+
+  const setRate = useCallback((rate: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = rate;
+    setShowRateMenu(false);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    } else {
+      void node.requestFullscreen?.().catch(() => undefined);
+    }
+  }, []);
+
+  const toggleTheater = useCallback(() => {
+    if (mode === "fullscreen") {
+      void document.exitFullscreen().catch(() => undefined);
+      onModeChange("theater");
+      return;
+    }
+    onModeChange(mode === "theater" ? "normal" : "theater");
+  }, [mode, onModeChange]);
+
+  // Remember the mode the user was in before they entered fullscreen so
+  // we can restore it (theater → fullscreen → theater) instead of always
+  // dumping them back to normal.
+  const previousNonFsModeRef = useRef<PlayerMode>(mode === "fullscreen" ? "normal" : mode);
+  useEffect(() => {
+    if (mode !== "fullscreen") previousNonFsModeRef.current = mode;
+  }, [mode]);
+
+  // Keep parent state in sync when the user enters/exits fullscreen via
+  // ESC, F11, or the browser's native UI.
+  useEffect(() => {
+    const onChange = () => {
+      const isFs = document.fullscreenElement === containerRef.current;
+      if (isFs && mode !== "fullscreen") onModeChange("fullscreen");
+      if (!isFs && mode === "fullscreen") {
+        onModeChange(previousNonFsModeRef.current);
+      }
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, [mode, onModeChange]);
+
+  // ---- Auto-hide controls during playback -------------------------------
+
+  const armHide = useCallback(() => {
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = window.setTimeout(() => {
+      const v = videoRef.current;
+      if (v && !v.paused) setControlsVisible(false);
+    }, HIDE_DELAY_MS);
+  }, []);
+
+  const handleMouseMove = useCallback(() => {
+    setControlsVisible(true);
+    armHide();
+  }, [armHide]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      setControlsVisible(true);
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    } else {
+      armHide();
+    }
+  }, [isPlaying, armHide]);
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+    if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
+  }, []);
+
+  // ---- Keyboard shortcuts ----------------------------------------------
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (target.isContentEditable) return true;
+      return false;
+    };
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTypingTarget(event.target)) return;
+
+      const v = videoRef.current;
+      if (!v) return;
+
+      switch (event.key) {
+        case " ":
+        case "k":
+        case "K":
+          event.preventDefault();
+          togglePlay();
+          break;
+        case "ArrowLeft":
+        case "j":
+        case "J":
+          event.preventDefault();
+          seekBy(-SKIP_SECONDS);
+          flashCenterHint("pause");
+          break;
+        case "ArrowRight":
+        case "l":
+        case "L":
+          event.preventDefault();
+          seekBy(SKIP_SECONDS);
+          flashCenterHint("play");
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          adjustVolume(0.05);
+          break;
+        case "ArrowDown":
+          event.preventDefault();
+          adjustVolume(-0.05);
+          break;
+        case "m":
+        case "M":
+          event.preventDefault();
+          toggleMute();
+          break;
+        case "f":
+        case "F":
+          event.preventDefault();
+          toggleFullscreen();
+          break;
+        case "t":
+        case "T":
+          event.preventDefault();
+          toggleTheater();
+          break;
+        case "c":
+        case "C":
+          if (onChatToggle) {
+            event.preventDefault();
+            onChatToggle();
+          }
+          break;
+        case "Escape":
+          if (mode === "theater") {
+            event.preventDefault();
+            onModeChange("normal");
+          }
+          break;
+        case ">":
+        case ".":
+          event.preventDefault();
+          v.playbackRate = Math.min(2, Math.round((v.playbackRate + 0.25) * 100) / 100);
+          break;
+        case "<":
+        case ",":
+          event.preventDefault();
+          v.playbackRate = Math.max(0.25, Math.round((v.playbackRate - 0.25) * 100) / 100);
+          break;
+        case "Home":
+          event.preventDefault();
+          seekTo(0);
+          break;
+        case "End":
+          event.preventDefault();
+          seekTo(v.duration || 0);
+          break;
+        default:
+          if (event.key >= "0" && event.key <= "9") {
+            event.preventDefault();
+            const pct = Number(event.key) / 10;
+            seekTo(pct * (v.duration || 0));
+          }
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [
+    adjustVolume,
+    flashCenterHint,
+    mode,
+    onChatToggle,
+    onModeChange,
+    seekBy,
+    seekTo,
+    toggleFullscreen,
+    toggleMute,
+    togglePlay,
+    toggleTheater,
+  ]);
+
+  // ---- Progress bar -----------------------------------------------------
+
+  const progressRef = useRef<HTMLDivElement | null>(null);
+
+  const computePctFromEvent = (clientX: number) => {
+    const bar = progressRef.current;
+    if (!bar) return 0;
+    const rect = bar.getBoundingClientRect();
+    const pct = (clientX - rect.left) / rect.width;
+    return Math.max(0, Math.min(1, pct));
+  };
+
+  const onProgressMove = (event: React.MouseEvent) => {
+    if (!duration) return;
+    const pct = computePctFromEvent(event.clientX);
+    setScrubPreview({ time: pct * duration, left: pct * 100 });
+  };
+
+  const onProgressLeave = () => setScrubPreview(null);
+
+  const onProgressDown = (event: React.MouseEvent) => {
+    if (!duration) return;
+    const pct = computePctFromEvent(event.clientX);
+    seekTo(pct * duration);
+
+    const onMove = (e: MouseEvent) => {
+      const m = computePctFromEvent(e.clientX);
+      seekTo(m * duration);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const bufferedPct = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
+
+  const VolumeIcon = useMemo(() => {
+    if (muted || volume === 0) return VolumeMutedIcon;
+    if (volume < 0.5) return VolumeLowIcon;
+    return VolumeHighIcon;
+  }, [muted, volume]);
+
+  const containerClassName = [
+    "vp",
+    `vp--${mode}`,
+    controlsVisible ? "vp--show" : "vp--hide",
+    isPlaying ? "vp--playing" : "vp--paused",
+    className ?? "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <div
+      ref={containerRef}
+      className={containerClassName}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => {
+        if (isPlaying) setControlsVisible(false);
+      }}
+      onDoubleClick={(event) => {
+        // Avoid double-click toggling when clicking on controls.
+        if ((event.target as HTMLElement).closest(".vp__controls")) return;
+        toggleFullscreen();
+      }}
+    >
+      {src ? (
+        <video
+          ref={setVideoNode}
+          className="vp__video"
+          src={src}
+          autoPlay={autoPlay}
+          poster={poster}
+          preload="metadata"
+          playsInline
+          onClick={(event) => {
+            // Click-on-video toggles play. Don't intercept double-click.
+            if (event.detail > 1) return;
+            togglePlay();
+          }}
+        />
+      ) : (
+        <div className="vp__empty">{emptyText ?? "—"}</div>
+      )}
+
+      {(mode === "theater" || mode === "fullscreen") && (title || onClose) ? (
+        <div className="vp__top-bar">
+          <button
+            type="button"
+            className="vp__top-btn"
+            onClick={() => {
+              if (onClose) {
+                onClose();
+              } else if (mode === "fullscreen") {
+                void document.exitFullscreen().catch(() => undefined);
+              } else {
+                onModeChange("normal");
+              }
+            }}
+            title="Закрыть (Esc)"
+          >
+            <CloseIcon size={18} />
+          </button>
+          {title ? <div className="vp__top-title">{title}</div> : null}
+        </div>
+      ) : null}
+
+      {waiting && src ? (
+        <div className="vp__buffering" aria-hidden>
+          <SpinnerIcon size={36} />
+        </div>
+      ) : null}
+
+      {centerHint ? (
+        <div className="vp__center-hint" key={`${centerHint}-${Date.now()}`} aria-hidden>
+          {centerHint === "play" ? <PlayIcon size={36} /> : <PauseIcon size={36} />}
+        </div>
+      ) : null}
+
+      {!isPlaying && currentTime === 0 && src ? (
+        <button type="button" className="vp__big-play" onClick={togglePlay} aria-label="Play">
+          <PlayIcon size={44} />
+        </button>
+      ) : null}
+
+      {src ? (
+        <div className="vp__controls">
+          <div
+            ref={progressRef}
+            className="vp__progress"
+            onMouseMove={onProgressMove}
+            onMouseLeave={onProgressLeave}
+            onMouseDown={onProgressDown}
+          >
+            <div className="vp__progress-track" />
+            <div className="vp__progress-buffered" style={{ width: `${bufferedPct}%` }} />
+            <div className="vp__progress-played" style={{ width: `${progressPct}%` }} />
+            {scrubPreview ? (
+              <div className="vp__scrub-preview" style={{ left: `${scrubPreview.left}%` }}>
+                {formatTime(scrubPreview.time)}
+              </div>
+            ) : null}
+            <div className="vp__progress-thumb" style={{ left: `${progressPct}%` }} />
+          </div>
+
+          <div className="vp__bar">
+            <button
+              type="button"
+              className="vp__btn"
+              onClick={togglePlay}
+              title={isPlaying ? "Пауза (k)" : "Воспроизвести (k)"}
+            >
+              {isPlaying ? <PauseIcon size={20} /> : <PlayIcon size={20} />}
+            </button>
+
+            <button
+              type="button"
+              className="vp__btn"
+              onClick={() => seekBy(-SKIP_SECONDS)}
+              title="Назад 5 сек (← / J)"
+            >
+              <SkipBack5Icon size={20} />
+            </button>
+
+            <button
+              type="button"
+              className="vp__btn"
+              onClick={() => seekBy(SKIP_SECONDS)}
+              title="Вперёд 5 сек (→ / L)"
+            >
+              <SkipForward5Icon size={20} />
+            </button>
+
+            <div className="vp__volume">
+              <button
+                type="button"
+                className="vp__btn"
+                onClick={toggleMute}
+                title="Звук (M)"
+              >
+                <VolumeIcon size={20} />
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={muted ? 0 : volume}
+                onChange={(event) => {
+                  const v = videoRef.current;
+                  if (!v) return;
+                  const next = Number(event.target.value);
+                  v.volume = Math.max(0, Math.min(1, next));
+                  v.muted = next === 0;
+                }}
+                className="vp__volume-slider"
+                aria-label="Громкость"
+                style={{
+                  background: `linear-gradient(to right, var(--text) 0%, var(--text) ${
+                    (muted ? 0 : volume) * 100
+                  }%, rgba(255,255,255,0.3) ${
+                    (muted ? 0 : volume) * 100
+                  }%, rgba(255,255,255,0.3) 100%)`,
+                }}
+              />
+            </div>
+
+            <div className="vp__time">
+              {isLive ? <span className="vp__live-dot" /> : null}
+              <span>{formatTime(currentTime)}</span>
+              {!isLive ? (
+                <>
+                  <span className="vp__time-sep">/</span>
+                  <span>{formatTime(duration)}</span>
+                </>
+              ) : null}
+            </div>
+
+            <div className="vp__spacer" />
+
+            <div className="vp__rate-wrap">
+              <button
+                type="button"
+                className="vp__btn vp__btn--text"
+                onClick={() => setShowRateMenu((value) => !value)}
+                title="Скорость воспроизведения"
+              >
+                {playbackRate}x
+              </button>
+              {showRateMenu ? (
+                <div className="vp__menu" onMouseLeave={() => setShowRateMenu(false)}>
+                  {PLAYBACK_RATES.map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      className={`vp__menu-item ${rate === playbackRate ? "is-active" : ""}`}
+                      onClick={() => setRate(rate)}
+                    >
+                      {rate === 1 ? "Обычная" : `${rate}x`}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {showChatButton && onChatToggle ? (
+              <button
+                type="button"
+                className={`vp__btn ${chatVisible ? "vp__btn--active" : ""}`}
+                onClick={onChatToggle}
+                title="Чат (C)"
+              >
+                <MessageIcon size={20} />
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              className={`vp__btn ${mode === "theater" ? "vp__btn--active" : ""}`}
+              onClick={toggleTheater}
+              title="Режим кинотеатра (T)"
+            >
+              <TheaterIcon size={20} />
+            </button>
+
+            <button
+              type="button"
+              className="vp__btn"
+              onClick={toggleFullscreen}
+              title="Полный экран (F)"
+            >
+              {mode === "fullscreen" ? (
+                <FullscreenExitIcon size={20} />
+              ) : (
+                <FullscreenIcon size={20} />
+              )}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
