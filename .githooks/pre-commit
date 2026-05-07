@@ -1,0 +1,20 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "${SKIP_PRECOMMIT:-}" = "1" ]; then
+  echo "[pre-commit] skipped because SKIP_PRECOMMIT=1"
+  exit 0
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[pre-commit] npm is not installed or is not in PATH" >&2
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "[pre-commit] docker is not installed or is not in PATH" >&2
+  exit 1
+fi
+
+echo "[pre-commit] running npm run verify:precommit"
+npm run verify:precommit
