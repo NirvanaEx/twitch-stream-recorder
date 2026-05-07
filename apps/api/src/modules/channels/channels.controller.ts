@@ -1,8 +1,10 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import { RequirePermissions } from "../auth/auth.decorators";
 import { CreateChannelDto } from "./dto/create-channel.dto";
 import { UpdateChannelDto } from "./dto/update-channel.dto";
 import { ChannelsService } from "./channels.service";
 
+@RequirePermissions("manage_channels")
 @Controller("channels")
 export class ChannelsController {
   constructor(private readonly channelsService: ChannelsService) {

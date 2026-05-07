@@ -1,6 +1,8 @@
 import { Controller, Get } from "@nestjs/common";
+import { AllowAnonymous } from "../auth/auth.decorators";
 import { TwitchService } from "../twitch/twitch.service";
 
+@AllowAnonymous()
 @Controller("health")
 export class HealthController {
   constructor(private readonly twitchService: TwitchService) {}

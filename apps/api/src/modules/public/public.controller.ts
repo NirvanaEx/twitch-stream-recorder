@@ -1,0 +1,173 @@
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+  Req,
+  Res,
+} from "@nestjs/common";
+import { createReadStream } from "node:fs";
+import { Prisma } from "@prisma/client";
+import { AllowAnonymous } from "../auth/auth.decorators";
+import { PrismaService } from "../prisma/prisma.service";
+import { resolveSessionPlaybackState } from "../recording/playback.utils";
+import { RecordingService } from "../recording/recording.service";
+
+const DEFAULT_PAGE_SIZE = 12;
+const MAX_PAGE_SIZE = 48;
+
+@AllowAnonymous()
+@Controller("public/streams")
+export class PublicStreamsController {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly recordingService: RecordingService,
+  ) {}
+
+  @Get()
+  async list(
+    @Query("search") rawSearch?: string,
+    @Query("page") rawPage?: string,
+    @Query("pageSize") rawPageSize?: string,
+  ) {
+    const search = (rawSearch ?? "").trim();
+    const page = Math.max(1, Number.parseInt(rawPage ?? "1", 10) || 1);
+    const pageSize = Math.min(
+      MAX_PAGE_SIZE,
+      Math.max(1, Number.parseInt(rawPageSize ?? String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE),
+    );
+
+    // Public listing: only ready archives. Mirrors the visibility of the
+    // /admin/archives page (videoStatus == ready, playbackPath set), filtered
+    // by title (case-insensitive substring).
+    const where: Prisma.StreamSessionWhereInput = {
+      videoStatus: "ready",
+      playbackPath: { not: null },
+      ...(search
+        ? {
+            title: {
+              contains: search,
+              mode: "insensitive" as Prisma.QueryMode,
+            },
+          }
+        : {}),
+    };
+
+    const [total, sessions] = await this.prisma.$transaction([
+      this.prisma.streamSession.count({ where }),
+      this.prisma.streamSession.findMany({
+        where,
+        include: { channel: true },
+        orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    const items = sessions
+      .map((session) => {
+        const playback = resolveSessionPlaybackState(session);
+        if (!playback.videoReady) {
+          return null;
+        }
+
+        return {
+          id: session.id,
+          title: session.title,
+          channel: {
+            login: session.channel.twitchLogin,
+            displayName: session.channel.displayName ?? session.channel.twitchLogin,
+            profileImageUrl: session.channel.profileImageUrl,
+          },
+          previewImageUrl: session.previewImageUrl,
+          startedAt: session.startedAt?.toISOString() ?? null,
+          endedAt: session.endedAt?.toISOString() ?? null,
+          fileSizeBytes: playback.fileSizeBytes,
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      items,
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
+  }
+
+  @Get(":id")
+  async get(@Param("id") id: string) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      include: { channel: true },
+    });
+
+    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+      throw new NotFoundException("Запись не найдена.");
+    }
+
+    const playback = resolveSessionPlaybackState(session);
+    if (!playback.videoReady) {
+      throw new NotFoundException("Видео ещё не готово.");
+    }
+
+    return {
+      item: {
+        id: session.id,
+        title: session.title,
+        categoryName: session.categoryName,
+        channel: {
+          login: session.channel.twitchLogin,
+          displayName: session.channel.displayName ?? session.channel.twitchLogin,
+          profileImageUrl: session.channel.profileImageUrl,
+        },
+        previewImageUrl: session.previewImageUrl,
+        startedAt: session.startedAt?.toISOString() ?? null,
+        endedAt: session.endedAt?.toISOString() ?? null,
+        fileSizeBytes: playback.fileSizeBytes,
+        // Public clients hit the public video endpoint — never the admin one.
+        videoUrl: `/api/public/streams/${session.id}/video`,
+      },
+    };
+  }
+
+  @Get(":id/video")
+  async streamVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { id: true, videoStatus: true, playbackPath: true },
+    });
+
+    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+      throw new NotFoundException("Запись не найдена.");
+    }
+
+    const { absolutePath, stat } = await this.recordingService.getPlayableFile(id);
+    const range = req.headers.range as string | undefined;
+
+    if (range) {
+      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
+      const start = Number(rawStart);
+      const end = rawEnd ? Number(rawEnd) : stat.size - 1;
+      const chunkSize = end - start + 1;
+
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": chunkSize,
+        "Content-Type": "video/mp4",
+      });
+      createReadStream(absolutePath, { start, end }).pipe(res);
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Length": stat.size,
+      "Content-Type": "video/mp4",
+      "Accept-Ranges": "bytes",
+    });
+    createReadStream(absolutePath).pipe(res);
+  }
+}

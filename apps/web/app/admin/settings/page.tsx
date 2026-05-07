@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { apiGet, apiSend } from "../lib/api";
-import { useLanguage } from "../providers";
+import { apiGet, apiSend } from "../../lib/api";
+import { useLanguage } from "../../providers";
 
 type SettingsResponse = {
   retentionDays: number;

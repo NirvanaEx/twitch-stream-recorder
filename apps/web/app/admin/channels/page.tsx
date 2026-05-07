@@ -1,12 +1,12 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiSend } from "../lib/api";
-import { formatDuration } from "../lib/media";
-import { useRealtimeRefresh } from "../lib/use-realtime-refresh";
-import { useLanguage } from "../providers";
-import { IconButton, IconLink } from "../components/IconButton";
-import { Pagination } from "../components/Pagination";
+import { apiGet, apiSend } from "../../lib/api";
+import { formatDuration } from "../../lib/media";
+import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
+import { useLanguage } from "../../providers";
+import { IconButton, IconLink } from "../../components/IconButton";
+import { Pagination } from "../../components/Pagination";
 import {
   FilmIcon,
   MessageIcon,
@@ -15,7 +15,7 @@ import {
   RefreshIcon,
   StopIcon,
   TrashIcon,
-} from "../components/icons";
+} from "../../components/icons";
 
 type ChannelItem = {
   id: string;
@@ -349,13 +349,13 @@ export default function ChannelsPage() {
                             channel.latestSession?.videoUrl ? (
                               <>
                                 <IconLink
-                                  href={`/archives/${channel.latestSession.id}?mode=video`}
+                                  href={`/admin/archives/${channel.latestSession.id}?mode=video`}
                                   title={t.common.watchVideo}
                                 >
                                   <FilmIcon />
                                 </IconLink>
                                 <IconLink
-                                  href={`/archives/${channel.latestSession.id}?mode=chat`}
+                                  href={`/admin/archives/${channel.latestSession.id}?mode=chat`}
                                   title={t.common.watchWithChat}
                                 >
                                   <MessageIcon />

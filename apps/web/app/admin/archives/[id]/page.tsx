@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
-import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
-import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
-import { useLanguage } from "../../providers";
-import { ChatReplay } from "../../components/ChatReplay";
-import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
-import { DownloadIcon, TrashIcon } from "../../components/icons";
+import { apiGet, apiSend, buildApiUrl } from "../../../lib/api";
+import { buildMediaUrl, formatFileSize, formatPeriod } from "../../../lib/media";
+import { useRealtimeRefresh } from "../../../lib/use-realtime-refresh";
+import { useLanguage } from "../../../providers";
+import { ChatReplay } from "../../../components/ChatReplay";
+import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
+import { DownloadIcon, TrashIcon } from "../../../components/icons";
 
 type ArchiveDetailResponse = {
   item: {
@@ -131,7 +131,7 @@ export default function ArchiveReplayPage() {
     setError(null);
     try {
       await apiSend(`archives/${data.item.id}`, "DELETE");
-      router.push("/archives");
+      router.push("/admin/archives");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
     } finally {
@@ -199,7 +199,7 @@ export default function ArchiveReplayPage() {
             </div>
           </div>
           <div className="action-row">
-            <Link className="btn" href="/archives">
+            <Link className="btn" href="/admin/archives">
               ← {t.replay.backToArchives}
             </Link>
             <a
