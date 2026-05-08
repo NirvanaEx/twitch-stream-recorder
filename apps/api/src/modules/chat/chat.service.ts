@@ -12,6 +12,9 @@ type ActiveCapture = {
   reconnectAttempts: number;
   closed: boolean;
   buffer: string;
+  joined: boolean;
+  privmsgCount: number;
+  loggedFirstMessage: boolean;
 };
 
 const TWITCH_IRC_WS_URL = "wss://irc-ws.chat.twitch.tv:443";
@@ -76,6 +79,9 @@ export class ChatService {
       reconnectAttempts: 0,
       closed: false,
       buffer: "",
+      joined: false,
+      privmsgCount: 0,
+      loggedFirstMessage: false,
     };
 
     this.captures.set(channelId, capture);
@@ -148,8 +154,12 @@ export class ChatService {
     socket.addEventListener("open", () => {
       this.logger.log(`[chat:${capture.channelLogin}] connected as ${nick}`);
       capture.reconnectAttempts = 0;
-      socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      capture.joined = false;
+      // Twitch IRC expects NICK before CAP REQ for read-only justinfan
+      // sessions. Sending CAP first works in spec, but the server has been
+      // observed to silently drop the join when the order is reversed.
       socket.send(`NICK ${nick}`);
+      socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
       socket.send(`JOIN #${capture.channelLogin}`);
     });
 
@@ -189,7 +199,7 @@ export class ChatService {
         return;
       }
       this.logger.warn(
-        `[chat:${capture.channelLogin}] socket closed (code=${event.code}). Reconnecting…`,
+        `[chat:${capture.channelLogin}] socket closed (code=${event.code}, joined=${capture.joined}, msgs=${capture.privmsgCount}). Reconnecting…`,
       );
       this.scheduleReconnect(capture);
     });
@@ -229,7 +239,29 @@ export class ChatService {
     }
 
     if (parsed.command === "PRIVMSG") {
+      capture.privmsgCount += 1;
+      if (!capture.loggedFirstMessage) {
+        capture.loggedFirstMessage = true;
+        this.logger.log(
+          `[chat:${capture.channelLogin}] receiving messages (first PRIVMSG ok).`,
+        );
+      }
       void this.persistMessage(capture, parsed);
+    } else if (parsed.command === "JOIN") {
+      // Confirm we actually joined the channel — once per connection,
+      // when the JOIN is for our own nick.
+      if (!capture.joined && parsed.prefixNick && parsed.prefixNick.startsWith("justinfan")) {
+        capture.joined = true;
+        this.logger.log(
+          `[chat:${capture.channelLogin}] joined #${capture.channelLogin}.`,
+        );
+      }
+    } else if (parsed.command === "NOTICE") {
+      // Twitch sends NOTICE for auth failures, host bans, etc. Surface
+      // them — silent NOTICEs are why a capture can run for hours and
+      // record nothing.
+      const text = parsed.trailing ?? parsed.params.join(" ");
+      this.logger.warn(`[chat:${capture.channelLogin}] NOTICE: ${text}`);
     } else if (parsed.command === "CLEARMSG") {
       void this.markDeletedByMessageId(capture, parsed.tags["target-msg-id"] ?? null);
     } else if (parsed.command === "CLEARCHAT") {
@@ -281,8 +313,11 @@ export class ChatService {
         },
       });
     } catch (error) {
-      this.logger.debug(
-        `Failed to persist chat message: ${
+      // Bumped from debug → warn: a constraint or type error here would
+      // otherwise vanish in production logs and leave the archive with
+      // an empty messages array.
+      this.logger.warn(
+        `[chat:${capture.channelLogin}] failed to persist message: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
