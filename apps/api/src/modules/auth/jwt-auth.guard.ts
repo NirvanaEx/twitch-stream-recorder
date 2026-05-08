@@ -29,10 +29,23 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<{
       headers: Record<string, string | string[] | undefined>;
+      query?: Record<string, string | string[] | undefined>;
+      method?: string;
       user?: unknown;
     }>();
     const header = (request.headers["authorization"] ?? "") as string;
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    let token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+
+    // Browsers cannot attach an Authorization header on plain navigations
+    // such as <video src> or download links. For GET requests we therefore
+    // also accept the JWT via a `?token=` query parameter.
+    if (!token && (request.method ?? "GET").toUpperCase() === "GET") {
+      const queryToken = request.query?.token;
+      const candidate = Array.isArray(queryToken) ? queryToken[0] : queryToken;
+      if (typeof candidate === "string" && candidate.trim()) {
+        token = candidate.trim();
+      }
+    }
 
     if (!token) {
       throw new UnauthorizedException("Нужно войти.");

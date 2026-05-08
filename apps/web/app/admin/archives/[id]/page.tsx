@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../../lib/api";
-import { buildMediaUrl, formatFileSize, formatPeriod } from "../../../lib/media";
+import {
+  buildAuthenticatedMediaUrl,
+  formatFileSize,
+  formatPeriod,
+  withAuthToken,
+} from "../../../lib/media";
 import { useRealtimeRefresh } from "../../../lib/use-realtime-refresh";
 import { useLanguage } from "../../../providers";
 import { ChatReplay } from "../../../components/ChatReplay";
@@ -32,7 +37,10 @@ type ArchiveDetailResponse = {
   chatAvailable: boolean;
 };
 
-const CHAT_PREF_KEY = "tsr-replay-chat-visible";
+// v2: chat is now ON by default and only hidden when the user clicks the
+// in-player chat toggle. The key bump resets stale "hidden" preferences
+// left over from the old "Without chat" entry button.
+const CHAT_PREF_KEY = "tsr-replay-chat-visible-v2";
 
 function readStoredChatPref(): boolean {
   if (typeof window === "undefined") return true;
@@ -50,7 +58,6 @@ export default function ArchiveReplayPage() {
   const { t } = useLanguage();
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [data, setData] = useState<ArchiveDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,26 +66,10 @@ export default function ArchiveReplayPage() {
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 
-  // Initial chat visibility: explicit ?mode=video / ?mode=chat URL wins,
-  // otherwise the user's stored preference, otherwise ON. Once read, we
-  // strip the param so the user's later toggles aren't overridden by a
-  // stale URL on refresh.
+  // Restore the user's stored chat preference on mount. Default is ON;
+  // toggling the in-player chat button persists the choice for next time.
   useEffect(() => {
-    const urlMode = searchParams.get("mode");
-    if (urlMode === "video") {
-      setChatVisible(false);
-    } else if (urlMode === "chat") {
-      setChatVisible(true);
-    } else {
-      setChatVisible(readStoredChatPref());
-    }
-    if (urlMode) {
-      const next = new URLSearchParams(searchParams.toString());
-      next.delete("mode");
-      const query = next.toString();
-      router.replace(query ? `?${query}` : window.location.pathname, { scroll: false });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setChatVisible(readStoredChatPref());
   }, []);
 
   // Persist user's choice once they toggle.
@@ -123,7 +114,12 @@ export default function ArchiveReplayPage() {
 
   useRealtimeRefresh(load);
 
-  const videoSrc = useMemo(() => buildMediaUrl(data?.videoUrl), [data?.videoUrl]);
+  // The /api/archives/:id/video endpoint is auth-protected; <video> can't
+  // attach the Authorization header, so we sign the URL with `?token=`.
+  const videoSrc = useMemo(
+    () => buildAuthenticatedMediaUrl(data?.videoUrl),
+    [data?.videoUrl],
+  );
 
   async function handleDelete() {
     if (!data || !window.confirm(t.archives.deleteConfirm)) return;
@@ -204,7 +200,7 @@ export default function ArchiveReplayPage() {
             </Link>
             <a
               className="icon-btn"
-              href={buildApiUrl(`archives/${params.id}/video?download=1`)}
+              href={withAuthToken(buildApiUrl(`archives/${params.id}/video?download=1`))}
               title={t.localReplay.downloadVideo}
               download
             >
@@ -212,7 +208,7 @@ export default function ArchiveReplayPage() {
             </a>
             <a
               className="icon-btn"
-              href={buildApiUrl(`archives/${params.id}/bundle`)}
+              href={withAuthToken(buildApiUrl(`archives/${params.id}/bundle`))}
               title={t.localReplay.downloadBundle}
               download
               style={{ position: "relative" }}

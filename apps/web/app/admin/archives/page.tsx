@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
-import { formatFileSize, formatPeriod } from "../../lib/media";
+import { formatFileSize, formatPeriod, withAuthToken } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
 import { Pagination } from "../../components/Pagination";
-import { DownloadIcon, FilmIcon, MessageIcon, TrashIcon } from "../../components/icons";
+import { DownloadIcon, PlayIcon, TrashIcon } from "../../components/icons";
 
 type ArchiveItem = {
   id: string;
@@ -129,20 +129,16 @@ export default function ArchivesPage() {
                           {archive.videoReady && archive.videoUrl ? (
                             <>
                               <IconLink
-                                href={`/admin/archives/${archive.id}?mode=video`}
-                                title={t.common.watchVideo}
+                                href={`/admin/archives/${archive.id}`}
+                                title={t.common.watch}
                               >
-                                <FilmIcon />
-                              </IconLink>
-                              <IconLink
-                                href={`/admin/archives/${archive.id}?mode=chat`}
-                                title={t.common.watchWithChat}
-                              >
-                                <MessageIcon />
+                                <PlayIcon />
                               </IconLink>
                               <a
                                 className="icon-btn"
-                                href={buildApiUrl(`archives/${archive.id}/video?download=1`)}
+                                href={withAuthToken(
+                                  buildApiUrl(`archives/${archive.id}/video?download=1`),
+                                )}
                                 title={t.localReplay.downloadVideo}
                                 download
                               >
@@ -150,7 +146,9 @@ export default function ArchivesPage() {
                               </a>
                               <a
                                 className="icon-btn"
-                                href={buildApiUrl(`archives/${archive.id}/bundle`)}
+                                href={withAuthToken(
+                                  buildApiUrl(`archives/${archive.id}/bundle`),
+                                )}
                                 title={t.localReplay.downloadBundle}
                                 download
                                 style={{ position: "relative" }}
