@@ -10,7 +10,6 @@ import { IconButton, IconLink } from "../components/IconButton";
 import {
   CircleDotIcon,
   FilmIcon,
-  MessageIcon,
   PlayIcon,
   PlusIcon,
   RefreshIcon,
@@ -248,8 +247,8 @@ export default function DashboardPage() {
 
                           {channel.latestSession?.videoReady && channel.latestSession?.videoUrl ? (
                             <IconLink
-                              href={`/admin/archives/${channel.latestSession.id}?mode=chat`}
-                              title={t.common.watchWithChat}
+                              href={`/admin/archives/${channel.latestSession.id}`}
+                              title={t.common.watch}
                             >
                               <FilmIcon />
                             </IconLink>
@@ -316,20 +315,12 @@ export default function DashboardPage() {
                     <td className="col-actions">
                       <div className="action-row">
                         {archive.videoReady && archive.videoUrl ? (
-                          <>
-                            <IconLink
-                              href={`/admin/archives/${archive.id}?mode=video`}
-                              title={t.common.watchVideo}
-                            >
-                              <FilmIcon />
-                            </IconLink>
-                            <IconLink
-                              href={`/admin/archives/${archive.id}?mode=chat`}
-                              title={t.common.watchWithChat}
-                            >
-                              <MessageIcon />
-                            </IconLink>
-                          </>
+                          <IconLink
+                            href={`/admin/archives/${archive.id}`}
+                            title={t.common.watch}
+                          >
+                            <FilmIcon />
+                          </IconLink>
                         ) : (
                           <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
                             {t.replay.videoPending}

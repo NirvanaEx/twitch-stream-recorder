@@ -9,7 +9,6 @@ import { IconButton, IconLink } from "../../components/IconButton";
 import { Pagination } from "../../components/Pagination";
 import {
   FilmIcon,
-  MessageIcon,
   PlayIcon,
   PlusIcon,
   RefreshIcon,
@@ -347,20 +346,12 @@ export default function ChannelsPage() {
 
                             {channel.latestSession?.videoReady &&
                             channel.latestSession?.videoUrl ? (
-                              <>
-                                <IconLink
-                                  href={`/admin/archives/${channel.latestSession.id}?mode=video`}
-                                  title={t.common.watchVideo}
-                                >
-                                  <FilmIcon />
-                                </IconLink>
-                                <IconLink
-                                  href={`/admin/archives/${channel.latestSession.id}?mode=chat`}
-                                  title={t.common.watchWithChat}
-                                >
-                                  <MessageIcon />
-                                </IconLink>
-                              </>
+                              <IconLink
+                                href={`/admin/archives/${channel.latestSession.id}`}
+                                title={t.common.watch}
+                              >
+                                <FilmIcon />
+                              </IconLink>
                             ) : null}
 
                             <IconButton

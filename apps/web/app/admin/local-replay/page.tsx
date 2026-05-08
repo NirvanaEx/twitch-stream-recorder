@@ -47,7 +47,8 @@ type Bundle = {
   emotes: EmotePayload | null;
 };
 
-const CHAT_PREF_KEY = "tsr-replay-chat-visible";
+// Shares the v2 key with the online archive replay page — see comment there.
+const CHAT_PREF_KEY = "tsr-replay-chat-visible-v2";
 
 function readStoredChatPref(): boolean {
   if (typeof window === "undefined") return true;

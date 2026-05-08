@@ -6,7 +6,7 @@ import { formatDuration, formatFileSize } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
-import { FilmIcon, MessageIcon, StopIcon } from "../../components/icons";
+import { PlayIcon, StopIcon } from "../../components/icons";
 
 type ActiveRecording = {
   id: string;
@@ -115,20 +115,12 @@ export default function RecordingPage() {
                     <td className="col-actions">
                       <div className="action-row">
                         {session.videoReady && session.videoUrl ? (
-                          <>
-                            <IconLink
-                              href={`/admin/archives/${session.id}?mode=video`}
-                              title={t.common.watchVideo}
-                            >
-                              <FilmIcon />
-                            </IconLink>
-                            <IconLink
-                              href={`/admin/archives/${session.id}?mode=chat`}
-                              title={t.common.watchWithChat}
-                            >
-                              <MessageIcon />
-                            </IconLink>
-                          </>
+                          <IconLink
+                            href={`/admin/archives/${session.id}`}
+                            title={t.common.watch}
+                          >
+                            <PlayIcon />
+                          </IconLink>
                         ) : null}
                         <IconButton
                           title={t.common.stop}

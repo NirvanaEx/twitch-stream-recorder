@@ -1,3 +1,5 @@
+import { getAuthToken } from "./api";
+
 export function buildMediaUrl(path: string | null | undefined) {
   if (!path) {
     return "";
@@ -11,6 +13,30 @@ export function buildMediaUrl(path: string | null | undefined) {
   }
 
   return path;
+}
+
+/**
+ * Append the user's JWT to a URL as a `?token=` query parameter.
+ *
+ * `<video>` elements and `<a download>` clicks issue a plain navigation —
+ * we cannot inject the `Authorization` header for them. The API's
+ * JwtAuthGuard accepts the JWT via `?token=` on GET requests as a
+ * fallback so these endpoints can be reached from a normal navigation.
+ */
+export function withAuthToken(url: string): string {
+  if (!url) return url;
+
+  const token = getAuthToken();
+  if (!token) return url;
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
+}
+
+/** Convenience: media URL for an authenticated archive video / download. */
+export function buildAuthenticatedMediaUrl(path: string | null | undefined) {
+  const url = buildMediaUrl(path);
+  return url ? withAuthToken(url) : url;
 }
 
 export function formatFileSize(fileSizeBytes: string | null | undefined) {
