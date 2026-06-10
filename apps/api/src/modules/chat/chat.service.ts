@@ -48,6 +48,22 @@ export class ChatService {
   }) {
     const { channelId, sessionId, channelLogin, captureAnchor } = input;
 
+    // The global WebSocket API exists only in Node >= 22. On older runtimes
+    // every connect attempt throws and the capture retries forever, silently
+    // recording nothing — surface this as a session error instead.
+    if (typeof WebSocket === "undefined") {
+      this.logger.error(
+        `[chat:${channelLogin}] chat capture disabled: this Node.js runtime (${process.version}) has no global WebSocket. Use Node 22+.`,
+      );
+      void this.prisma.streamSession
+        .update({
+          where: { id: sessionId },
+          data: { chatStatus: "error", chatAvailable: false },
+        })
+        .catch(() => undefined);
+      return;
+    }
+
     // Honor the user's "record chat" toggle. We still flip the session
     // state to "not_configured" so the UI tells the user why the chat is
     // empty.
