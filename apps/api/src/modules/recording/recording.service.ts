@@ -28,13 +28,26 @@ type ActiveRecording = {
   stopRequested: boolean;
 };
 
+// How many consecutive "offline" polls we tolerate before stopping an active
+// recording. Twitch Helix occasionally returns an empty result for a stream
+// that is actually live; stopping on the first miss truncates recordings.
+const OFFLINE_MISS_THRESHOLD = 3;
+
+// Cooldown before re-recording the same twitchStreamId after the previous
+// session ended. Prevents a tight create-session/error loop when streamlink
+// keeps failing instantly, while still allowing the recorder to resume the
+// stream after a crash, restart, or transient failure.
+const RESTART_COOLDOWN_MS = 60_000;
+
 @Injectable()
 export class RecordingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RecordingService.name);
   private readonly activeRecordings = new Map<string, ActiveRecording>();
+  private readonly offlineMisses = new Map<string, number>();
   private monitorTimer: NodeJS.Timeout | null = null;
   private dependenciesReady = false;
   private dependenciesError: string | null = null;
+  private lastDependencyCheckAt = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -63,6 +76,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async syncAllChannels() {
+    // If dependencies were missing at boot (e.g. streamlink installed after
+    // the API started), re-probe periodically instead of staying disabled
+    // until a manual restart.
+    if (!this.dependenciesReady && Date.now() - this.lastDependencyCheckAt > RESTART_COOLDOWN_MS) {
+      await this.checkRecordingDependencies();
+    }
+
     const channels = await this.prisma.channel.findMany({
       where: {
         isEnabled: true,
@@ -121,6 +141,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       manualStopUntilOffline: nextManualStopUntilOffline,
     });
 
+    if (liveStream) {
+      this.offlineMisses.delete(channel.id);
+    }
+
     if (
       liveStream &&
       channel.autoRecord &&
@@ -128,14 +152,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       !isRecording &&
       this.dependenciesReady
     ) {
-      const alreadyHandled = liveStream.id
-        ? await this.prisma.streamSession.findFirst({
-            where: { channelId: channel.id, twitchStreamId: liveStream.id },
-            select: { id: true },
-          })
-        : null;
-
-      if (!alreadyHandled) {
+      if (await this.shouldAutoRecordStream(channel.id, liveStream.id)) {
         try {
           await this.startRecording(channel.id, "automatic");
         } catch (error) {
@@ -149,10 +166,58 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!liveStream && isRecording) {
-      await this.stopRecording(channel.id, false);
+      // Tolerate a few consecutive misses before stopping: Twitch sometimes
+      // reports a live stream as offline for a single poll, and stopping
+      // immediately truncates the recording (and the chat capture with it).
+      const misses = (this.offlineMisses.get(channel.id) ?? 0) + 1;
+      this.offlineMisses.set(channel.id, misses);
+
+      if (misses >= OFFLINE_MISS_THRESHOLD) {
+        this.offlineMisses.delete(channel.id);
+        await this.stopRecording(channel.id, false);
+      } else {
+        this.logger.warn(
+          `${channel.twitchLogin} reported offline while recording (${misses}/${OFFLINE_MISS_THRESHOLD}); keeping the recording alive for now.`,
+        );
+      }
     }
 
     return liveStream;
+  }
+
+  /**
+   * Decide whether the auto-recorder should (re)start a recording for the
+   * given live stream. Previously any session with the same twitchStreamId
+   * blocked auto-record permanently — so a crashed/interrupted recording was
+   * never resumed for the rest of the stream. Now only an in-progress
+   * session (or a very recent attempt) blocks it.
+   */
+  private async shouldAutoRecordStream(channelId: string, twitchStreamId: string | null) {
+    if (!twitchStreamId) {
+      return true;
+    }
+
+    const lastSession = await this.prisma.streamSession.findFirst({
+      where: { channelId, twitchStreamId },
+      orderBy: { createdAt: "desc" },
+      select: { status: true, createdAt: true, stoppedByUser: true },
+    });
+
+    if (!lastSession) {
+      return true;
+    }
+
+    if (lastSession.status === "recording") {
+      return false;
+    }
+
+    // Manual stop is handled separately via manualStopUntilOffline, but keep
+    // a guard here in case that flag was reset while the stream stayed live.
+    if (lastSession.stoppedByUser) {
+      return false;
+    }
+
+    return Date.now() - lastSession.createdAt.getTime() > RESTART_COOLDOWN_MS;
   }
 
   async startRecording(channelId: string, trigger: "automatic" | "manual" = "manual") {
@@ -206,18 +271,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         orderBy: { createdAt: "desc" },
       });
 
-      if (duplicateSession) {
-        if (trigger === "automatic") {
-          return {
-            item: this.serializeSession(duplicateSession, duplicateSession.channel),
-          };
-        }
-
-        if (duplicateSession.status === "recording") {
-          return {
-            item: this.serializeSession(duplicateSession, duplicateSession.channel),
-          };
-        }
+      // Only an in-progress session blocks a new recording. A completed or
+      // failed session for the same stream must NOT block: that is exactly
+      // the resume-after-crash case, and it creates a new "part" session.
+      if (duplicateSession?.status === "recording") {
+        return {
+          item: this.serializeSession(duplicateSession, duplicateSession.channel),
+        };
       }
     }
 
@@ -225,7 +285,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.resolveFfmpegCommand();
 
     const recordingStartedAt = liveStream.startedAt ?? new Date().toISOString();
-    const outputPath = this.buildRecordingPath(channel.twitchLogin, recordingStartedAt);
+    // The file path is derived from the actual capture start ("now"), not the
+    // Twitch go-live timestamp: when a recording is resumed after a crash the
+    // go-live time is identical, and the second part would overwrite the
+    // first part's file.
+    const outputPath = this.buildRecordingPath(channel.twitchLogin, new Date().toISOString());
     const tsPath = outputPath.replace(/\.mp4$/i, ".ts");
     mkdirSync(dirname(outputPath), { recursive: true });
 
@@ -342,6 +406,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     activeRecording.stopRequested = true;
+    this.offlineMisses.delete(channelId);
 
     try {
       activeRecording.streamlinkProcess.kill("SIGTERM");
@@ -777,6 +842,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async checkRecordingDependencies() {
+    this.lastDependencyCheckAt = Date.now();
+    const wasReady = this.dependenciesReady;
+    const previousError = this.dependenciesError;
     const errors: string[] = [];
 
     try {
@@ -802,15 +870,21 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     if (errors.length > 0) {
       this.dependenciesReady = false;
       this.dependenciesError = errors.join(" ");
-      this.logger.error(
-        `Recording disabled: ${this.dependenciesError} Install streamlink and ffmpeg, then restart the API.`,
-      );
+
+      if (this.dependenciesError !== previousError) {
+        this.logger.error(
+          `Recording disabled: ${this.dependenciesError} Install streamlink and ffmpeg; the recorder re-checks automatically.`,
+        );
+      }
       return;
     }
 
     this.dependenciesReady = true;
     this.dependenciesError = null;
-    this.logger.log("Recording dependencies are available (streamlink + ffmpeg).");
+
+    if (!wasReady) {
+      this.logger.log("Recording dependencies are available (streamlink + ffmpeg).");
+    }
   }
 
   private serializeSession(session: StreamSession, channel: Pick<Channel, "displayName" | "twitchLogin">) {

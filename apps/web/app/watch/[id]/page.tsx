@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
-import { buildMediaUrl, formatPeriod } from "../../lib/media";
+import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
 import { useLanguage } from "../../providers";
+import { ChatReplay } from "../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
+import { DownloadIcon } from "../../components/icons";
 
 type PublicStreamDetail = {
   id: string;
@@ -23,6 +25,22 @@ type PublicStreamDetail = {
   fileSizeBytes: string | null;
   videoUrl: string;
 };
+
+// Shared with the admin replay page: chat is ON by default, the in-player
+// toggle persists the user's preference.
+const CHAT_PREF_KEY = "tsr-replay-chat-visible-v2";
+
+function readStoredChatPref(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const raw = window.localStorage.getItem(CHAT_PREF_KEY);
+    if (raw === "0") return false;
+    if (raw === "1") return true;
+  } catch {
+    // Ignore.
+  }
+  return true;
+}
 
 function formatDate(iso: string | null) {
   if (!iso) return "—";
@@ -42,6 +60,31 @@ export default function PublicWatchPage({
   const [data, setData] = useState<PublicStreamDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<PlayerMode>("normal");
+  const [chatVisible, setChatVisible] = useState(true);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    setChatVisible(readStoredChatPref());
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CHAT_PREF_KEY, chatVisible ? "1" : "0");
+    } catch {
+      // Ignore (private mode, etc.)
+    }
+  }, [chatVisible]);
+
+  // Lock the body when the theater overlay is up so the page behind it
+  // does not scroll.
+  useEffect(() => {
+    if (mode !== "theater") return undefined;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,30 +135,31 @@ export default function PublicWatchPage({
 
   const videoSrc = buildMediaUrl(data.videoUrl) || buildApiUrl(`public/streams/${id}/video`);
   const posterSrc = data.previewImageUrl ?? undefined;
+  const playerTitle = data.title || data.channel.displayName;
 
+  const stageClass = [
+    "replay-stage",
+    `replay-stage--${mode}`,
+    chatVisible ? "has-chat" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  // Keep one stable DOM tree across normal / theater / fullscreen so the
+  // <video> element never re-mounts and playback continues seamlessly.
   return (
-    <div className={mode === "normal" ? "public-shell" : "public-shell theater"}>
-      <Link href="/" className="auth-back" style={{ display: "inline-block", marginBottom: 12 }}>
-        {t.publicSite.backToList}
-      </Link>
+    <div className={mode === "theater" ? "replay-page-host" : "public-shell"}>
+      <div className={stageClass}>
+        <header className="replay-stage__header">
+          <Link
+            href="/"
+            className="auth-back"
+            style={{ display: "inline-block", marginBottom: 12 }}
+          >
+            {t.publicSite.backToList}
+          </Link>
 
-      <div className="watch-layout">
-        <div className="watch-player">
-          <VideoPlayer
-            src={videoSrc}
-            poster={posterSrc}
-            mode={mode}
-            onModeChange={setMode}
-            showChatButton={false}
-            title={data.title ?? data.channel.displayName}
-          />
-        </div>
-
-        <aside className="watch-meta">
-          <h2 className="page-title" style={{ margin: 0 }}>
-            {data.title || data.channel.displayName}
-          </h2>
-          <div className="watch-channel-row">
+          <div className="watch-channel-row" style={{ marginBottom: 8 }}>
             {data.channel.profileImageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -129,36 +173,65 @@ export default function PublicWatchPage({
               </span>
             )}
             <div>
-              <strong>{data.channel.displayName}</strong>
+              <h2 className="page-title" style={{ margin: 0 }}>
+                {playerTitle}
+              </h2>
               <div style={{ color: "var(--text-faint)", fontSize: 12 }}>
-                @{data.channel.login}
+                {data.channel.displayName} · @{data.channel.login}
+                {data.categoryName ? ` · ${data.categoryName}` : ""}
               </div>
             </div>
           </div>
 
-          <dl className="meta-list">
-            {data.categoryName ? (
-              <>
-                <dt>{t.archives.category}</dt>
-                <dd>{data.categoryName}</dd>
-              </>
-            ) : null}
-            <dt>{t.archives.recordedAt}</dt>
-            <dd>{formatDate(data.startedAt)}</dd>
-            {data.endedAt ? (
-              <>
-                <dt>{t.archives.endedAt}</dt>
-                <dd>{formatDate(data.endedAt)}</dd>
-              </>
-            ) : null}
+          <div className="replay-meta">
+            <span>
+              {t.archives.recordedAt}: <strong>{formatDate(data.startedAt)}</strong>
+            </span>
             {data.startedAt && data.endedAt ? (
-              <>
-                <dt>{t.publicSite.durationLabel}</dt>
-                <dd>{formatPeriod(data.startedAt, data.endedAt)}</dd>
-              </>
+              <span>
+                {t.publicSite.durationLabel}:{" "}
+                <strong>{formatPeriod(data.startedAt, data.endedAt)}</strong>
+              </span>
             ) : null}
-          </dl>
-        </aside>
+            {data.fileSizeBytes ? (
+              <span>
+                {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
+              </span>
+            ) : null}
+            <a
+              className="icon-btn"
+              href={buildApiUrl(`public/streams/${id}/video?download=1`)}
+              title={t.localReplay.downloadVideo}
+              download
+            >
+              <DownloadIcon />
+            </a>
+          </div>
+        </header>
+
+        <div className="replay-stage__player">
+          <VideoPlayer
+            src={videoSrc}
+            poster={posterSrc}
+            mode={mode}
+            onModeChange={setMode}
+            chatVisible={chatVisible}
+            showChatButton
+            onChatToggle={() => setChatVisible((value) => !value)}
+            onVideoElement={setVideoElement}
+            title={mode !== "normal" ? playerTitle : undefined}
+          />
+        </div>
+
+        {chatVisible ? (
+          <aside className="replay-stage__chat">
+            <ChatReplay
+              chatUrl={`public/streams/${id}/chat`}
+              videoElement={videoElement}
+              isLive={false}
+            />
+          </aside>
+        ) : null}
       </div>
     </div>
   );

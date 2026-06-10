@@ -15,10 +15,20 @@ type ActiveCapture = {
   joined: boolean;
   privmsgCount: number;
   loggedFirstMessage: boolean;
+  watchdogTimer: NodeJS.Timeout | null;
+  connectedAt: number;
+  lastActivityAt: number;
 };
 
 const TWITCH_IRC_WS_URL = "wss://irc-ws.chat.twitch.tv:443";
 const MAX_RECONNECT_DELAY_MS = 30_000;
+// Twitch IRC pings roughly every 5 minutes; a socket with no traffic for
+// longer than this is considered dead even if it never emitted close/error.
+const ACTIVITY_TIMEOUT_MS = 6 * 60_000;
+// If JOIN is not confirmed shortly after connecting, the join was silently
+// dropped — reconnect instead of sitting on an idle connection forever.
+const JOIN_TIMEOUT_MS = 30_000;
+const WATCHDOG_INTERVAL_MS = 15_000;
 
 @Injectable()
 export class ChatService {
@@ -82,10 +92,14 @@ export class ChatService {
       joined: false,
       privmsgCount: 0,
       loggedFirstMessage: false,
+      watchdogTimer: null,
+      connectedAt: 0,
+      lastActivityAt: Date.now(),
     };
 
     this.captures.set(channelId, capture);
     this.connect(capture);
+    this.startWatchdog(capture);
 
     void this.prisma.streamSession
       .update({
@@ -113,6 +127,11 @@ export class ChatService {
     if (capture.reconnectTimer) {
       clearTimeout(capture.reconnectTimer);
       capture.reconnectTimer = null;
+    }
+
+    if (capture.watchdogTimer) {
+      clearInterval(capture.watchdogTimer);
+      capture.watchdogTimer = null;
     }
 
     try {
@@ -150,11 +169,17 @@ export class ChatService {
       return;
     }
     capture.socket = socket;
+    capture.connectedAt = Date.now();
+    capture.lastActivityAt = Date.now();
 
     socket.addEventListener("open", () => {
+      if (capture.closed || capture.socket !== socket) return;
       this.logger.log(`[chat:${capture.channelLogin}] connected as ${nick}`);
       capture.reconnectAttempts = 0;
       capture.joined = false;
+      capture.buffer = "";
+      capture.connectedAt = Date.now();
+      capture.lastActivityAt = Date.now();
       // Twitch IRC expects NICK before CAP REQ for read-only justinfan
       // sessions. Sending CAP first works in spec, but the server has been
       // observed to silently drop the join when the order is reversed.
@@ -164,7 +189,10 @@ export class ChatService {
     });
 
     socket.addEventListener("message", (event) => {
+      if (capture.closed || capture.socket !== socket) return;
       const chunk = typeof event.data === "string" ? event.data : event.data.toString();
+
+      capture.lastActivityAt = Date.now();
 
       // IRC frames may not align with CRLF boundaries; buffer leftovers.
       capture.buffer += chunk;
@@ -178,24 +206,26 @@ export class ChatService {
     });
 
     socket.addEventListener("error", (event) => {
+      // Ignore events from a socket we already replaced during a reconnect.
+      if (capture.socket !== socket) return;
       const message =
         event && typeof event === "object" && "message" in event
           ? String((event as { message?: unknown }).message ?? "unknown")
           : "unknown";
       this.logger.warn(`[chat:${capture.channelLogin}] socket error: ${message}`);
-      // The "close" handler will schedule the reconnect — per the WebSocket
-      // spec an "error" is always followed by a "close". Some embedded
-      // clients fire "error" alone though, so we also kick a reconnect from
-      // here as a safety net (scheduleReconnect is idempotent on the timer).
+      // Per the WebSocket spec an "error" is always followed by a "close",
+      // but some implementations fire "error" alone. Schedule the reconnect
+      // here too — scheduleReconnect is idempotent on the timer.
       try {
-        capture.socket?.close();
+        socket.close();
       } catch {
         // Ignore — some implementations can throw on closing twice.
       }
+      this.scheduleReconnect(capture);
     });
 
     socket.addEventListener("close", (event) => {
-      if (capture.closed) {
+      if (capture.closed || capture.socket !== socket) {
         return;
       }
       this.logger.warn(
@@ -203,6 +233,43 @@ export class ChatService {
       );
       this.scheduleReconnect(capture);
     });
+  }
+
+  /**
+   * Detects connections that died without emitting close/error: no traffic
+   * for too long (Twitch pings every ~5 min) or a JOIN that was silently
+   * dropped. Either way the capture would otherwise run forever recording
+   * nothing — this was a common cause of "chat was not recorded".
+   */
+  private startWatchdog(capture: ActiveCapture) {
+    capture.watchdogTimer = setInterval(() => {
+      if (capture.closed) return;
+      // A reconnect is already pending; nothing to watch.
+      if (capture.reconnectTimer) return;
+
+      const now = Date.now();
+      const stuckWithoutJoin =
+        !capture.joined && capture.connectedAt > 0 && now - capture.connectedAt > JOIN_TIMEOUT_MS;
+      const silent = now - capture.lastActivityAt > ACTIVITY_TIMEOUT_MS;
+
+      if (!stuckWithoutJoin && !silent) {
+        return;
+      }
+
+      this.logger.warn(
+        `[chat:${capture.channelLogin}] watchdog: ${
+          silent ? "no traffic" : "JOIN not confirmed"
+        } — forcing reconnect.`,
+      );
+
+      const staleSocket = capture.socket;
+      try {
+        staleSocket?.close();
+      } catch {
+        // Ignore.
+      }
+      this.scheduleReconnect(capture);
+    }, WATCHDOG_INTERVAL_MS);
   }
 
   private scheduleReconnect(capture: ActiveCapture) {

@@ -10,7 +10,12 @@ let cachedStreamlinkCommandPromise: Promise<StreamlinkCommand> | null = null;
 
 export function resolveStreamlinkCommand() {
   if (!cachedStreamlinkCommandPromise) {
-    cachedStreamlinkCommandPromise = detectStreamlinkCommand();
+    // Cache only successful detection. A rejected probe must not be cached
+    // forever — streamlink may be installed while the API is running.
+    cachedStreamlinkCommandPromise = detectStreamlinkCommand().catch((error) => {
+      cachedStreamlinkCommandPromise = null;
+      throw error;
+    });
   }
 
   return cachedStreamlinkCommandPromise;
