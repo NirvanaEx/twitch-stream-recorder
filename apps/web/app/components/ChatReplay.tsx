@@ -34,6 +34,8 @@ type ChatResponse = {
 
 type ChatReplayProps = {
   archiveId?: string;
+  /** Override the API path used to load chat (e.g. the public endpoint). */
+  chatUrl?: string;
   staticData?: ChatResponse;
   videoElement: HTMLVideoElement | null;
   isLive: boolean;
@@ -44,6 +46,7 @@ const MAX_VISIBLE = 200;
 
 export function ChatReplay({
   archiveId,
+  chatUrl,
   staticData,
   videoElement,
   isLive,
@@ -65,16 +68,18 @@ export function ChatReplay({
     }
   }, [staticData]);
 
+  const endpoint = chatUrl ?? (archiveId ? `archives/${archiveId}/chat` : null);
+
   // Load chat data once for online archives.
   useEffect(() => {
-    if (!archiveId || staticData) return undefined;
+    if (!endpoint || staticData) return undefined;
 
     let cancelled = false;
 
     async function load() {
       setLoading(true);
       try {
-        const response = await apiGet<ChatResponse>(`archives/${archiveId}/chat`);
+        const response = await apiGet<ChatResponse>(endpoint!);
         if (!cancelled) {
           setData(response);
         }
@@ -94,20 +99,20 @@ export function ChatReplay({
     return () => {
       cancelled = true;
     };
-  }, [archiveId, staticData]);
+  }, [endpoint, staticData]);
 
   // Re-fetch every 10s if still recording, to pick up new messages.
   useEffect(() => {
-    if (!isLive || !archiveId || staticData) return undefined;
+    if (!isLive || !endpoint || staticData) return undefined;
 
     const timer = window.setInterval(() => {
-      void apiGet<ChatResponse>(`archives/${archiveId}/chat`)
+      void apiGet<ChatResponse>(endpoint)
         .then((response) => setData(response))
         .catch(() => undefined);
     }, 10_000);
 
     return () => window.clearInterval(timer);
-  }, [archiveId, isLive, staticData]);
+  }, [endpoint, isLive, staticData]);
 
   // Track video time.
   useEffect(() => {

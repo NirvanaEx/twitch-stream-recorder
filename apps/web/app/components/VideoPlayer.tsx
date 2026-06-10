@@ -83,6 +83,7 @@ export function VideoPlayer({
   const [scrubPreview, setScrubPreview] = useState<{ time: number; left: number } | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [centerHint, setCenterHint] = useState<"play" | "pause" | null>(null);
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Bubble video element up so external code (chat replay, etc.) can listen
   // to it. We send the element on mount and null on unmount.
@@ -109,13 +110,23 @@ export function VideoPlayer({
       }
     };
     const onWaiting = () => setWaiting(true);
-    const onPlaying = () => setWaiting(false);
+    const onPlaying = () => {
+      setWaiting(false);
+      setMediaError(null);
+    };
     const onVolume = () => {
       setVolume(v.volume);
       setMuted(v.muted);
     };
     const onRate = () => setPlaybackRate(v.playbackRate);
+    const onError = () => {
+      setWaiting(false);
+      setMediaError(describeMediaError(v.error));
+    };
 
+    setMediaError(null);
+
+    v.addEventListener("error", onError);
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("timeupdate", onTime);
@@ -134,6 +145,7 @@ export function VideoPlayer({
     onRate();
 
     return () => {
+      v.removeEventListener("error", onError);
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("timeupdate", onTime);
@@ -173,6 +185,24 @@ export function VideoPlayer({
   }, [volume, muted]);
 
   // ---- Player actions ---------------------------------------------------
+
+  // Reload the media after a playback error, resuming from where it broke.
+  const retryPlayback = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const resumeAt = v.currentTime;
+    setMediaError(null);
+    setWaiting(true);
+    v.load();
+    const onLoaded = () => {
+      v.removeEventListener("loadedmetadata", onLoaded);
+      if (Number.isFinite(resumeAt) && resumeAt > 0) {
+        v.currentTime = resumeAt;
+      }
+      void v.play().catch(() => undefined);
+    };
+    v.addEventListener("loadedmetadata", onLoaded);
+  }, []);
 
   const flashCenterHint = useCallback((kind: "play" | "pause") => {
     setCenterHint(kind);
@@ -434,7 +464,7 @@ export function VideoPlayer({
     return Math.max(0, Math.min(1, pct));
   };
 
-  const onProgressMove = (event: React.MouseEvent) => {
+  const onProgressMove = (event: React.PointerEvent) => {
     if (!duration) return;
     const pct = computePctFromEvent(event.clientX);
     setScrubPreview({ time: pct * duration, left: pct * 100 });
@@ -442,21 +472,28 @@ export function VideoPlayer({
 
   const onProgressLeave = () => setScrubPreview(null);
 
-  const onProgressDown = (event: React.MouseEvent) => {
+  // Pointer events instead of mouse events so scrubbing also works on
+  // touch screens (mouse-only handlers made mobile seeking impossible).
+  const onProgressDown = (event: React.PointerEvent) => {
     if (!duration) return;
+    event.preventDefault();
     const pct = computePctFromEvent(event.clientX);
     seekTo(pct * duration);
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const m = computePctFromEvent(e.clientX);
       seekTo(m * duration);
+      setScrubPreview({ time: m * duration, left: m * 100 });
     };
     const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      setScrubPreview(null);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
@@ -533,7 +570,16 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {waiting && src ? (
+      {mediaError && src ? (
+        <div className="vp__error" role="alert">
+          <div className="vp__error-text">{mediaError}</div>
+          <button type="button" className="vp__error-retry" onClick={retryPlayback}>
+            Повторить
+          </button>
+        </div>
+      ) : null}
+
+      {waiting && !mediaError && src ? (
         <div className="vp__buffering" aria-hidden>
           <SpinnerIcon size={36} />
         </div>
@@ -545,7 +591,7 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {!isPlaying && currentTime === 0 && src ? (
+      {!isPlaying && currentTime === 0 && src && !mediaError ? (
         <button type="button" className="vp__big-play" onClick={togglePlay} aria-label="Play">
           <PlayIcon size={44} />
         </button>
@@ -556,9 +602,9 @@ export function VideoPlayer({
           <div
             ref={progressRef}
             className="vp__progress"
-            onMouseMove={onProgressMove}
-            onMouseLeave={onProgressLeave}
-            onMouseDown={onProgressDown}
+            onPointerMove={onProgressMove}
+            onPointerLeave={onProgressLeave}
+            onPointerDown={onProgressDown}
           >
             <div className="vp__progress-track" />
             <div className="vp__progress-buffered" style={{ width: `${bufferedPct}%` }} />
@@ -708,6 +754,21 @@ export function VideoPlayer({
       ) : null}
     </div>
   );
+}
+
+function describeMediaError(error: MediaError | null) {
+  switch (error?.code) {
+    case MediaError.MEDIA_ERR_NETWORK:
+      return "Ошибка сети при загрузке видео. Проверьте подключение и попробуйте снова.";
+    case MediaError.MEDIA_ERR_DECODE:
+      return "Не удалось декодировать видео — файл может быть повреждён.";
+    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+      return "Видео недоступно: файл не найден или формат не поддерживается браузером.";
+    case MediaError.MEDIA_ERR_ABORTED:
+      return "Загрузка видео была прервана.";
+    default:
+      return "Не удалось воспроизвести видео.";
+  }
 }
 
 function formatTime(seconds: number) {

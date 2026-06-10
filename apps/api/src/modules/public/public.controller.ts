@@ -133,6 +133,43 @@ export class PublicStreamsController {
     };
   }
 
+  @Get(":id/chat")
+  async getChat(@Param("id") id: string) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { id: true, videoStatus: true, playbackPath: true },
+    });
+
+    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+      throw new NotFoundException("Запись не найдена.");
+    }
+
+    const [messages, snapshot] = await Promise.all([
+      this.prisma.chatMessage.findMany({
+        where: { streamSessionId: id },
+        orderBy: { relativeTimeSec: "asc" },
+        take: 50000,
+      }),
+      this.prisma.emoteSnapshot.findUnique({
+        where: { streamSessionId: id },
+      }),
+    ]);
+
+    return {
+      messages: messages.map((message) => ({
+        id: message.id,
+        authorLogin: message.authorLogin,
+        authorDisplayName: message.authorDisplayName,
+        authorColor: message.authorColor,
+        textRaw: message.textRaw,
+        relativeTimeSec: message.relativeTimeSec,
+        messageTimestamp: message.messageTimestamp.toISOString(),
+        isDeleted: message.isDeleted,
+      })),
+      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+    };
+  }
+
   @Get(":id/video")
   async streamVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
@@ -146,6 +183,15 @@ export class PublicStreamsController {
 
     const { absolutePath, stat } = await this.recordingService.getPlayableFile(id);
     const range = req.headers.range as string | undefined;
+
+    if (req.query?.download === "1") {
+      const full = await this.prisma.streamSession.findUnique({
+        where: { id },
+        include: { channel: true },
+      });
+      const safeName = (full?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${id}.mp4"`);
+    }
 
     if (range) {
       const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
