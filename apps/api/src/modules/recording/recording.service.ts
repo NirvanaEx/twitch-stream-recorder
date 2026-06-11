@@ -6,7 +6,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { Channel, StreamSession } from "@prisma/client";
+import { Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -17,6 +17,7 @@ import { ChatService } from "../chat/chat.service";
 import { SevenTvService } from "../chat/seventv.service";
 import { resolveSessionPlaybackState } from "./playback.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
+import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 
 type ActiveRecording = {
   channelId: string;
@@ -55,6 +56,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly chatService: ChatService,
     private readonly sevenTvService: SevenTvService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   async onModuleInit() {
@@ -450,6 +452,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       },
       include: {
         channel: true,
+        telegramParts: {
+          orderBy: { partIndex: "asc" },
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -467,6 +472,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       include: {
         channel: true,
+        telegramParts: {
+          orderBy: { partIndex: "asc" },
+        },
       },
     });
 
@@ -564,6 +572,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       include: {
         channel: true,
+        telegramParts: {
+          orderBy: { partIndex: "asc" },
+        },
       },
     });
 
@@ -668,6 +679,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         sessionId: session.id,
         status,
       });
+
+      if (finalStatus === "completed") {
+        // Let the Telegram offloader pick up the finished recording right away
+        // instead of waiting for its next periodic scan.
+        this.telegramService.kick();
+      }
 
       try {
         await this.syncChannelState(channel.id);
@@ -887,8 +904,27 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private serializeSession(session: StreamSession, channel: Pick<Channel, "displayName" | "twitchLogin">) {
+  private serializeSession(
+    session: StreamSession & { telegramParts?: TelegramUploadPart[] },
+    channel: Pick<Channel, "displayName" | "twitchLogin">,
+  ) {
     const playback = resolveSessionPlaybackState(session);
+
+    const telegramParts = (session.telegramParts ?? []).map((part) => ({
+      partIndex: part.partIndex,
+      partCount: part.partCount,
+      url: buildTelegramMessageUrl(part.chatId, part.messageId),
+      streamUrl: `/api/archives/${session.id}/video?part=${part.partIndex}`,
+      startOffsetSec: part.startOffsetSec,
+      durationSec: part.durationSec,
+    }));
+
+    // A recording whose local file is gone is still watchable when its parts
+    // live in Telegram: the video endpoint streams them back via MTProto.
+    const telegramPlayable =
+      !playback.videoReady &&
+      session.telegramStatus === "uploaded" &&
+      telegramParts.length > 0;
 
     return {
       id: session.id,
@@ -905,13 +941,20 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       startedAt: session.startedAt,
       endedAt: session.endedAt,
       fileSizeBytes: playback.fileSizeBytes,
-      videoReady: playback.videoReady,
+      videoReady: playback.videoReady || telegramPlayable,
+      videoSource: playback.videoReady ? "local" : telegramPlayable ? "telegram" : null,
       chatAvailable: session.chatAvailable,
       stoppedByUser: session.stoppedByUser,
       recordingSource: session.recordingSource,
       errorMessage: session.errorMessage,
       previewImageUrl: session.previewImageUrl,
-      videoUrl: playback.videoUrl,
+      videoUrl:
+        playback.videoUrl ?? (telegramPlayable ? telegramParts[0].streamUrl : null),
+      telegramStatus: session.telegramStatus,
+      telegramError: session.telegramError,
+      telegramUploadedAt: session.telegramUploadedAt,
+      localFileDeletedAt: session.localFileDeletedAt,
+      telegramParts,
       createdAt: session.createdAt,
     };
   }

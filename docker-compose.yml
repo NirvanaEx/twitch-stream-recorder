@@ -46,6 +46,11 @@ services:
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
       TWITCH_EVENTSUB_SECRET: ${TWITCH_EVENTSUB_SECRET}
+      # Optional .env fallback for the Telegram storage credentials; they are
+      # normally configured from the admin panel (Settings -> Telegram).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       DATA_DIR: /data
     depends_on:
       - postgres

@@ -50,9 +50,37 @@ model StreamSession {
   chatPath           String?
   stoppedByUser      Boolean   @default(false)
   savedChatOffsetSec Int?
+  // Telegram offload: none | pending | uploading | uploaded | error
+  telegramStatus     String    @default("none")
+  telegramUploadedAt DateTime?
+  telegramError      String?
+  // Set when the local video file was removed after a successful Telegram upload.
+  localFileDeletedAt DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  telegramParts      TelegramUploadPart[]
+}
+
+model TelegramUploadPart {
+  id              String   @id @default(cuid())
+  streamSessionId String
+  partIndex       Int
+  partCount       Int
+  // chatId is captured at upload time so message links stay valid even if the
+  // configured channel changes later.
+  chatId          String
+  messageId       String
+  fileId          String?
+  fileSizeBytes   String?
+  // Position of this part on the whole-stream timeline; used to keep chat
+  // replay in sync when the player switches between parts.
+  startOffsetSec  Int      @default(0)
+  durationSec     Int?
+  createdAt       DateTime @default(now())
+  session         StreamSession @relation(fields: [streamSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([streamSessionId, partIndex])
 }
 
 model ChatMessage {
@@ -90,6 +118,17 @@ model AppSettings {
   keepDeletedMessages   Boolean  @default(true)
   support7tv            Boolean  @default(true)
   defaultChatOffsetSec  Int      @default(0)
+  telegramEnabled       Boolean  @default(false)
+  // Target chat: "-100..." channel id or "@channelusername".
+  telegramChatId        String   @default("")
+  // How long the local file is kept after a successful Telegram upload.
+  telegramKeepLocalDays Int      @default(7)
+  // MTProto credentials, editable from the admin panel. When empty, the
+  // TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_BOT_TOKEN env vars are
+  // used as a fallback.
+  telegramApiId         String   @default("")
+  telegramApiHash       String   @default("")
+  telegramBotToken      String   @default("")
   updatedAt             DateTime @updatedAt
 }
 

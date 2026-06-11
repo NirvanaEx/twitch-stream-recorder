@@ -1,8 +1,9 @@
 import { Controller, Delete, Get, Param, Req, Res } from "@nestjs/common";
-import { createReadStream } from "node:fs";
+import { createReadStream, type Stats } from "node:fs";
 import { RequirePermissions } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
 import { RecordingService } from "../recording/recording.service";
+import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
 @RequirePermissions("view_archives")
 @Controller("archives")
@@ -10,6 +11,7 @@ export class ArchivesController {
   constructor(
     private readonly recordingService: RecordingService,
     private readonly prisma: PrismaService,
+    private readonly telegramStreamService: TelegramStreamService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -120,7 +122,33 @@ export class ArchivesController {
 
   @Get(":id/video")
   async streamArchiveVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
-    const { absolutePath, stat } = await this.recordingService.getPlayableFile(id);
+    let local: { absolutePath: string; stat: Stats } | null = null;
+
+    try {
+      local = await this.recordingService.getPlayableFile(id);
+    } catch {
+      // The local file is gone — fall back to the Telegram copy below.
+      local = null;
+    }
+
+    if (!local) {
+      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
+      let downloadName: string | null = null;
+
+      if (req.query?.download === "1") {
+        const session = await this.prisma.streamSession.findUnique({
+          where: { id },
+          include: { channel: true },
+        });
+        const safeName = (session?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
+        downloadName = `${safeName}-${id}-part${partIndex}.mp4`;
+      }
+
+      await this.telegramStreamService.streamToResponse(id, partIndex, req, res, downloadName);
+      return;
+    }
+
+    const { absolutePath, stat } = local;
     const range = req.headers.range as string | undefined;
 
     if (req.query?.download === "1") {

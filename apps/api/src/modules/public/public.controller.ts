@@ -7,12 +7,22 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
-import { createReadStream } from "node:fs";
-import { Prisma } from "@prisma/client";
+import { createReadStream, type Stats } from "node:fs";
+import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
 import { resolveSessionPlaybackState } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
+import { TelegramStreamService } from "../telegram/telegram-stream.service";
+
+// A session whose local file is gone is still watchable when its parts were
+// uploaded to Telegram; the public video endpoint streams them back.
+function isTelegramPlayable(
+  session: StreamSession & { telegramParts: TelegramUploadPart[] },
+  locallyReady: boolean,
+) {
+  return !locallyReady && session.telegramStatus === "uploaded" && session.telegramParts.length > 0;
+}
 
 const DEFAULT_PAGE_SIZE = 12;
 const MAX_PAGE_SIZE = 48;
@@ -23,6 +33,7 @@ export class PublicStreamsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly recordingService: RecordingService,
+    private readonly telegramStreamService: TelegramStreamService,
   ) {}
 
   @Get()
@@ -58,7 +69,10 @@ export class PublicStreamsController {
       this.prisma.streamSession.count({ where }),
       this.prisma.streamSession.findMany({
         where,
-        include: { channel: true },
+        include: {
+          channel: true,
+          telegramParts: { orderBy: { partIndex: "asc" } },
+        },
         orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -68,7 +82,7 @@ export class PublicStreamsController {
     const items = sessions
       .map((session) => {
         const playback = resolveSessionPlaybackState(session);
-        if (!playback.videoReady) {
+        if (!playback.videoReady && !isTelegramPlayable(session, playback.videoReady)) {
           return null;
         }
 
@@ -101,7 +115,10 @@ export class PublicStreamsController {
   async get(@Param("id") id: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      include: { channel: true },
+      include: {
+        channel: true,
+        telegramParts: { orderBy: { partIndex: "asc" } },
+      },
     });
 
     if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
@@ -109,7 +126,9 @@ export class PublicStreamsController {
     }
 
     const playback = resolveSessionPlaybackState(session);
-    if (!playback.videoReady) {
+    const telegramPlayable = isTelegramPlayable(session, playback.videoReady);
+
+    if (!playback.videoReady && !telegramPlayable) {
       throw new NotFoundException("Видео ещё не готово.");
     }
 
@@ -129,6 +148,16 @@ export class PublicStreamsController {
         fileSizeBytes: playback.fileSizeBytes,
         // Public clients hit the public video endpoint — never the admin one.
         videoUrl: `/api/public/streams/${session.id}/video`,
+        videoSource: playback.videoReady ? "local" : "telegram",
+        telegramParts: telegramPlayable
+          ? session.telegramParts.map((part) => ({
+              partIndex: part.partIndex,
+              partCount: part.partCount,
+              streamUrl: `/api/public/streams/${session.id}/video?part=${part.partIndex}`,
+              startOffsetSec: part.startOffsetSec,
+              durationSec: part.durationSec,
+            }))
+          : [],
       },
     };
   }
@@ -181,7 +210,33 @@ export class PublicStreamsController {
       throw new NotFoundException("Запись не найдена.");
     }
 
-    const { absolutePath, stat } = await this.recordingService.getPlayableFile(id);
+    let local: { absolutePath: string; stat: Stats } | null = null;
+
+    try {
+      local = await this.recordingService.getPlayableFile(id);
+    } catch {
+      // The local file is gone — fall back to the Telegram copy below.
+      local = null;
+    }
+
+    if (!local) {
+      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
+      let downloadName: string | null = null;
+
+      if (req.query?.download === "1") {
+        const full = await this.prisma.streamSession.findUnique({
+          where: { id },
+          include: { channel: true },
+        });
+        const safeName = (full?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
+        downloadName = `${safeName}-${id}-part${partIndex}.mp4`;
+      }
+
+      await this.telegramStreamService.streamToResponse(id, partIndex, req, res, downloadName);
+      return;
+    }
+
+    const { absolutePath, stat } = local;
     const range = req.headers.range as string | undefined;
 
     if (req.query?.download === "1") {

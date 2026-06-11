@@ -11,18 +11,56 @@ type SettingsResponse = {
   keepDeletedMessages: boolean;
   support7tv: boolean;
   defaultChatOffsetSec: number;
+  telegramEnabled: boolean;
+  telegramChatId: string;
+  telegramKeepLocalDays: number;
+  telegramApiIdSet: boolean;
+  telegramApiHashSet: boolean;
+  telegramBotTokenSet: boolean;
+};
+
+// Secrets are write-only: the API never returns them, the form sends them
+// only when the user typed a new value (empty string = keep stored).
+type SettingsForm = SettingsResponse & {
+  telegramApiId: string;
+  telegramApiHash: string;
+  telegramBotToken: string;
+};
+
+const EMPTY_SECRETS = {
+  telegramApiId: "",
+  telegramApiHash: "",
+  telegramBotToken: "",
+};
+
+type TelegramStatusResponse = {
+  enabled: boolean;
+  chatId: string;
+  keepLocalDays: number;
+  tokenConfigured: boolean;
+  botUsername: string | null;
+  chatTitle: string | null;
+  error: string | null;
 };
 
 export default function SettingsPage() {
   const { t } = useLanguage();
-  const [form, setForm] = useState<SettingsResponse>({
+  const [form, setForm] = useState<SettingsForm>({
     retentionDays: 30,
     storageLimitGb: 80,
     recordChat: true,
     keepDeletedMessages: true,
     support7tv: true,
     defaultChatOffsetSec: 0,
+    telegramEnabled: false,
+    telegramChatId: "",
+    telegramKeepLocalDays: 7,
+    telegramApiIdSet: false,
+    telegramApiHashSet: false,
+    telegramBotTokenSet: false,
+    ...EMPTY_SECRETS,
   });
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -33,13 +71,20 @@ export default function SettingsPage() {
       try {
         const response = await apiGet<SettingsResponse>("settings");
         if (!cancelled) {
-          setForm(response);
+          setForm({ ...response, ...EMPTY_SECRETS });
           setError(null);
         }
       } catch {
         if (!cancelled) setError(t.errors.apiUnavailable);
       } finally {
         if (!cancelled) setLoading(false);
+      }
+
+      try {
+        const status = await apiGet<TelegramStatusResponse>("telegram/status");
+        if (!cancelled) setTelegramStatus(status);
+      } catch {
+        // The connection probe is informational only; ignore failures.
       }
     }
     void load();
@@ -52,13 +97,40 @@ export default function SettingsPage() {
     event.preventDefault();
     try {
       const response = await apiSend<SettingsResponse>("settings", "PUT", form);
-      setForm(response);
+      setForm({ ...response, ...EMPTY_SECRETS });
       setSaved(true);
       setError(null);
       window.setTimeout(() => setSaved(false), 2000);
+
+      try {
+        setTelegramStatus(await apiGet<TelegramStatusResponse>("telegram/status"));
+      } catch {
+        // Informational probe only.
+      }
     } catch {
       setError(t.errors.requestFailed);
     }
+  }
+
+  function renderTelegramConnection() {
+    if (!telegramStatus) return null;
+
+    if (!telegramStatus.tokenConfigured) {
+      return <p className="page-copy">{t.settings.telegramTokenMissing}</p>;
+    }
+
+    return (
+      <p className="page-copy">
+        {t.settings.telegramConnection}:{" "}
+        {telegramStatus.botUsername
+          ? `${t.settings.telegramBot} @${telegramStatus.botUsername}`
+          : "—"}
+        {telegramStatus.chatTitle
+          ? ` → ${t.settings.telegramChat} «${telegramStatus.chatTitle}»`
+          : ""}
+        {telegramStatus.error ? ` (${telegramStatus.error})` : ""}
+      </p>
+    );
   }
 
   return (
@@ -162,6 +234,108 @@ export default function SettingsPage() {
                     />
                     <span className="slider" />
                   </span>
+                </label>
+              </div>
+
+              <div>
+                <h3 className="page-title" style={{ fontSize: 16, marginBottom: 8 }}>
+                  {t.settings.telegramTitle}
+                </h3>
+
+                {renderTelegramConnection()}
+
+                <label className="toggle-row">
+                  <div className="toggle-copy">
+                    <strong>{t.settings.telegramEnabled}</strong>
+                  </div>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={form.telegramEnabled}
+                      onChange={(event) =>
+                        setForm((c) => ({ ...c, telegramEnabled: event.target.checked }))
+                      }
+                    />
+                    <span className="slider" />
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.telegramApiId}</span>
+                  <input
+                    className="input"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder={form.telegramApiIdSet ? t.settings.telegramSecretSet : "12345678"}
+                    value={form.telegramApiId}
+                    onChange={(event) =>
+                      setForm((c) => ({ ...c, telegramApiId: event.target.value.trim() }))
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.telegramApiHash}</span>
+                  <input
+                    className="input"
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={form.telegramApiHashSet ? t.settings.telegramSecretSet : ""}
+                    value={form.telegramApiHash}
+                    onChange={(event) =>
+                      setForm((c) => ({ ...c, telegramApiHash: event.target.value.trim() }))
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.telegramBotToken}</span>
+                  <input
+                    className="input"
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={form.telegramBotTokenSet ? t.settings.telegramSecretSet : ""}
+                    value={form.telegramBotToken}
+                    onChange={(event) =>
+                      setForm((c) => ({ ...c, telegramBotToken: event.target.value.trim() }))
+                    }
+                  />
+                  <span className="page-copy" style={{ fontSize: 12 }}>
+                    {t.settings.telegramSecretsHint}
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.telegramChatId}</span>
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="-1001234567890"
+                    value={form.telegramChatId}
+                    onChange={(event) =>
+                      setForm((c) => ({ ...c, telegramChatId: event.target.value.trim() }))
+                    }
+                  />
+                  <span className="page-copy" style={{ fontSize: 12 }}>
+                    {t.settings.telegramChatIdHint}
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.telegramKeepLocalDays}</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    value={form.telegramKeepLocalDays}
+                    onChange={(event) =>
+                      setForm((c) => ({
+                        ...c,
+                        telegramKeepLocalDays: Number(event.target.value),
+                      }))
+                    }
+                  />
                 </label>
               </div>
 

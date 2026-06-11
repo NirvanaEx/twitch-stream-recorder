@@ -10,6 +10,14 @@ import { ChatReplay } from "../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
 import { DownloadIcon } from "../../components/icons";
 
+type PublicTelegramPart = {
+  partIndex: number;
+  partCount: number;
+  streamUrl: string;
+  startOffsetSec: number;
+  durationSec: number | null;
+};
+
 type PublicStreamDetail = {
   id: string;
   title: string | null;
@@ -24,6 +32,8 @@ type PublicStreamDetail = {
   endedAt: string | null;
   fileSizeBytes: string | null;
   videoUrl: string;
+  videoSource: "local" | "telegram";
+  telegramParts: PublicTelegramPart[];
 };
 
 // Shared with the admin replay page: chat is ON by default, the in-player
@@ -62,6 +72,47 @@ export default function PublicWatchPage({
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [chatVisible, setChatVisible] = useState(true);
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  // 1-based index of the Telegram part being played (split recordings only).
+  const [currentPart, setCurrentPart] = useState(1);
+  const [pendingAutoplay, setPendingAutoplay] = useState(false);
+
+  const telegramParts =
+    data?.videoSource === "telegram" ? data.telegramParts ?? [] : [];
+  const activePart =
+    telegramParts.length > 0
+      ? telegramParts[Math.min(currentPart, telegramParts.length) - 1]
+      : null;
+
+  // Auto-advance to the next part when the current one finishes.
+  useEffect(() => {
+    if (!videoElement || telegramParts.length < 2) return undefined;
+
+    const onEnded = () => {
+      setCurrentPart((part) => {
+        if (part < telegramParts.length) {
+          setPendingAutoplay(true);
+          return part + 1;
+        }
+        return part;
+      });
+    };
+
+    videoElement.addEventListener("ended", onEnded);
+    return () => videoElement.removeEventListener("ended", onEnded);
+  }, [videoElement, telegramParts.length]);
+
+  // Resume playback once the next part's metadata is in.
+  useEffect(() => {
+    if (!pendingAutoplay || !videoElement) return undefined;
+
+    const onLoaded = () => {
+      setPendingAutoplay(false);
+      void videoElement.play().catch(() => undefined);
+    };
+
+    videoElement.addEventListener("loadedmetadata", onLoaded, { once: true });
+    return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
+  }, [pendingAutoplay, videoElement, currentPart]);
 
   useEffect(() => {
     setChatVisible(readStoredChatPref());
@@ -133,7 +184,9 @@ export default function PublicWatchPage({
     );
   }
 
-  const videoSrc = buildMediaUrl(data.videoUrl) || buildApiUrl(`public/streams/${id}/video`);
+  const videoSrc = activePart
+    ? buildMediaUrl(activePart.streamUrl)
+    : buildMediaUrl(data.videoUrl) || buildApiUrl(`public/streams/${id}/video`);
   const posterSrc = data.previewImageUrl ?? undefined;
   const playerTitle = data.title || data.channel.displayName;
 
@@ -200,7 +253,11 @@ export default function PublicWatchPage({
             ) : null}
             <a
               className="icon-btn"
-              href={buildApiUrl(`public/streams/${id}/video?download=1`)}
+              href={buildApiUrl(
+                activePart
+                  ? `public/streams/${id}/video?part=${activePart.partIndex}&download=1`
+                  : `public/streams/${id}/video?download=1`,
+              )}
               title={t.localReplay.downloadVideo}
               download
             >
@@ -208,6 +265,25 @@ export default function PublicWatchPage({
             </a>
           </div>
         </header>
+
+        {telegramParts.length > 1 ? (
+          <div className="action-row" style={{ margin: "8px 0", flexWrap: "wrap" }}>
+            {telegramParts.map((part) => (
+              <button
+                key={part.partIndex}
+                type="button"
+                className={`btn ${part.partIndex === currentPart ? "primary" : ""}`}
+                onClick={() => {
+                  if (part.partIndex === currentPart) return;
+                  setPendingAutoplay(true);
+                  setCurrentPart(part.partIndex);
+                }}
+              >
+                {t.archives.telegramPart} {part.partIndex}/{part.partCount}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="replay-stage__player">
           <VideoPlayer
@@ -229,6 +305,7 @@ export default function PublicWatchPage({
               chatUrl={`public/streams/${id}/chat`}
               videoElement={videoElement}
               isLive={false}
+              baseOffsetSec={activePart?.startOffsetSec ?? 0}
             />
           </aside>
         ) : null}
