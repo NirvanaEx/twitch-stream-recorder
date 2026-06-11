@@ -11,9 +11,13 @@ import {
   FolderOpenIcon,
   HardDriveIcon,
   HomeIcon,
+  RecordIcon,
+  SendIcon,
   SettingsIcon,
+  ShieldIcon,
+  TvIcon,
+  UserIcon,
   UsersIcon,
-  VideoIcon,
 } from "./icons";
 
 type DiskUsage = {
@@ -73,31 +77,55 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Each nav item is gated by a permission key. Superadmin sees everything;
-  // regular users only see what their role allows.
-  const navItems: Array<{
+  // regular users only see what their role allows. Items are grouped into
+  // titled sections; a section disappears when none of its items are visible.
+  type NavItem = {
     href: string;
     label: string;
     Icon: typeof HomeIcon;
     permission: string | null;
-  }> = [
-    { href: "/admin", label: t.common.dashboard, Icon: HomeIcon, permission: "view_archives" },
-    { href: "/admin/channels", label: t.common.channels, Icon: UsersIcon, permission: "manage_channels" },
-    { href: "/admin/recording", label: t.common.recordingPage, Icon: VideoIcon, permission: "view_recording" },
-    { href: "/admin/local-replay", label: t.localReplay.navLabel, Icon: FolderOpenIcon, permission: null },
-    { href: "/admin/archives", label: t.common.archives, Icon: ArchiveIcon, permission: "view_archives" },
-    { href: "/admin/users", label: t.admin.sectionUsers, Icon: UsersIcon, permission: "manage_users" },
-    { href: "/admin/access", label: t.admin.sectionAccess, Icon: SettingsIcon, permission: "manage_roles" },
-    { href: "/admin/settings", label: t.common.settings, Icon: SettingsIcon, permission: "manage_settings" },
-    { href: "/admin/account", label: t.admin.sectionAccount, Icon: UsersIcon, permission: null },
+  };
+
+  const navGroups: Array<{ title: string; items: NavItem[] }> = [
+    {
+      title: t.nav.groupRecords,
+      items: [
+        { href: "/admin", label: t.common.dashboard, Icon: HomeIcon, permission: "view_archives" },
+        { href: "/admin/channels", label: t.common.channels, Icon: TvIcon, permission: "manage_channels" },
+        { href: "/admin/recording", label: t.nav.recordingNow, Icon: RecordIcon, permission: "view_recording" },
+        { href: "/admin/archives", label: t.nav.archive, Icon: ArchiveIcon, permission: "view_archives" },
+      ],
+    },
+    {
+      title: t.nav.groupStorage,
+      items: [
+        { href: "/admin/storage", label: t.nav.telegramStorage, Icon: SendIcon, permission: "view_archives" },
+        { href: "/admin/local-replay", label: t.localReplay.navLabel, Icon: FolderOpenIcon, permission: null },
+      ],
+    },
+    {
+      title: t.nav.groupAdmin,
+      items: [
+        { href: "/admin/users", label: t.admin.sectionUsers, Icon: UsersIcon, permission: "manage_users" },
+        { href: "/admin/access", label: t.admin.sectionAccess, Icon: ShieldIcon, permission: "manage_roles" },
+        { href: "/admin/settings", label: t.common.settings, Icon: SettingsIcon, permission: "manage_settings" },
+        { href: "/admin/account", label: t.admin.sectionAccount, Icon: UserIcon, permission: null },
+      ],
+    },
   ];
 
-  const visibleNav = useMemo(
+  const visibleGroups = useMemo(
     () =>
-      navItems.filter(
-        (item) => item.permission === null || hasPermission(item.permission),
-      ),
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter(
+            (item) => item.permission === null || hasPermission(item.permission),
+          ),
+        }))
+        .filter((group) => group.items.length > 0),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user?.id, user?.isSuperadmin, user?.role?.permissions?.join("|")],
+    [user?.id, user?.isSuperadmin, user?.role?.permissions?.join("|"), locale],
   );
 
   const usagePercent = disk
@@ -116,24 +144,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="nav-list">
-          {visibleNav.map(({ href, label, Icon }) => {
-            // /admin should match exactly; deeper paths use prefix match so the
-            // active state stays consistent (e.g. /admin/archives/[id]).
-            const isActive =
-              href === "/admin"
-                ? pathname === "/admin"
-                : pathname === href || pathname?.startsWith(`${href}/`);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={isActive ? "nav-link active" : "nav-link"}
-              >
-                <Icon size={15} />
-                <span>{label}</span>
-              </Link>
-            );
-          })}
+          {visibleGroups.map((group) => (
+            <div key={group.title} className="nav-group">
+              <div className="nav-group-title">{group.title}</div>
+              {group.items.map(({ href, label, Icon }) => {
+                // /admin should match exactly; deeper paths use prefix match so the
+                // active state stays consistent (e.g. /admin/archives/[id]).
+                const isActive =
+                  href === "/admin"
+                    ? pathname === "/admin"
+                    : pathname === href || pathname?.startsWith(`${href}/`);
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={isActive ? "nav-link active" : "nav-link"}
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="sidebar-footer">

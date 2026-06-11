@@ -93,6 +93,59 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return this.uploadProgress.get(sessionId) ?? null;
   }
 
+  /** Aggregated view of the Telegram storage for the admin "Storage" page. */
+  async getStorageOverview() {
+    const [settings, configured, uploadedCount, parts, freedSessions, awaitingCleanupCount, queueSessions] =
+      await Promise.all([
+        this.getSettings(),
+        this.telegramClientService.isConfigured(),
+        this.prisma.streamSession.count({ where: { telegramStatus: "uploaded" } }),
+        this.prisma.telegramUploadPart.findMany({ select: { fileSizeBytes: true } }),
+        this.prisma.streamSession.findMany({
+          where: { localFileDeletedAt: { not: null } },
+          select: { fileSizeBytes: true },
+        }),
+        this.prisma.streamSession.count({
+          where: { telegramStatus: "uploaded", localFileDeletedAt: null },
+        }),
+        this.prisma.streamSession.findMany({
+          where: { telegramStatus: { in: ["pending", "uploading", "error"] } },
+          include: { channel: true },
+          orderBy: { createdAt: "asc" },
+          take: 50,
+        }),
+      ]);
+
+    const sumBytes = (rows: { fileSizeBytes: string | null }[]) =>
+      rows.reduce((acc, row) => acc + (Number(row.fileSizeBytes) || 0), 0);
+
+    return {
+      enabled: settings.telegramEnabled,
+      configured,
+      chatId: settings.telegramChatId,
+      keepLocalDays: settings.telegramKeepLocalDays,
+      uploadedCount,
+      telegramBytes: String(sumBytes(parts)),
+      freedBytes: String(sumBytes(freedSessions)),
+      // Uploaded to Telegram but the local copy is still kept (within N days).
+      awaitingCleanupCount,
+      queue: queueSessions.map((session) => ({
+        id: session.id,
+        channelLogin: session.channel.twitchLogin,
+        channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
+        title: session.title,
+        telegramStatus: session.telegramStatus,
+        telegramProgress:
+          session.telegramStatus === "uploading"
+            ? this.getUploadProgress(session.id)
+            : null,
+        telegramError: session.telegramError,
+        fileSizeBytes: session.fileSizeBytes,
+        startedAt: session.startedAt,
+      })),
+    };
+  }
+
   async getStatus() {
     const settings = await this.getSettings();
     const configured = await this.telegramClientService.isConfigured();

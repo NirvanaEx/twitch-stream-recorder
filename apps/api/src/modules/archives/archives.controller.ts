@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, Req, Res } from "@nestjs/common";
+import { Controller, Delete, Get, Param, Query, Req, Res } from "@nestjs/common";
 import { createReadStream, type Stats } from "node:fs";
 import { RequirePermissions } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
@@ -105,8 +105,11 @@ export class ArchivesController {
   }
 
   @Get()
-  listArchives() {
-    return this.recordingService.getArchiveList();
+  listArchives(@Query("page") rawPage?: string, @Query("pageSize") rawPageSize?: string) {
+    const page = Number.parseInt(rawPage ?? "1", 10) || 1;
+    const pageSize = Number.parseInt(rawPageSize ?? "15", 10) || 15;
+
+    return this.recordingService.getArchiveList(page, pageSize);
   }
 
   @Get(":id")
