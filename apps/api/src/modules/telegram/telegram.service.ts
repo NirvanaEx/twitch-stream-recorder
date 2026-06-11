@@ -52,6 +52,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
   private scanTimer: NodeJS.Timeout | null = null;
   private ticking = false;
+  // sessionId -> overall upload progress (0..100) across all parts.
+  private readonly uploadProgress = new Map<string, number>();
+  private readonly lastEmittedProgress = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -83,6 +86,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   /** Ask the service to re-scan for pending work soon (e.g. right after a recording finished). */
   kick() {
     void this.tick();
+  }
+
+  /** Overall upload progress for a session in percent, or null when not uploading. */
+  getUploadProgress(sessionId: string): number | null {
+    return this.uploadProgress.get(sessionId) ?? null;
   }
 
   async getStatus() {
@@ -242,6 +250,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       where: { id: session.id },
       data: { telegramStatus: "uploading", telegramError: null },
     });
+    this.uploadProgress.set(session.id, 0);
     this.emitTelegramUpdate(session.id, "uploading");
 
     // A retry should not leave parts from a previous failed attempt behind.
@@ -291,7 +300,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           )} MB)...`,
         );
 
-        const sent = await this.sendVideo(partPath, chatId, caption, meta);
+        const sent = await this.sendVideo(partPath, chatId, caption, meta, (fraction) => {
+          this.reportUploadProgress(
+            session.id,
+            Math.floor(((index + fraction) / partPaths.length) * 100),
+          );
+        });
 
         await this.prisma.telegramUploadPart.create({
           data: {
@@ -326,6 +340,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`${logPrefix} upload failed: ${message}`);
       await this.markUploadError(session.id, message);
     } finally {
+      this.uploadProgress.delete(session.id);
+      this.lastEmittedProgress.delete(session.id);
       if (tempDir) {
         try {
           rmSync(tempDir, { recursive: true, force: true });
@@ -341,6 +357,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     chatId: string,
     caption: string,
     meta: VideoMeta | null,
+    onProgress?: (fraction: number) => void,
   ): Promise<SendVideoResult> {
     const client = await this.telegramClientService.getClient();
     const entity = await this.telegramClientService.resolveChat(chatId);
@@ -349,6 +366,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       file: filePath,
       caption,
       supportsStreaming: true,
+      progressCallback: onProgress
+        ? (progress: number) => onProgress(Math.max(0, Math.min(1, progress)))
+        : undefined,
       attributes: meta
         ? [
             new Api.DocumentAttributeVideo({
@@ -568,10 +588,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private emitTelegramUpdate(sessionId: string, telegramStatus: string) {
+  private reportUploadProgress(sessionId: string, percent: number) {
+    const clamped = Math.max(0, Math.min(100, percent));
+    this.uploadProgress.set(sessionId, clamped);
+
+    // Emit at most every 2 percentage points: each event makes the admin UI
+    // re-fetch the archive list.
+    const lastEmitted = this.lastEmittedProgress.get(sessionId);
+
+    if (lastEmitted === undefined || clamped - lastEmitted >= 2 || (clamped === 100 && lastEmitted !== 100)) {
+      this.lastEmittedProgress.set(sessionId, clamped);
+      this.emitTelegramUpdate(sessionId, "uploading", clamped);
+    }
+  }
+
+  private emitTelegramUpdate(sessionId: string, telegramStatus: string, progress?: number) {
     this.realtimeGateway.server?.emit("telegram:updated", {
       sessionId,
       telegramStatus,
+      ...(progress !== undefined ? { progress } : {}),
       timestamp: new Date().toISOString(),
     });
   }

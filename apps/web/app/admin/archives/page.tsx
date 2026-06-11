@@ -28,6 +28,7 @@ type ArchiveItem = {
   videoReady: boolean;
   videoUrl: string | null;
   telegramStatus: string;
+  telegramProgress: number | null;
   telegramError: string | null;
   telegramParts: TelegramPart[];
   localFileDeletedAt: string | null;
@@ -113,7 +114,36 @@ export default function ArchivesPage() {
     }
 
     if (archive.telegramStatus === "uploading") {
-      return <span>{t.archives.telegramUploading}</span>;
+      return (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {t.archives.telegramUploading}
+          {archive.telegramProgress !== null ? (
+            <>
+              <span
+                style={{
+                  width: 48,
+                  height: 4,
+                  borderRadius: 2,
+                  background: "var(--border, #333)",
+                  overflow: "hidden",
+                  display: "inline-block",
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    height: "100%",
+                    width: `${archive.telegramProgress}%`,
+                    background: "var(--accent, #7c3aed)",
+                    transition: "width 0.5s ease",
+                  }}
+                />
+              </span>
+              <strong>{archive.telegramProgress}%</strong>
+            </>
+          ) : null}
+        </span>
+      );
     }
 
     if (archive.telegramStatus === "pending") {
