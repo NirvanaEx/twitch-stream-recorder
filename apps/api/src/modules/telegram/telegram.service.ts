@@ -6,7 +6,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { AppSettings, Channel, StreamSession } from "@prisma/client";
+import { AppSettings, Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -306,8 +306,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.uploadProgress.set(session.id, 0);
     this.emitTelegramUpdate(session.id, "uploading");
 
-    // A retry should not leave parts from a previous failed attempt behind.
-    await this.prisma.telegramUploadPart.deleteMany({
+    // Parts that made it to Telegram during a previous interrupted attempt
+    // are reused: a retry resumes from the first missing part instead of
+    // re-sending everything (ffmpeg splits the same file into identical
+    // segments, so part boundaries are stable across attempts).
+    const previousParts = await this.prisma.telegramUploadPart.findMany({
       where: { streamSessionId: session.id },
     });
 
@@ -331,11 +334,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // Leftover parts are only reusable when they belong to the same chat
+      // and the same split layout; otherwise drop them and start over.
+      const reusableParts = new Map<number, TelegramUploadPart>();
+      const previousCompatible =
+        previousParts.length > 0 &&
+        previousParts.every(
+          (part) => part.chatId === chatId && part.partCount === partPaths.length,
+        );
+
+      if (previousCompatible) {
+        for (const part of previousParts) {
+          reusableParts.set(part.partIndex, part);
+        }
+      } else if (previousParts.length > 0) {
+        await this.prisma.telegramUploadPart.deleteMany({
+          where: { streamSessionId: session.id },
+        });
+      }
+
       let startOffsetSec = 0;
 
       for (let index = 0; index < partPaths.length; index += 1) {
         const partPath = partPaths[index];
-        const caption = this.buildCaption(session, index + 1, partPaths.length);
+        const existingPart = reusableParts.get(index + 1);
 
         // Per-part duration keeps chat replay aligned when the web player
         // switches between parts; width/height make Telegram render the
@@ -346,6 +368,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         } catch {
           // Metadata is best-effort; the upload itself must not fail.
         }
+
+        const partDurationSec =
+          existingPart?.durationSec ?? (meta ? Math.round(meta.durationSec) : 0);
+
+        if (existingPart) {
+          this.logger.log(
+            `${logPrefix} part ${index + 1}/${partPaths.length} is already in Telegram, skipping.`,
+          );
+          this.reportUploadProgress(
+            session.id,
+            Math.floor(((index + 1) / partPaths.length) * 100),
+          );
+          startOffsetSec += partDurationSec;
+          continue;
+        }
+
+        const caption = this.buildCaption(session, index + 1, partPaths.length);
 
         this.logger.log(
           `${logPrefix} uploading part ${index + 1}/${partPaths.length} (${Math.round(
@@ -374,7 +413,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
-        startOffsetSec += meta ? Math.round(meta.durationSec) : 0;
+        startOffsetSec += partDurationSec;
       }
 
       await this.prisma.streamSession.update({
