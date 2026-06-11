@@ -73,10 +73,30 @@ textarea {
 
 .brand-block {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 6px 8px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Burger toggle: hidden on desktop, shown by the mobile top-bar layout. */
+.menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  cursor: pointer;
 }
 
 .brand-title {
@@ -861,9 +881,9 @@ textarea {
   overflow: hidden;
 }
 
-/* Mobile: the fixed 360px chat column would crush the player on narrow
-   screens — stack the player above the chat instead. */
-@media (max-width: 900px) {
+/* Mobile portrait: Twitch-app-style layout — full-width video on top, chat
+   filling the rest of the screen below it. */
+@media (max-width: 900px) and (orientation: portrait) {
   .replay-stage--normal.has-chat {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
@@ -875,17 +895,44 @@ textarea {
 
   .replay-stage--normal.has-chat .replay-stage__chat {
     min-height: 320px;
-    max-height: 45vh;
+    max-height: 50vh;
   }
 
   .replay-stage--theater.has-chat {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 55%) minmax(0, 45%);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  /* In theater the video keeps its aspect ratio at the top and the chat
+     takes everything below — no black bars around a "50% tall" video. */
+  .replay-stage--theater.has-chat .replay-stage__player {
+    height: auto;
+  }
+
+  .replay-stage--theater.has-chat .vp {
+    aspect-ratio: 16 / 9;
+    height: auto;
   }
 
   .replay-stage--theater .replay-stage__chat {
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+}
+
+/* Mobile landscape: same as desktop — video left, chat right — but with a
+   narrower chat column so the video stays large. */
+@media (max-width: 900px) and (orientation: landscape) {
+  .replay-stage--normal.has-chat {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+
+  .replay-stage--normal.has-chat .replay-stage__chat {
+    min-height: 0;
+  }
+
+  .replay-stage--theater.has-chat {
+    grid-template-columns: minmax(0, 1fr) 260px;
   }
 }
 
@@ -1760,29 +1807,63 @@ textarea {
 
 /* ---------- Responsive ---------- */
 
+/* Mobile shell: the sidebar becomes a sticky top bar with a burger menu;
+   the nav groups and footer blocks drop down only while the menu is open. */
 @media (max-width: 900px) {
   .app-frame {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 60;
     height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    padding: 12px;
+    gap: 0;
+    padding: 10px 14px;
+    background: var(--bg);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
   }
 
-  .sidebar-footer {
+  .brand-block {
+    padding: 0;
+    border-bottom: none;
+  }
+
+  .menu-toggle {
+    display: inline-flex;
+  }
+
+  .sidebar .nav-list,
+  .sidebar .sidebar-footer {
+    display: none;
+  }
+
+  .sidebar--open .nav-list {
+    display: flex;
+    padding-top: 12px;
+  }
+
+  .sidebar--open .sidebar-footer {
+    display: flex;
     margin-top: 0;
-    flex-direction: row;
-    align-items: center;
+    padding-top: 12px;
   }
 
-  .nav-list {
-    flex-direction: row;
-    flex-wrap: wrap;
+  .content-area {
+    padding: 14px 12px 32px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px;
   }
 
   .replay-grid.with-chat {
@@ -1914,6 +1995,12 @@ textarea {
   max-width: 1280px;
   margin: 0 auto;
   padding: 28px 24px 80px;
+}
+
+@media (max-width: 720px) {
+  .public-shell {
+    padding: 14px 12px 60px;
+  }
 }
 
 .public-header {
