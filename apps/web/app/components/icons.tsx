@@ -46,6 +46,45 @@ export function StopIcon(props: IconProps) {
   );
 }
 
+export function TvIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <rect x="2" y="7" width="20" height="14" rx="2" />
+      <path d="M17 2l-5 5-5-5" />
+    </svg>
+  );
+}
+
+export function RecordIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function ShieldIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" />
+    </svg>
+  );
+}
+
+export function UserIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5" />
+    </svg>
+  );
+}
+
 export function SendIcon(props: IconProps) {
   const p = withDefaults(props);
   return (

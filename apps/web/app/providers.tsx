@@ -13,6 +13,29 @@ import { AuthProvider } from "./lib/auth-context";
 type Locale = "ru" | "en";
 
 type Dictionary = {
+  nav: {
+    groupRecords: string;
+    groupStorage: string;
+    groupAdmin: string;
+    recordingNow: string;
+    archive: string;
+    telegramStorage: string;
+  };
+  storage: {
+    title: string;
+    subtitle: string;
+    uploadedCount: string;
+    telegramSize: string;
+    freedSize: string;
+    awaitingCleanup: string;
+    queueTitle: string;
+    queueEmpty: string;
+    notConfigured: string;
+    autoUploadOff: string;
+    autoUploadOn: string;
+    keepLocalNote: string;
+    openSettings: string;
+  };
   common: {
     appName: string;
     dashboard: string;
@@ -263,6 +286,30 @@ type Dictionary = {
 
 const dictionaries: Record<Locale, Dictionary> = {
   ru: {
+    nav: {
+      groupRecords: "Записи",
+      groupStorage: "Хранилище",
+      groupAdmin: "Управление",
+      recordingNow: "Сейчас пишется",
+      archive: "Архив записей",
+      telegramStorage: "Telegram",
+    },
+    storage: {
+      title: "Telegram-хранилище",
+      subtitle:
+        "Записи выгружаются в канал, локальные файлы удаляются через заданный срок, а просмотр идёт прямо из Telegram.",
+      uploadedCount: "Записей в Telegram",
+      telegramSize: "Объём в Telegram",
+      freedSize: "Освобождено на диске",
+      awaitingCleanup: "Ждут удаления с диска",
+      queueTitle: "Очередь выгрузки",
+      queueEmpty: "Очередь пуста — все записи выгружены.",
+      notConfigured: "Telegram не настроен. Укажите ключи и канал в настройках.",
+      autoUploadOff: "Автовыгрузка выключена — записи выгружаются только вручную.",
+      autoUploadOn: "Автовыгрузка включена",
+      keepLocalNote: "Локальная копия хранится {days} дн. после выгрузки",
+      openSettings: "Открыть настройки",
+    },
     common: {
       appName: "Twitch Stream Recorder",
       dashboard: "Обзор",
@@ -517,6 +564,30 @@ const dictionaries: Record<Locale, Dictionary> = {
     },
   },
   en: {
+    nav: {
+      groupRecords: "Recordings",
+      groupStorage: "Storage",
+      groupAdmin: "Administration",
+      recordingNow: "Recording now",
+      archive: "Archive",
+      telegramStorage: "Telegram",
+    },
+    storage: {
+      title: "Telegram storage",
+      subtitle:
+        "Recordings are uploaded to a channel, local files are removed after the configured period, and playback streams straight from Telegram.",
+      uploadedCount: "Recordings in Telegram",
+      telegramSize: "Size in Telegram",
+      freedSize: "Disk space freed",
+      awaitingCleanup: "Awaiting local cleanup",
+      queueTitle: "Upload queue",
+      queueEmpty: "The queue is empty — everything is uploaded.",
+      notConfigured: "Telegram is not configured. Set the keys and channel in settings.",
+      autoUploadOff: "Auto-upload is off — recordings are uploaded manually only.",
+      autoUploadOn: "Auto-upload is on",
+      keepLocalNote: "Local copies are kept for {days} day(s) after upload",
+      openSettings: "Open settings",
+    },
     common: {
       appName: "Twitch Stream Recorder",
       dashboard: "Overview",

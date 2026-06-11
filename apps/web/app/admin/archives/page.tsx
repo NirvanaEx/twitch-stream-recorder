@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
 import { formatFileSize, formatPeriod, withAuthToken } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
@@ -34,13 +34,19 @@ type ArchiveItem = {
   localFileDeletedAt: string | null;
 };
 
-type ArchivesResponse = { items: ArchiveItem[] };
+type ArchivesResponse = {
+  items: ArchiveItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
 
 const PAGE_SIZE = 15;
 
 export default function ArchivesPage() {
   const { t } = useLanguage();
   const [items, setItems] = useState<ArchiveItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
@@ -48,13 +54,16 @@ export default function ArchivesPage() {
 
   const loadArchives = useCallback(async () => {
     try {
-      const response = await apiGet<ArchivesResponse>("archives");
-      setItems(response.items.filter((item) => item.status !== "recording"));
+      const response = await apiGet<ArchivesResponse>(
+        `archives?page=${page}&pageSize=${PAGE_SIZE}`,
+      );
+      setItems(response.items);
+      setTotal(response.total);
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
     }
-  }, [t.errors.apiUnavailable]);
+  }, [page, t.errors.apiUnavailable]);
 
   useEffect(() => {
     void loadArchives();
@@ -62,15 +71,11 @@ export default function ArchivesPage() {
 
   useRealtimeRefresh(loadArchives);
 
-  const pagedItems = useMemo(
-    () => items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [items, page],
-  );
-
+  // If the last item of the last page was deleted, step back one page.
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > totalPages) setPage(totalPages);
-  }, [items.length, page]);
+  }, [total, page]);
 
   async function handleTelegramUpload(archiveId: string) {
     setBusyArchiveId(archiveId);
@@ -211,7 +216,7 @@ export default function ArchivesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedItems.map((archive) => (
+                  {items.map((archive) => (
                     <tr key={archive.id}>
                       <td>@{archive.channelLogin}</td>
                       <td className="col-truncate" title={archive.title ?? ""}>
@@ -314,7 +319,7 @@ export default function ArchivesPage() {
             <Pagination
               page={page}
               pageSize={PAGE_SIZE}
-              total={items.length}
+              total={total}
               onPageChange={setPage}
             />
           </>

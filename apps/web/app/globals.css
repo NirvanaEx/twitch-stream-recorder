@@ -99,6 +99,24 @@ textarea {
   gap: 2px;
 }
 
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group-title {
+  margin: 10px 10px 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.nav-group:first-child .nav-group-title {
+  margin-top: 0;
+}
+
 .nav-link {
   display: flex;
   align-items: center;

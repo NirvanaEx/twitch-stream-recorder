@@ -443,27 +443,42 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async getArchiveList() {
-    const items = await this.prisma.streamSession.findMany({
-      where: {
-        playbackPath: {
-          not: null,
+  async getArchiveList(page = 1, pageSize = 15) {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.min(100, Math.max(1, pageSize));
+
+    const where = {
+      playbackPath: {
+        not: null,
+      },
+      status: {
+        not: "recording",
+      },
+    };
+
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.streamSession.count({ where }),
+      this.prisma.streamSession.findMany({
+        where,
+        include: {
+          channel: true,
+          telegramParts: {
+            orderBy: { partIndex: "asc" },
+          },
         },
-      },
-      include: {
-        channel: true,
-        telegramParts: {
-          orderBy: { partIndex: "asc" },
+        orderBy: {
+          createdAt: "desc",
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      take: 50,
-    });
+        skip: (safePage - 1) * safePageSize,
+        take: safePageSize,
+      }),
+    ]);
 
     return {
       items: items.map((session) => this.serializeSession(session, session.channel)),
+      total,
+      page: safePage,
+      pageSize: safePageSize,
     };
   }
 
