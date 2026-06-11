@@ -251,6 +251,14 @@ export default function PublicWatchPage({
                 {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
               </span>
             ) : null}
+            {data.videoSource ? (
+              <span>
+                {t.replay.sourceLabel}:{" "}
+                <strong>
+                  {data.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
+                </strong>
+              </span>
+            ) : null}
             <a
               className="icon-btn"
               href={buildApiUrl(
