@@ -98,6 +98,15 @@ type Dictionary = {
     size: string;
     deleted: string;
     deleteConfirm: string;
+    telegramUploaded: string;
+    telegramUploading: string;
+    telegramPending: string;
+    telegramError: string;
+    telegramQueued: string;
+    uploadToTelegram: string;
+    openInTelegram: string;
+    telegramPart: string;
+    localFileDeleted: string;
   };
   replay: {
     withChat: string;
@@ -132,6 +141,20 @@ type Dictionary = {
     defaultChatOffsetSec: string;
     saveSettings: string;
     saved: string;
+    telegramTitle: string;
+    telegramEnabled: string;
+    telegramChatId: string;
+    telegramChatIdHint: string;
+    telegramKeepLocalDays: string;
+    telegramConnection: string;
+    telegramTokenMissing: string;
+    telegramBot: string;
+    telegramChat: string;
+    telegramApiId: string;
+    telegramApiHash: string;
+    telegramBotToken: string;
+    telegramSecretSet: string;
+    telegramSecretsHint: string;
   };
   errors: {
     apiUnavailable: string;
@@ -330,6 +353,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       deleted: "Архив удалён.",
       deleteConfirm: "Удалить это видео из архива?",
       endedAt: "Завершено",
+      telegramUploaded: "В Telegram",
+      telegramUploading: "Выгружается…",
+      telegramPending: "В очереди",
+      telegramError: "Ошибка выгрузки",
+      telegramQueued: "Запись добавлена в очередь выгрузки в Telegram.",
+      uploadToTelegram: "Выгрузить в Telegram",
+      openInTelegram: "Открыть в Telegram",
+      telegramPart: "Часть",
+      localFileDeleted: "Локальный файл удалён, запись доступна в Telegram.",
     },
     replay: {
       withChat: "С чатом",
@@ -364,6 +396,21 @@ const dictionaries: Record<Locale, Dictionary> = {
       defaultChatOffsetSec: "Смещение чата по умолчанию, сек",
       saveSettings: "Сохранить",
       saved: "Сохранено",
+      telegramTitle: "Telegram-хранилище",
+      telegramEnabled: "Выгружать записи в Telegram-канал",
+      telegramChatId: "ID канала/чата",
+      telegramChatIdHint: "Например -1001234567890 или @имяканала. Бот должен быть админом канала.",
+      telegramKeepLocalDays: "Хранить локальный файл после выгрузки, дней",
+      telegramConnection: "Подключение",
+      telegramTokenMissing: "Укажите api_id, api_hash и токен бота ниже (или через .env).",
+      telegramBot: "Бот",
+      telegramChat: "Канал",
+      telegramApiId: "api_id",
+      telegramApiHash: "api_hash",
+      telegramBotToken: "Токен бота",
+      telegramSecretSet: "•••••• (задано)",
+      telegramSecretsHint:
+        "api_id/api_hash — с my.telegram.org, токен — у @BotFather. Пустое поле не меняет сохранённое значение.",
     },
     errors: {
       apiUnavailable: "API недоступен.",
@@ -560,6 +607,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       deleted: "Archive deleted.",
       deleteConfirm: "Delete this video from archives?",
       endedAt: "Ended",
+      telegramUploaded: "In Telegram",
+      telegramUploading: "Uploading…",
+      telegramPending: "Queued",
+      telegramError: "Upload failed",
+      telegramQueued: "Recording queued for Telegram upload.",
+      uploadToTelegram: "Upload to Telegram",
+      openInTelegram: "Open in Telegram",
+      telegramPart: "Part",
+      localFileDeleted: "Local file removed; the recording is available in Telegram.",
     },
     replay: {
       withChat: "With chat",
@@ -594,6 +650,21 @@ const dictionaries: Record<Locale, Dictionary> = {
       defaultChatOffsetSec: "Default chat offset, sec",
       saveSettings: "Save",
       saved: "Saved",
+      telegramTitle: "Telegram storage",
+      telegramEnabled: "Upload recordings to a Telegram channel",
+      telegramChatId: "Channel/chat id",
+      telegramChatIdHint: "E.g. -1001234567890 or @channelname. The bot must be an admin of the channel.",
+      telegramKeepLocalDays: "Keep local file after upload, days",
+      telegramConnection: "Connection",
+      telegramTokenMissing: "Set api_id, api_hash and the bot token below (or via .env).",
+      telegramBot: "Bot",
+      telegramChat: "Channel",
+      telegramApiId: "api_id",
+      telegramApiHash: "api_hash",
+      telegramBotToken: "Bot token",
+      telegramSecretSet: "•••••• (set)",
+      telegramSecretsHint:
+        "api_id/api_hash come from my.telegram.org, the token from @BotFather. Leave a field empty to keep the stored value.",
     },
     errors: {
       apiUnavailable: "API is unavailable.",

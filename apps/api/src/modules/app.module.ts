@@ -10,6 +10,7 @@ import { PublicModule } from "./public/public.module";
 import { RecordingModule } from "./recording/recording.module";
 import { RealtimeModule } from "./realtime/realtime.module";
 import { SettingsModule } from "./settings/settings.module";
+import { TelegramModule } from "./telegram/telegram.module";
 import { TwitchModule } from "./twitch/twitch.module";
 import { UsersModule } from "./users/users.module";
 
@@ -27,6 +28,7 @@ import { UsersModule } from "./users/users.module";
     ArchivesModule,
     PublicModule,
     SettingsModule,
+    TelegramModule,
     RealtimeModule,
   ],
 })

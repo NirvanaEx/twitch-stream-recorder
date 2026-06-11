@@ -16,6 +16,15 @@ import { ChatReplay } from "../../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
 import { DownloadIcon, TrashIcon } from "../../../components/icons";
 
+type TelegramPart = {
+  partIndex: number;
+  partCount: number;
+  url: string | null;
+  streamUrl: string;
+  startOffsetSec: number;
+  durationSec: number | null;
+};
+
 type ArchiveDetailResponse = {
   item: {
     id: string;
@@ -30,7 +39,11 @@ type ArchiveDetailResponse = {
     endedAt: string | null;
     fileSizeBytes: string | null;
     videoReady: boolean;
+    videoSource: "local" | "telegram" | null;
     chatAvailable: boolean;
+    telegramStatus: string;
+    telegramParts: TelegramPart[];
+    localFileDeletedAt: string | null;
   };
   videoUrl: string | null;
   videoReady: boolean;
@@ -65,6 +78,9 @@ export default function ArchiveReplayPage() {
   const [chatVisible, setChatVisible] = useState<boolean>(true);
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  // 1-based index of the Telegram part being played (split recordings only).
+  const [currentPart, setCurrentPart] = useState(1);
+  const [pendingAutoplay, setPendingAutoplay] = useState(false);
 
   // Restore the user's stored chat preference on mount. Default is ON;
   // toggling the in-player chat button persists the choice for next time.
@@ -114,12 +130,58 @@ export default function ArchiveReplayPage() {
 
   useRealtimeRefresh(load);
 
+  // Telegram-offloaded recordings are streamed back part by part; locally
+  // stored ones keep playing the single full file.
+  const telegramParts = useMemo(
+    () => (data?.item.videoSource === "telegram" ? data.item.telegramParts : []),
+    [data?.item.videoSource, data?.item.telegramParts],
+  );
+  const activePart =
+    telegramParts.length > 0
+      ? telegramParts[Math.min(currentPart, telegramParts.length) - 1]
+      : null;
+
   // The /api/archives/:id/video endpoint is auth-protected; <video> can't
   // attach the Authorization header, so we sign the URL with `?token=`.
   const videoSrc = useMemo(
-    () => buildAuthenticatedMediaUrl(data?.videoUrl),
-    [data?.videoUrl],
+    () => buildAuthenticatedMediaUrl(activePart ? activePart.streamUrl : data?.videoUrl),
+    [activePart, data?.videoUrl],
   );
+
+  useEffect(() => {
+    setCurrentPart(1);
+  }, [params.id]);
+
+  // Auto-advance to the next part when the current one finishes.
+  useEffect(() => {
+    if (!videoElement || telegramParts.length < 2) return undefined;
+
+    const onEnded = () => {
+      setCurrentPart((part) => {
+        if (part < telegramParts.length) {
+          setPendingAutoplay(true);
+          return part + 1;
+        }
+        return part;
+      });
+    };
+
+    videoElement.addEventListener("ended", onEnded);
+    return () => videoElement.removeEventListener("ended", onEnded);
+  }, [videoElement, telegramParts.length]);
+
+  // Resume playback once the next part's metadata is in.
+  useEffect(() => {
+    if (!pendingAutoplay || !videoElement) return undefined;
+
+    const onLoaded = () => {
+      setPendingAutoplay(false);
+      void videoElement.play().catch(() => undefined);
+    };
+
+    videoElement.addEventListener("loadedmetadata", onLoaded, { once: true });
+    return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
+  }, [pendingAutoplay, videoElement, currentPart]);
 
   async function handleDelete() {
     if (!data || !window.confirm(t.archives.deleteConfirm)) return;
@@ -200,7 +262,13 @@ export default function ArchiveReplayPage() {
             </Link>
             <a
               className="icon-btn"
-              href={withAuthToken(buildApiUrl(`archives/${params.id}/video?download=1`))}
+              href={withAuthToken(
+                buildApiUrl(
+                  activePart
+                    ? `archives/${params.id}/video?part=${activePart.partIndex}&download=1`
+                    : `archives/${params.id}/video?download=1`,
+                ),
+              )}
               title={t.localReplay.downloadVideo}
               download
             >
@@ -248,6 +316,25 @@ export default function ArchiveReplayPage() {
           <div className="notice info">{t.replay.recordingInProgress}</div>
         ) : null}
 
+        {telegramParts.length > 1 ? (
+          <div className="action-row" style={{ margin: "8px 0", flexWrap: "wrap" }}>
+            {telegramParts.map((part) => (
+              <button
+                key={part.partIndex}
+                type="button"
+                className={`btn ${part.partIndex === currentPart ? "primary" : ""}`}
+                onClick={() => {
+                  if (part.partIndex === currentPart) return;
+                  setPendingAutoplay(true);
+                  setCurrentPart(part.partIndex);
+                }}
+              >
+                {t.archives.telegramPart} {part.partIndex}/{part.partCount}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         <div className="replay-stage__player">
           {data?.videoReady && videoSrc ? (
             <VideoPlayer
@@ -265,7 +352,24 @@ export default function ArchiveReplayPage() {
             />
           ) : (
             <div className="vp">
-              <div className="vp__empty">{t.replay.videoPending}</div>
+              <div className="vp__empty">
+                {data?.item.localFileDeletedAt ? (
+                  <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
+                    {t.archives.localFileDeleted}
+                    {(data.item.telegramParts ?? []).map((part) =>
+                      part.url ? (
+                        <a key={part.partIndex} href={part.url} target="_blank" rel="noreferrer">
+                          {part.partCount > 1
+                            ? `${t.archives.telegramPart} ${part.partIndex}/${part.partCount}`
+                            : t.archives.openInTelegram}
+                        </a>
+                      ) : null,
+                    )}
+                  </span>
+                ) : (
+                  t.replay.videoPending
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -276,6 +380,7 @@ export default function ArchiveReplayPage() {
               archiveId={data!.item.id}
               videoElement={videoElement}
               isLive={isLive}
+              baseOffsetSec={activePart?.startOffsetSec ?? 0}
             />
           </aside>
         ) : null}

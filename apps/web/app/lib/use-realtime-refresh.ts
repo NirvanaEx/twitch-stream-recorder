@@ -40,12 +40,14 @@ export function useRealtimeRefresh(onRefresh: RefreshCallback) {
     socket.on("channel:updated", refresh);
     socket.on("recording:started", refresh);
     socket.on("recording:stopped", refresh);
+    socket.on("telegram:updated", refresh);
 
     return () => {
       socket.off("system:hello", refresh);
       socket.off("channel:updated", refresh);
       socket.off("recording:started", refresh);
       socket.off("recording:stopped", refresh);
+      socket.off("telegram:updated", refresh);
       socket.close();
     };
   }, [onRefresh]);

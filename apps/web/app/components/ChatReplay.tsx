@@ -40,6 +40,13 @@ type ChatReplayProps = {
   videoElement: HTMLVideoElement | null;
   isLive: boolean;
   defaultOffsetSec?: number;
+  /**
+   * Start of the currently playing video on the whole-stream timeline, in
+   * seconds. Used when a recording is split into Telegram parts: the video's
+   * currentTime is part-local, while chat relativeTimeSec spans the whole
+   * stream.
+   */
+  baseOffsetSec?: number;
 };
 
 const MAX_VISIBLE = 200;
@@ -51,6 +58,7 @@ export function ChatReplay({
   videoElement,
   isLive,
   defaultOffsetSec = 0,
+  baseOffsetSec = 0,
 }: ChatReplayProps) {
   const [data, setData] = useState<ChatResponse | null>(staticData ?? null);
   const [loading, setLoading] = useState(!staticData);
@@ -149,15 +157,15 @@ export function ChatReplay({
       // Live recordings: always show everything that has been captured so far.
       if (isLive || !videoElement) return true;
 
-      const renderTime = message.relativeTimeSec + offset;
+      const renderTime = message.relativeTimeSec - baseOffsetSec + offset;
       return renderTime <= currentTime;
     });
 
     return reached.slice(-MAX_VISIBLE).map((message) => ({
       message,
-      renderTime: message.relativeTimeSec + offset,
+      renderTime: message.relativeTimeSec - baseOffsetSec + offset,
     }));
-  }, [data, currentTime, offset, showDeleted, isLive, videoElement]);
+  }, [data, currentTime, offset, showDeleted, isLive, videoElement, baseOffsetSec]);
 
   // Twitch-style auto-scroll: only stick to the bottom while the user is
   // already there. If they scroll up to read older messages we stop forcing

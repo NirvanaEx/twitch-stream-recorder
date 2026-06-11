@@ -46,6 +46,16 @@ export function StopIcon(props: IconProps) {
   );
 }
 
+export function SendIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M22 2L11 13" />
+      <path d="M22 2L15 22l-4-9-9-4 20-7z" />
+    </svg>
+  );
+}
+
 export function TrashIcon(props: IconProps) {
   const p = withDefaults(props);
   return (

@@ -7,7 +7,13 @@ import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
 import { Pagination } from "../../components/Pagination";
-import { DownloadIcon, PlayIcon, TrashIcon } from "../../components/icons";
+import { DownloadIcon, PlayIcon, SendIcon, TrashIcon } from "../../components/icons";
+
+type TelegramPart = {
+  partIndex: number;
+  partCount: number;
+  url: string | null;
+};
 
 type ArchiveItem = {
   id: string;
@@ -21,6 +27,10 @@ type ArchiveItem = {
   fileSizeBytes: string | null;
   videoReady: boolean;
   videoUrl: string | null;
+  telegramStatus: string;
+  telegramError: string | null;
+  telegramParts: TelegramPart[];
+  localFileDeletedAt: string | null;
 };
 
 type ArchivesResponse = { items: ArchiveItem[] };
@@ -60,6 +70,66 @@ export default function ArchivesPage() {
     const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
     if (page > totalPages) setPage(totalPages);
   }, [items.length, page]);
+
+  async function handleTelegramUpload(archiveId: string) {
+    setBusyArchiveId(archiveId);
+    setSuccess(null);
+    setError(null);
+
+    try {
+      await apiSend(`telegram/upload/${archiveId}`, "POST");
+      await loadArchives();
+      setSuccess(t.archives.telegramQueued);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
+    } finally {
+      setBusyArchiveId(null);
+    }
+  }
+
+  function renderTelegramCell(archive: ArchiveItem) {
+    if (archive.telegramStatus === "uploaded" && archive.telegramParts.length > 0) {
+      return (
+        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+          {archive.telegramParts.map((part) =>
+            part.url ? (
+              <a
+                key={part.partIndex}
+                href={part.url}
+                target="_blank"
+                rel="noreferrer"
+                title={t.archives.openInTelegram}
+              >
+                {part.partCount > 1
+                  ? `${t.archives.telegramPart} ${part.partIndex}/${part.partCount}`
+                  : t.archives.telegramUploaded}
+              </a>
+            ) : (
+              <span key={part.partIndex}>{t.archives.telegramUploaded}</span>
+            ),
+          )}
+        </span>
+      );
+    }
+
+    if (archive.telegramStatus === "uploading") {
+      return <span>{t.archives.telegramUploading}</span>;
+    }
+
+    if (archive.telegramStatus === "pending") {
+      return <span>{t.archives.telegramPending}</span>;
+    }
+
+    if (archive.telegramStatus === "error") {
+      return (
+        <span style={{ color: "var(--danger, #e5484d)" }} title={archive.telegramError ?? ""}>
+          {t.archives.telegramError}
+        </span>
+      );
+    }
+
+    return <span>—</span>;
+  }
 
   async function handleDelete(archiveId: string) {
     if (!window.confirm(t.archives.deleteConfirm)) return;
@@ -106,6 +176,7 @@ export default function ArchivesPage() {
                     <th className="col-meta">{t.archives.recordedAt}</th>
                     <th className="col-meta">{t.common.duration}</th>
                     <th className="col-meta">{t.common.sizeLabel}</th>
+                    <th className="col-meta">Telegram</th>
                     <th className="col-actions">{t.common.actions}</th>
                   </tr>
                 </thead>
@@ -124,6 +195,7 @@ export default function ArchivesPage() {
                         {formatPeriod(archive.startedAt, archive.endedAt)}
                       </td>
                       <td className="col-meta">{formatFileSize(archive.fileSizeBytes)}</td>
+                      <td className="col-meta">{renderTelegramCell(archive)}</td>
                       <td className="col-actions">
                         <div className="action-row">
                           {archive.videoReady && archive.videoUrl ? (
@@ -174,9 +246,24 @@ export default function ArchivesPage() {
                             </>
                           ) : (
                             <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
-                              {t.replay.videoPending}
+                              {archive.localFileDeletedAt
+                                ? t.archives.localFileDeleted
+                                : t.replay.videoPending}
                             </span>
                           )}
+                          {archive.status === "completed" &&
+                          archive.videoReady &&
+                          (archive.telegramStatus === "none" ||
+                            archive.telegramStatus === "error") ? (
+                            <IconButton
+                              title={t.archives.uploadToTelegram}
+                              loading={busyArchiveId === archive.id}
+                              disabled={busyArchiveId === archive.id}
+                              onClick={() => void handleTelegramUpload(archive.id)}
+                            >
+                              <SendIcon />
+                            </IconButton>
+                          ) : null}
                           <IconButton
                             title={t.common.delete}
                             className="danger"
