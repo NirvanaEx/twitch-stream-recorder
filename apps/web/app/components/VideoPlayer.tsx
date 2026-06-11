@@ -41,6 +41,7 @@ type VideoPlayerProps = {
 const SKIP_SECONDS = 5;
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const HIDE_DELAY_MS = 2500;
+const DOUBLE_TAP_MS = 350;
 
 /**
  * YouTube-style video player. Handles its own controls + global keyboard
@@ -82,8 +83,15 @@ export function VideoPlayer({
   const [showRateMenu, setShowRateMenu] = useState(false);
   const [scrubPreview, setScrubPreview] = useState<{ time: number; left: number } | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [centerHint, setCenterHint] = useState<"play" | "pause" | null>(null);
+  const [centerHint, setCenterHint] = useState<"play" | "pause" | "back" | "forward" | null>(
+    null,
+  );
   const [mediaError, setMediaError] = useState<string | null>(null);
+
+  // Touch handling: taps are processed in onPointerUp, and the synthetic
+  // click/dblclick events the browser fires afterwards must be ignored.
+  const lastTouchAtRef = useRef(0);
+  const lastTapRef = useRef<{ time: number; zone: "left" | "mid" | "right" } | null>(null);
 
   // Bubble video element up so external code (chat replay, etc.) can listen
   // to it. We send the element on mount and null on unmount.
@@ -204,7 +212,7 @@ export function VideoPlayer({
     v.addEventListener("loadedmetadata", onLoaded);
   }, []);
 
-  const flashCenterHint = useCallback((kind: "play" | "pause") => {
+  const flashCenterHint = useCallback((kind: "play" | "pause" | "back" | "forward") => {
     setCenterHint(kind);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
     centerIconTimerRef.current = window.setTimeout(() => setCenterHint(null), 600);
@@ -311,6 +319,9 @@ export function VideoPlayer({
   }, []);
 
   const handleMouseMove = useCallback(() => {
+    // Touch taps fire synthetic mouse events afterwards; if we react to
+    // them, a tap meant to HIDE the controls instantly re-shows them.
+    if (Date.now() - lastTouchAtRef.current < 700) return;
     setControlsVisible(true);
     armHide();
   }, [armHide]);
@@ -331,6 +342,47 @@ export function VideoPlayer({
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
   }, []);
+
+  // ---- Touch gestures -----------------------------------------------------
+
+  // Mobile UX mirrors YouTube: a single tap toggles the controls overlay
+  // (it must NOT pause), pausing is done with the pause button, and a
+  // double-tap on the left/right third of the video seeks -/+5 seconds.
+  const handleVideoPointerUp = (event: React.PointerEvent) => {
+    if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+
+    lastTouchAtRef.current = Date.now();
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = (event.clientX - rect.left) / Math.max(1, rect.width);
+    const zone: "left" | "mid" | "right" = x < 1 / 3 ? "left" : x > 2 / 3 ? "right" : "mid";
+    const now = Date.now();
+    const lastTap = lastTapRef.current;
+
+    if (lastTap && now - lastTap.time < DOUBLE_TAP_MS && lastTap.zone === zone) {
+      lastTapRef.current = null;
+
+      if (zone === "left") {
+        seekBy(-SKIP_SECONDS);
+        flashCenterHint("back");
+      } else if (zone === "right") {
+        seekBy(SKIP_SECONDS);
+        flashCenterHint("forward");
+      } else {
+        togglePlay();
+      }
+      return;
+    }
+
+    lastTapRef.current = { time: now, zone };
+
+    if (!controlsVisible) {
+      setControlsVisible(true);
+      armHide();
+    } else if (isPlaying) {
+      setControlsVisible(false);
+    }
+  };
 
   // ---- Keyboard shortcuts ----------------------------------------------
 
@@ -363,14 +415,14 @@ export function VideoPlayer({
         case "J":
           event.preventDefault();
           seekBy(-SKIP_SECONDS);
-          flashCenterHint("pause");
+          flashCenterHint("back");
           break;
         case "ArrowRight":
         case "l":
         case "L":
           event.preventDefault();
           seekBy(SKIP_SECONDS);
-          flashCenterHint("play");
+          flashCenterHint("forward");
           break;
         case "ArrowUp":
           event.preventDefault();
@@ -524,8 +576,10 @@ export function VideoPlayer({
         if (isPlaying) setControlsVisible(false);
       }}
       onDoubleClick={(event) => {
-        // Avoid double-click toggling when clicking on controls.
+        // Avoid double-click toggling when clicking on controls. Touch
+        // double-taps are handled in onPointerUp (they seek, not fullscreen).
         if ((event.target as HTMLElement).closest(".vp__controls")) return;
+        if (Date.now() - lastTouchAtRef.current < 700) return;
         toggleFullscreen();
       }}
     >
@@ -538,9 +592,13 @@ export function VideoPlayer({
           poster={poster}
           preload="metadata"
           playsInline
+          onPointerUp={handleVideoPointerUp}
           onClick={(event) => {
-            // Click-on-video toggles play. Don't intercept double-click.
+            // Click-on-video toggles play. Don't intercept double-click, and
+            // ignore the synthetic click that follows a touch tap — touch is
+            // fully handled in onPointerUp.
             if (event.detail > 1) return;
+            if (Date.now() - lastTouchAtRef.current < 700) return;
             togglePlay();
           }}
         />
@@ -587,7 +645,10 @@ export function VideoPlayer({
 
       {centerHint ? (
         <div className="vp__center-hint" key={`${centerHint}-${Date.now()}`} aria-hidden>
-          {centerHint === "play" ? <PlayIcon size={36} /> : <PauseIcon size={36} />}
+          {centerHint === "play" ? <PlayIcon size={36} /> : null}
+          {centerHint === "pause" ? <PauseIcon size={36} /> : null}
+          {centerHint === "back" ? <SkipBack5Icon size={36} /> : null}
+          {centerHint === "forward" ? <SkipForward5Icon size={36} /> : null}
         </div>
       ) : null}
 

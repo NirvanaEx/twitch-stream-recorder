@@ -152,6 +152,8 @@ type Dictionary = {
     unmute: string;
     playbackSpeed: string;
     closeOverlay: string;
+    sourceLabel: string;
+    sourceLocal: string;
   };
   settings: {
     title: string;
@@ -431,6 +433,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       unmute: "Включить звук (M)",
       playbackSpeed: "Скорость",
       closeOverlay: "Закрыть",
+      sourceLabel: "Источник",
+      sourceLocal: "Диск сервера",
     },
     settings: {
       title: "Настройки",
@@ -709,6 +713,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       unmute: "Unmute (M)",
       playbackSpeed: "Speed",
       closeOverlay: "Close",
+      sourceLabel: "Source",
+      sourceLocal: "Server disk",
     },
     settings: {
       title: "Settings",

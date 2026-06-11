@@ -861,6 +861,34 @@ textarea {
   overflow: hidden;
 }
 
+/* Mobile: the fixed 360px chat column would crush the player on narrow
+   screens — stack the player above the chat instead. */
+@media (max-width: 900px) {
+  .replay-stage--normal.has-chat {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "header"
+      "player"
+      "chat";
+  }
+
+  .replay-stage--normal.has-chat .replay-stage__chat {
+    min-height: 320px;
+    max-height: 45vh;
+  }
+
+  .replay-stage--theater.has-chat {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 55%) minmax(0, 45%);
+  }
+
+  .replay-stage--theater .replay-stage__chat {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
 /* Fullscreen: parent is a normal page; the player itself becomes the
    fullscreen element via the native fullscreen API. The page header / chat
    stay in the DOM but are hidden by the browser's fullscreen rendering. */
@@ -876,6 +904,15 @@ textarea {
   aspect-ratio: 16 / 9;
   color: #fff;
   user-select: none;
+  /* Kill double-tap-to-zoom so double-tap seeking works on touch screens. */
+  touch-action: manipulation;
+}
+
+/* Phones: hardware buttons control volume; the slider only wastes space. */
+@media (max-width: 720px) {
+  .vp__volume-slider {
+    display: none;
+  }
 }
 
 .vp--theater,

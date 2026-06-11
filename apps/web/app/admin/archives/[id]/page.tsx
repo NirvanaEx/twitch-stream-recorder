@@ -254,6 +254,14 @@ export default function ArchiveReplayPage() {
                 {t.archives.size}:
                 <strong>{formatFileSize(data?.item.fileSizeBytes)}</strong>
               </span>
+              {data?.item.videoSource ? (
+                <span>
+                  {t.replay.sourceLabel}:
+                  <strong>
+                    {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
+                  </strong>
+                </span>
+              ) : null}
             </div>
           </div>
           <div className="action-row">
