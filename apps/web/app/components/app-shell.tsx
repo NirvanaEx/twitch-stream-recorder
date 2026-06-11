@@ -8,9 +8,11 @@ import { useAuth } from "../lib/auth-context";
 import { useLanguage } from "../providers";
 import {
   ArchiveIcon,
+  CloseIcon,
   FolderOpenIcon,
   HardDriveIcon,
   HomeIcon,
+  MenuIcon,
   RecordIcon,
   SendIcon,
   SettingsIcon,
@@ -43,8 +45,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { locale, setLocale, t } = useLanguage();
   const { user, hasPermission, logout } = useAuth();
   const [disk, setDisk] = useState<DiskUsage | null>(null);
+  // Mobile-only: the sidebar collapses into a top bar with a burger menu.
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isTheater = pathname?.endsWith("/theater") ?? false;
   const canViewDashboard = hasPermission("view_archives");
+
+  // Navigating closes the mobile menu.
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (isTheater || !canViewDashboard) return undefined;
@@ -137,10 +146,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-frame">
-      <aside className="sidebar">
+      <aside className={mobileMenuOpen ? "sidebar sidebar--open" : "sidebar"}>
         <div className="brand-block">
-          <span className="brand-eyebrow">TSR · {t.admin.panelLabel}</span>
-          <h1 className="brand-title">{t.common.appName}</h1>
+          <div className="brand-text">
+            <span className="brand-eyebrow">TSR · {t.admin.panelLabel}</span>
+            <h1 className="brand-title">{t.common.appName}</h1>
+          </div>
+          <button
+            type="button"
+            className="menu-toggle"
+            onClick={() => setMobileMenuOpen((value) => !value)}
+            aria-label="Menu"
+          >
+            {mobileMenuOpen ? <CloseIcon size={18} /> : <MenuIcon size={18} />}
+          </button>
         </div>
 
         <nav className="nav-list">

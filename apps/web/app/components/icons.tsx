@@ -46,6 +46,17 @@ export function StopIcon(props: IconProps) {
   );
 }
 
+export function MenuIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M3 6h18" />
+      <path d="M3 12h18" />
+      <path d="M3 18h18" />
+    </svg>
+  );
+}
+
 export function TvIcon(props: IconProps) {
   const p = withDefaults(props);
   return (
