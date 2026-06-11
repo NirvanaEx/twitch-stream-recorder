@@ -951,6 +951,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       videoUrl:
         playback.videoUrl ?? (telegramPlayable ? telegramParts[0].streamUrl : null),
       telegramStatus: session.telegramStatus,
+      telegramProgress:
+        session.telegramStatus === "uploading"
+          ? this.telegramService.getUploadProgress(session.id)
+          : null,
       telegramError: session.telegramError,
       telegramUploadedAt: session.telegramUploadedAt,
       localFileDeletedAt: session.localFileDeletedAt,
