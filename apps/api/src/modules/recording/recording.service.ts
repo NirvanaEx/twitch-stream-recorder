@@ -26,6 +26,9 @@ type ActiveRecording = {
   remuxProcess: ChildProcess | null;
   tsPath: string;
   outputPath: string;
+  // Audio-only capture: streamlink grabs the audio_only variant and the remux
+  // produces an .m4a instead of an .mp4.
+  audioOnly: boolean;
   stopRequested: boolean;
 };
 
@@ -292,8 +295,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     // Twitch go-live timestamp: when a recording is resumed after a crash the
     // go-live time is identical, and the second part would overwrite the
     // first part's file.
-    const outputPath = this.buildRecordingPath(channel.twitchLogin, new Date().toISOString());
-    const tsPath = outputPath.replace(/\.mp4$/i, ".ts");
+    const outputPath = this.buildRecordingPath(
+      channel.twitchLogin,
+      new Date().toISOString(),
+      channel.audioOnly ? "m4a" : "mp4",
+    );
+    const tsPath = outputPath.replace(/\.(mp4|m4a)$/i, ".ts");
     mkdirSync(dirname(outputPath), { recursive: true });
 
     const session = await this.prisma.streamSession.create({
@@ -311,12 +318,15 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         recordingSource: trigger,
         recordingPath: outputPath,
         playbackPath: outputPath,
+        audioOnly: channel.audioOnly,
         previewImageUrl: liveStream.previewImageUrl,
         chatAvailable: false,
       },
     });
 
-    const quality = channel.preferredQuality || "best";
+    // Twitch always exposes an audio_only HLS variant; recording it skips the
+    // video download entirely.
+    const quality = channel.audioOnly ? "audio_only" : channel.preferredQuality || "best";
     const channelUrl = `https://www.twitch.tv/${channel.twitchLogin}`;
 
     // Streamlink writes the live MPEG-TS directly to disk. We avoid stdin/stdout
@@ -355,6 +365,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       remuxProcess: null,
       tsPath,
       outputPath,
+      audioOnly: channel.audioOnly,
       stopRequested: false,
     };
 
@@ -672,10 +683,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
 
       // The standalone audio track is extracted before the session flips to
-      // completed so the Telegram offloader picks it up together with the video.
+      // completed so the Telegram offloader picks it up together with the
+      // video. An audio-only capture already IS the audio track.
       const audio =
         finalStatus === "completed" && fileSizeBytes > 0
-          ? await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
+          ? activeRecording.audioOnly
+            ? { path: activeRecording.outputPath, sizeBytes: fileSizeBytes }
+            : await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
           : null;
 
       await this.prisma.streamSession.update({
@@ -783,6 +797,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         "-y",
         "-i",
         tsPath,
+        ...(activeRecording.audioOnly ? ["-vn"] : []),
         "-c",
         "copy",
         "-bsf:a",
@@ -816,7 +831,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private buildRecordingPath(login: string, startedAt: string) {
+  private buildRecordingPath(login: string, startedAt: string, ext: "mp4" | "m4a" = "mp4") {
     const start = new Date(startedAt);
     const safeTimestamp = `${start.getUTCFullYear()}-${String(start.getUTCMonth() + 1).padStart(
       2,
@@ -832,7 +847,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       process.env.DATA_DIR ?? "./data",
       "records",
       login,
-      `${login}_${safeTimestamp}.mp4`,
+      `${login}_${safeTimestamp}.${ext}`,
     );
   }
 
@@ -866,7 +881,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     for (const session of candidates) {
       const outputPath = resolve(session.recordingPath!);
-      const tsPath = outputPath.replace(/\.mp4$/i, ".ts");
+      const tsPath = outputPath.replace(/\.(mp4|m4a)$/i, ".ts");
 
       if (!existsSync(tsPath) || statSync(tsPath).size === 0) {
         continue;
@@ -882,7 +897,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       );
 
       try {
-        await this.runFfmpegRemux(tsPath, outputPath);
+        await this.runFfmpegRemux(tsPath, outputPath, session.audioOnly);
 
         const fileSizeBytes = existsSync(outputPath) ? statSync(outputPath).size : 0;
 
@@ -896,9 +911,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           // Best-effort cleanup; ignore filesystem errors.
         }
 
-        const audio = session.audioPath
-          ? null
-          : await this.extractAudioTrack(outputPath, logPrefix);
+        const audio = session.audioOnly
+          ? { path: outputPath, sizeBytes: fileSizeBytes }
+          : session.audioPath
+            ? null
+            : await this.extractAudioTrack(outputPath, logPrefix);
 
         await this.prisma.streamSession.update({
           where: { id: session.id },
@@ -1016,7 +1033,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private runFfmpegRemux(tsPath: string, outputPath: string) {
+  private runFfmpegRemux(tsPath: string, outputPath: string, audioOnly = false) {
     return new Promise<void>((resolvePromise, rejectPromise) => {
       const ffmpegCommand = this.resolveFfmpegCommand();
       const child = spawn(
@@ -1026,6 +1043,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           "-y",
           "-i",
           tsPath,
+          ...(audioOnly ? ["-vn"] : []),
           "-c",
           "copy",
           "-bsf:a",
@@ -1177,10 +1195,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     // A recording whose local file is gone is still watchable when its parts
     // live in Telegram: the video endpoint streams them back via MTProto.
+    // Audio-only sessions have no parts — their Telegram copy is one audio
+    // message, served by the same video endpoint.
     const telegramPlayable =
       !playback.videoReady &&
       session.telegramStatus === "uploaded" &&
-      telegramParts.length > 0;
+      (telegramParts.length > 0 ||
+        (session.audioOnly && Boolean(session.telegramAudioMessageId)));
 
     return {
       id: session.id,
@@ -1205,7 +1226,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       errorMessage: session.errorMessage,
       previewImageUrl: session.previewImageUrl,
       videoUrl:
-        playback.videoUrl ?? (telegramPlayable ? telegramParts[0].streamUrl : null),
+        playback.videoUrl ??
+        (telegramPlayable
+          ? telegramParts[0]?.streamUrl ?? `/api/archives/${session.id}/video`
+          : null),
       telegramStatus: session.telegramStatus,
       telegramProgress:
         session.telegramStatus === "uploading"
@@ -1222,6 +1246,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           : null,
       localFileDeletedAt: session.localFileDeletedAt,
       telegramParts,
+      audioOnly: session.audioOnly,
       // The standalone audio track for the Twitch userscript: available while
       // it exists locally or in Telegram and was not auto-expired.
       audioAvailable:

@@ -321,6 +321,48 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     let tempDir: string | null = null;
 
     try {
+      // Audio-only session: the recording is a single .m4a — one audio
+      // message instead of video parts.
+      if (session.audioOnly) {
+        if (!session.telegramAudioMessageId) {
+          const messageId = await this.uploadAudioTrack(session, chatId, (fraction) => {
+            this.reportUploadProgress(session.id, Math.floor(fraction * 100));
+          });
+
+          if (!messageId) {
+            throw new Error("Audio file is missing on disk or exceeds the Telegram size limit.");
+          }
+        }
+
+        let audioChatMessageId = session.telegramChatMessageId;
+
+        if (!audioChatMessageId) {
+          try {
+            audioChatMessageId = await this.uploadChatBundle(session, chatId);
+          } catch (error) {
+            this.logger.warn(
+              `${logPrefix} chat bundle upload failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        }
+
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: {
+            telegramStatus: "uploaded",
+            telegramUploadedAt: new Date(),
+            telegramError: null,
+            telegramChatMessageId: audioChatMessageId,
+          },
+        });
+
+        this.emitTelegramUpdate(session.id, "uploaded");
+        this.logger.log(`${logPrefix} audio-only upload finished.`);
+        return;
+      }
+
       const fileSize = statSync(filePath).size;
       const maxPartBytes = this.getMaxPartBytes();
       let partPaths = [filePath];
@@ -594,19 +636,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Post the extracted .m4a to the channel and remember the message. */
-  private async uploadAudioTrack(session: SessionWithChannel, chatId: string) {
+  /**
+   * Post the extracted .m4a to the channel and remember the message.
+   * Returns the message id, or null when there is nothing to upload.
+   */
+  private async uploadAudioTrack(
+    session: SessionWithChannel,
+    chatId: string,
+    onProgress?: (fraction: number) => void,
+  ) {
     const audioPath = resolve(session.audioPath!);
 
     if (!existsSync(audioPath) || statSync(audioPath).size === 0) {
-      return;
+      return null;
     }
 
     if (statSync(audioPath).size > this.getMaxPartBytes()) {
       this.logger.warn(
         `[telegram/${session.channel.twitchLogin}/${session.id}] audio track exceeds the Telegram size limit, keeping it local only.`,
       );
-      return;
+      return null;
     }
 
     // probeVideoMeta only needs format.duration, which works for audio files
@@ -635,6 +684,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const message = await client.sendFile(entity, {
       file: audioPath,
       caption,
+      progressCallback: onProgress
+        ? (progress: number) => onProgress(Math.max(0, Math.min(1, progress)))
+        : undefined,
       attributes: [
         new Api.DocumentAttributeAudio({
           duration: durationSec,
@@ -663,6 +715,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `[telegram/${session.channel.twitchLogin}/${session.id}] audio track uploaded.`,
     );
+
+    return String(message.id);
   }
 
   /**
@@ -681,6 +735,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const sessions = await this.prisma.streamSession.findMany({
       where: {
         audioDeletedAt: null,
+        // An audio-only session's audio IS the recording — it lives by the
+        // archive lifecycle, never by the temporary-audio expiry.
+        audioOnly: false,
         endedAt: { lte: cutoff },
         OR: [{ audioPath: { not: null } }, { telegramAudioMessageId: { not: null } }],
       },

@@ -135,17 +135,23 @@ export class ArchivesController {
     }
 
     if (!local) {
-      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
-      let downloadName: string | null = null;
+      const session = await this.prisma.streamSession.findUnique({
+        where: { id },
+        include: { channel: true },
+      });
+      const safeName = (session?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
 
-      if (req.query?.download === "1") {
-        const session = await this.prisma.streamSession.findUnique({
-          where: { id },
-          include: { channel: true },
-        });
-        const safeName = (session?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-        downloadName = `${safeName}-${id}-part${partIndex}.mp4`;
+      // Audio-only sessions have no video parts in Telegram — their copy is a
+      // single audio message served through the same endpoint.
+      if (session?.audioOnly) {
+        const downloadName = req.query?.download === "1" ? `${safeName}-${id}.m4a` : null;
+        await this.telegramStreamService.streamAudioToResponse(id, req, res, downloadName);
+        return;
       }
+
+      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
+      const downloadName =
+        req.query?.download === "1" ? `${safeName}-${id}-part${partIndex}.mp4` : null;
 
       await this.telegramStreamService.streamToResponse(id, partIndex, req, res, downloadName);
       return;
@@ -153,6 +159,8 @@ export class ArchivesController {
 
     const { absolutePath, stat } = local;
     const range = req.headers.range as string | undefined;
+    const isAudioFile = absolutePath.toLowerCase().endsWith(".m4a");
+    const contentType = isAudioFile ? "audio/mp4" : "video/mp4";
 
     if (req.query?.download === "1") {
       const session = await this.prisma.streamSession.findUnique({
@@ -160,7 +168,7 @@ export class ArchivesController {
         include: { channel: true },
       });
       const safeName = (session?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-      const filename = `${safeName}-${id}.mp4`;
+      const filename = `${safeName}-${id}.${isAudioFile ? "m4a" : "mp4"}`;
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     }
 
@@ -174,7 +182,7 @@ export class ArchivesController {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
-        "Content-Type": "video/mp4",
+        "Content-Type": contentType,
       });
 
       createReadStream(absolutePath, { start, end }).pipe(res);
@@ -183,7 +191,7 @@ export class ArchivesController {
 
     res.writeHead(200, {
       "Content-Length": stat.size,
-      "Content-Type": "video/mp4",
+      "Content-Type": contentType,
       "Accept-Ranges": "bytes",
     });
 

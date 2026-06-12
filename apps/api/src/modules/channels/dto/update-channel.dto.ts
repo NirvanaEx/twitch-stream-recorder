@@ -14,6 +14,11 @@ export class UpdateChannelDto {
   @IsBoolean()
   autoRecord?: boolean;
 
+  // Record only the Twitch audio_only variant (no video).
+  @IsOptional()
+  @IsBoolean()
+  audioOnly?: boolean;
+
   @IsOptional()
   @IsString()
   @MaxLength(32)

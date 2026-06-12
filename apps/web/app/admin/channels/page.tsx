@@ -23,6 +23,7 @@ type ChannelItem = {
   profileImageUrl: string | null;
   isEnabled: boolean;
   autoRecord: boolean;
+  audioOnly: boolean;
   manualStopUntilOffline: boolean;
   preferredQuality: string;
   isLive: boolean;
@@ -190,13 +191,17 @@ export default function ChannelsPage() {
     }
   }
 
-  async function handleAutoRecordChange(channel: ChannelItem, nextValue: boolean) {
+  async function handleToggleChange(
+    channel: ChannelItem,
+    field: "autoRecord" | "audioOnly",
+    nextValue: boolean,
+  ) {
     const previousItems = items;
     setItems((current) =>
-      current.map((c) => (c.id === channel.id ? { ...c, autoRecord: nextValue } : c)),
+      current.map((c) => (c.id === channel.id ? { ...c, [field]: nextValue } : c)),
     );
     try {
-      await apiSend(`channels/${channel.id}`, "PATCH", { autoRecord: nextValue });
+      await apiSend(`channels/${channel.id}`, "PATCH", { [field]: nextValue });
       await loadChannels();
     } catch (requestError) {
       setItems(previousItems);
@@ -273,6 +278,9 @@ export default function ChannelsPage() {
                     <th className="col-status">{t.common.status}</th>
                     <th>{t.channels.currentTitle}</th>
                     <th className="col-status">{t.channels.autoRecordLabel}</th>
+                    <th className="col-status" title={t.channels.audioOnlyHint}>
+                      {t.channels.audioOnlyLabel}
+                    </th>
                     <th className="col-actions">{t.common.actions}</th>
                   </tr>
                 </thead>
@@ -314,7 +322,20 @@ export default function ChannelsPage() {
                               checked={channel.autoRecord}
                               disabled={busyHere}
                               onChange={(event) =>
-                                void handleAutoRecordChange(channel, event.target.checked)
+                                void handleToggleChange(channel, "autoRecord", event.target.checked)
+                              }
+                            />
+                            <span className="slider" />
+                          </label>
+                        </td>
+                        <td className="col-status">
+                          <label className="switch" title={t.channels.audioOnlyHint}>
+                            <input
+                              type="checkbox"
+                              checked={channel.audioOnly}
+                              disabled={busyHere}
+                              onChange={(event) =>
+                                void handleToggleChange(channel, "audioOnly", event.target.checked)
                               }
                             />
                             <span className="slider" />
