@@ -144,40 +144,122 @@ export class PublicStreamsController {
     });
 
     const items = sessions
-      .filter(
-        (session) =>
-          (session.audioPath && existsSync(resolve(session.audioPath))) ||
-          session.telegramAudioMessageId,
-      )
-      .map((session) => {
-        // Parts carry the real recording duration; the startedAt/endedAt diff
-        // overstates it when the recorder joined the stream late.
-        const partsDuration = session.telegramParts.reduce(
-          (acc, part) => acc + (part.durationSec ?? 0),
-          0,
-        );
-        const timestampsDuration =
-          session.startedAt && session.endedAt
-            ? Math.max(
-                0,
-                Math.round(
-                  (session.endedAt.getTime() - session.startedAt.getTime()) / 1000,
-                ),
-              )
-            : null;
-
-        return {
-          id: session.id,
-          title: session.title,
-          channelLogin: session.channel.twitchLogin,
-          channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
-          startedAt: session.startedAt?.toISOString() ?? null,
-          durationSec: partsDuration > 0 ? partsDuration : timestampsDuration,
-          audioUrl: `/api/public/streams/${session.id}/audio`,
-        };
-      });
+      .filter((session) => this.hasUsableAudio(session))
+      .map((session) => this.mapAudioTrack(session));
 
     return { items };
+  }
+
+  /**
+   * Find the recorded audio track that matches an open Twitch VOD. The
+   * userscript reads the VOD's channel login and broadcast date from Twitch
+   * and asks here for the closest recording — so the right track is selected
+   * automatically instead of by hand. CORS is open (called from twitch.tv).
+   */
+  @Get("audio-tracks/match")
+  @Header("Access-Control-Allow-Origin", "*")
+  async matchAudioTrack(
+    @Query("channel") channel?: string,
+    @Query("date") date?: string,
+  ) {
+    const login = (channel ?? "").trim().toLowerCase();
+
+    if (!login) {
+      return { item: null };
+    }
+
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        status: "completed",
+        audioDeletedAt: null,
+        channel: { twitchLogin: login },
+        OR: [{ audioPath: { not: null } }, { telegramAudioMessageId: { not: null } }],
+      },
+      include: {
+        channel: true,
+        telegramParts: { select: { durationSec: true } },
+      },
+      orderBy: [{ startedAt: "desc" }],
+      take: 50,
+    });
+
+    const available = sessions.filter((session) => this.hasUsableAudio(session));
+
+    if (available.length === 0) {
+      return { item: null };
+    }
+
+    const target = date ? new Date(date) : null;
+
+    if (!target || Number.isNaN(target.getTime())) {
+      // No date to disambiguate — return the newest track for this channel.
+      return { item: this.mapAudioTrack(available[0]) };
+    }
+
+    // A Twitch VOD's createdAt is the broadcast start, which lines up with our
+    // session.startedAt (the go-live time). Pick the nearest start, but only
+    // when it is close enough to be the same broadcast.
+    let best = available[0];
+    let bestDelta = Number.POSITIVE_INFINITY;
+
+    for (const session of available) {
+      if (!session.startedAt) continue;
+      const delta = Math.abs(session.startedAt.getTime() - target.getTime());
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = session;
+      }
+    }
+
+    const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+    if (bestDelta > MATCH_WINDOW_MS) {
+      return { item: null };
+    }
+
+    return { item: this.mapAudioTrack(best) };
+  }
+
+  private hasUsableAudio(
+    session: StreamSession & { audioPath: string | null; telegramAudioMessageId: string | null },
+  ) {
+    return Boolean(
+      (session.audioPath && existsSync(resolve(session.audioPath))) ||
+        session.telegramAudioMessageId,
+    );
+  }
+
+  private mapAudioTrack(
+    session: StreamSession & {
+      channel: { twitchLogin: string; displayName: string | null };
+      telegramParts: { durationSec: number | null }[];
+      audioOnly: boolean;
+    },
+  ) {
+    // Parts carry the real recording duration; the startedAt/endedAt diff
+    // overstates it when the recorder joined the stream late.
+    const partsDuration = session.telegramParts.reduce(
+      (acc, part) => acc + (part.durationSec ?? 0),
+      0,
+    );
+    const timestampsDuration =
+      session.startedAt && session.endedAt
+        ? Math.max(
+            0,
+            Math.round((session.endedAt.getTime() - session.startedAt.getTime()) / 1000),
+          )
+        : null;
+
+    return {
+      id: session.id,
+      title: session.title,
+      channelLogin: session.channel.twitchLogin,
+      channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
+      startedAt: session.startedAt?.toISOString() ?? null,
+      durationSec: partsDuration > 0 ? partsDuration : timestampsDuration,
+      audioOnly: session.audioOnly,
+      audioUrl: `/api/public/streams/${session.id}/audio`,
+    };
   }
 
   @Get(":id/audio")

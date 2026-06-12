@@ -17,17 +17,20 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.0
-// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу.
+// @version      1.1
+// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку для VOD и подсвечивает заглушённые участки.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
 // @connect      ${hostname}
+// @connect      gql.twitch.tv
 // ==/UserScript==
 
 (function () {
   'use strict';
 
   var SERVER = '${trimmedOrigin}';
+  var GQL_URL = 'https://gql.twitch.tv/gql';
+  var GQL_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
   var SYNC_MS = 800;
   var MAX_DRIFT = 0.35;
 
@@ -40,6 +43,15 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var offset = 0;
   var boundVideo = null;
   var lastUrl = '';
+
+  // VOD metadata fetched from Twitch GQL for the current /videos/<id> page.
+  var metaVodId = null;
+  var vodLengthSeconds = 0;
+  var mutedSegments = []; // [{ offset, duration }]
+  var autoMatchedTrack = null;
+  var matchPending = false;
+
+  var legendEl = null;
 
   var panel = null;
   var bodyEl = null;
@@ -131,20 +143,191 @@ export function buildTwitchAudioUserscript(origin: string): string {
           tracks = [];
         }
         renderOptions();
-        var saved = loadState();
-        if (saved && saved.trackId && findTrack(saved.trackId)) {
-          offset = typeof saved.offset === 'number' ? saved.offset : 0;
-          if (offsetInput) offsetInput.value = offset.toFixed(1);
-          selectTrack(saved.trackId);
-          applyMode(saved.mode === 'record' || saved.mode === 'both' ? saved.mode : 'twitch');
-        } else {
-          setStatus(tracks.length ? 'Выберите дорожку записи' : 'На сервере нет аудиодорожек');
-        }
+        resolveSelection();
       },
       onerror: function () {
         setStatus('Сервер недоступен: ' + SERVER);
       },
     });
+  }
+
+  // Ask Twitch (public GQL) who owns this VOD, when it was recorded and which
+  // segments are muted, then look up the matching recording on our server.
+  function fetchVodMeta() {
+    var vodId = getVodId();
+    if (!vodId || metaVodId === vodId) return;
+    metaVodId = vodId;
+    matchPending = true;
+
+    var body = JSON.stringify({
+      query:
+        'query($id: ID!){ video(id:$id){ lengthSeconds createdAt publishedAt owner{ login } ' +
+        'muteInfo{ mutedSegmentConnection{ nodes{ offset duration } } } } }',
+      variables: { id: vodId },
+    });
+
+    GM_xmlhttpRequest({
+      method: 'POST',
+      url: GQL_URL,
+      headers: { 'Client-ID': GQL_CLIENT_ID, 'Content-Type': 'application/json' },
+      data: body,
+      onload: function (res) {
+        var login = null;
+        var date = null;
+        try {
+          var video = JSON.parse(res.responseText).data.video;
+          if (video) {
+            login = video.owner && video.owner.login;
+            date = video.createdAt || video.publishedAt || null;
+            vodLengthSeconds = Number(video.lengthSeconds) || 0;
+            var nodes =
+              video.muteInfo &&
+              video.muteInfo.mutedSegmentConnection &&
+              video.muteInfo.mutedSegmentConnection.nodes;
+            mutedSegments = Array.isArray(nodes)
+              ? nodes.map(function (n) {
+                  return { offset: Number(n.offset) || 0, duration: Number(n.duration) || 0 };
+                })
+              : [];
+          }
+        } catch (e) {}
+        updateLegend();
+        if (login) {
+          matchTrack(login, date);
+        } else {
+          matchPending = false;
+          resolveSelection();
+        }
+      },
+      onerror: function () {
+        matchPending = false;
+        resolveSelection();
+      },
+    });
+  }
+
+  function matchTrack(login, date) {
+    var url =
+      SERVER + '/api/public/streams/audio-tracks/match?channel=' + encodeURIComponent(login) +
+      (date ? '&date=' + encodeURIComponent(date) : '');
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: url,
+      onload: function (res) {
+        try {
+          autoMatchedTrack = (JSON.parse(res.responseText).item) || null;
+        } catch (e) {
+          autoMatchedTrack = null;
+        }
+        matchPending = false;
+        resolveSelection();
+      },
+      onerror: function () {
+        matchPending = false;
+        resolveSelection();
+      },
+    });
+  }
+
+  function ensureTrackInList(track) {
+    if (!findTrack(track.id)) {
+      tracks.unshift(track);
+      renderOptions();
+    }
+  }
+
+  // Decide which track to play: a previous manual choice for this VOD wins,
+  // then the server's automatic match, otherwise wait or ask for a manual pick.
+  function resolveSelection() {
+    if (currentTrackId) return;
+
+    var saved = loadState();
+    if (saved && saved.trackId && findTrack(saved.trackId)) {
+      offset = typeof saved.offset === 'number' ? saved.offset : 0;
+      if (offsetInput) offsetInput.value = offset.toFixed(1);
+      selectTrack(saved.trackId);
+      applyMode(saved.mode === 'record' || saved.mode === 'both' ? saved.mode : 'twitch');
+      return;
+    }
+
+    if (autoMatchedTrack) {
+      ensureTrackInList(autoMatchedTrack);
+      selectTrack(autoMatchedTrack.id);
+      setStatus('Дорожка найдена автоматически');
+      return;
+    }
+
+    if (matchPending) {
+      setStatus('Ищу дорожку для этого VOD...');
+    } else if (!tracks.length) {
+      setStatus('На сервере нет аудиодорожек');
+    } else {
+      setStatus('Дорожка для этого VOD не найдена — выберите вручную');
+    }
+  }
+
+  function updateLegend() {
+    if (!legendEl) return;
+    if (mutedSegments && mutedSegments.length) {
+      legendEl.style.display = 'block';
+      legendEl.textContent = '🔴 На таймлайне отмечены заглушённые участки: ' + mutedSegments.length;
+    } else {
+      legendEl.style.display = 'none';
+    }
+  }
+
+  function renderMutedOverlay() {
+    if (!mutedSegments || !mutedSegments.length) return;
+    var bar = document.querySelector('[data-a-target="player-seekbar"]');
+    if (!bar) return;
+
+    var total =
+      boundVideo && isFinite(boundVideo.duration) && boundVideo.duration > 0
+        ? boundVideo.duration
+        : vodLengthSeconds;
+    if (!total) return;
+
+    var overlay = bar.querySelector('.tsr-muted-overlay');
+    if (
+      overlay &&
+      overlay.getAttribute('data-total') === String(Math.round(total)) &&
+      overlay.getAttribute('data-count') === String(mutedSegments.length)
+    ) {
+      return; // already drawn for this duration and segment set
+    }
+
+    if (!overlay) {
+      if (getComputedStyle(bar).position === 'static') bar.style.position = 'relative';
+      overlay = document.createElement('div');
+      overlay.className = 'tsr-muted-overlay';
+      overlay.style.position = 'absolute';
+      overlay.style.left = '0';
+      overlay.style.top = '0';
+      overlay.style.right = '0';
+      overlay.style.bottom = '0';
+      overlay.style.pointerEvents = 'none';
+      overlay.style.zIndex = '15';
+      bar.appendChild(overlay);
+    }
+
+    overlay.innerHTML = '';
+    for (var i = 0; i < mutedSegments.length; i++) {
+      var seg = mutedSegments[i];
+      var leftPct = (seg.offset / total) * 100;
+      var widthPct = (seg.duration / total) * 100;
+      if (!isFinite(leftPct)) continue;
+      var mark = document.createElement('div');
+      mark.style.position = 'absolute';
+      mark.style.top = '0';
+      mark.style.bottom = '0';
+      mark.style.left = Math.max(0, leftPct) + '%';
+      mark.style.width = Math.max(0.15, widthPct) + '%';
+      mark.style.background = 'rgba(229,72,77,0.65)';
+      mark.title = 'Оригинал заглушён здесь';
+      overlay.appendChild(mark);
+    }
+    overlay.setAttribute('data-total', String(Math.round(total)));
+    overlay.setAttribute('data-count', String(mutedSegments.length));
   }
 
   function selectTrack(id) {
@@ -307,11 +490,16 @@ export function buildTwitchAudioUserscript(origin: string): string {
     statusEl = el('div', { opacity: '0.7', minHeight: '16px' }, '');
     bodyEl.appendChild(statusEl);
 
+    legendEl = el('div', { opacity: '0.7', marginTop: '4px', display: 'none' }, '');
+    bodyEl.appendChild(legendEl);
+
     panel.appendChild(bodyEl);
     document.body.appendChild(panel);
 
     renderOptions();
+    updateLegend();
     fetchTracks();
+    fetchVodMeta();
   }
 
   function removePanel() {
@@ -321,6 +509,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     selectEl = null;
     statusEl = null;
     offsetInput = null;
+    legendEl = null;
     modeButtons = {};
   }
 
@@ -331,6 +520,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
       audio.pause();
       currentTrackId = null;
       boundVideo = null;
+      metaVodId = null;
+      autoMatchedTrack = null;
+      mutedSegments = [];
+      vodLengthSeconds = 0;
       removePanel();
     }
 
@@ -345,6 +538,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
 
     syncNow(false);
+    renderMutedOverlay();
 
     if (mode !== 'twitch' && currentTrackId && !audio.error) {
       var v = getVideo();
