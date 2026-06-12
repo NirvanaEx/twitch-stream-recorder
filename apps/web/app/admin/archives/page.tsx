@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../lib/api";
-import { formatFileSize, formatPeriod, withAuthToken } from "../../lib/media";
+import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
@@ -42,6 +42,7 @@ type ArchiveItem = {
   telegramParts: TelegramPart[];
   localFileDeletedAt: string | null;
   audioOnly: boolean;
+  durationSec: number | null;
 };
 
 type ArchivesResponse = {
@@ -238,7 +239,9 @@ export default function ArchivesPage() {
                         {archive.startedAt ? new Date(archive.startedAt).toLocaleString() : "—"}
                       </td>
                       <td className="col-meta">
-                        {formatPeriod(archive.startedAt, archive.endedAt)}
+                        {archive.durationSec
+                          ? formatSeconds(archive.durationSec)
+                          : formatPeriod(archive.startedAt, archive.endedAt)}
                       </td>
                       <td className="col-meta">
                         <span

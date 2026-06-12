@@ -236,8 +236,8 @@ export class PublicStreamsController {
       audioOnly: boolean;
     },
   ) {
-    // Parts carry the real recording duration; the startedAt/endedAt diff
-    // overstates it when the recorder joined the stream late.
+    // Prefer the probed media length; fall back to the parts sum, then to the
+    // stream span (which overstates it when the recorder joined late).
     const partsDuration = session.telegramParts.reduce(
       (acc, part) => acc + (part.durationSec ?? 0),
       0,
@@ -256,7 +256,8 @@ export class PublicStreamsController {
       channelLogin: session.channel.twitchLogin,
       channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
       startedAt: session.startedAt?.toISOString() ?? null,
-      durationSec: partsDuration > 0 ? partsDuration : timestampsDuration,
+      durationSec:
+        session.durationSec ?? (partsDuration > 0 ? partsDuration : timestampsDuration),
       audioOnly: session.audioOnly,
       audioUrl: `/api/public/streams/${session.id}/audio`,
     };

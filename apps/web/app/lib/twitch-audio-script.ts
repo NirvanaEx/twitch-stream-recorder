@@ -17,8 +17,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.1
-// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку для VOD и подсвечивает заглушённые участки.
+// @version      1.2
+// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
 // @connect      ${hostname}
@@ -36,13 +36,23 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   var audio = document.createElement('audio');
   audio.preload = 'auto';
+  audio.style.display = 'none';
 
   var tracks = [];
   var currentTrackId = null;
+  var trackDurationSec = 0;
   var mode = 'twitch'; // twitch | record | both
   var offset = 0;
   var boundVideo = null;
   var lastUrl = '';
+
+  // An http server cannot be loaded into an <audio> element on the https
+  // Twitch page (mixed content), so in that case we pull the file through the
+  // privileged GM_xmlhttpRequest and play it from a blob instead.
+  var mixedContent = location.protocol === 'https:' && /^http:\/\//i.test(SERVER);
+  var audioObjectUrl = null;
+  var blobLoadingForId = null;
+  var blobTriedForId = null;
 
   // VOD metadata fetched from Twitch GQL for the current /videos/<id> page.
   var metaVodId = null;
@@ -273,16 +283,25 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   function updateLegend() {
     if (!legendEl) return;
+    var lines = [];
+    if (currentTrackId && trackDurationSec) {
+      lines.push('🟢 Зелёным — где на таймлайне есть звук записи');
+    }
     if (mutedSegments && mutedSegments.length) {
+      lines.push('🔴 Красным — заглушённые участки оригинала: ' + mutedSegments.length);
+    }
+    if (lines.length) {
       legendEl.style.display = 'block';
-      legendEl.textContent = '🔴 На таймлайне отмечены заглушённые участки: ' + mutedSegments.length;
+      legendEl.textContent = lines.join('\n');
+      legendEl.style.whiteSpace = 'pre-line';
     } else {
       legendEl.style.display = 'none';
     }
   }
 
-  function renderMutedOverlay() {
-    if (!mutedSegments || !mutedSegments.length) return;
+  // Draw two things on the Twitch seekbar: a green band where the recording's
+  // audio covers the VOD, and red marks where Twitch muted the original.
+  function renderTimelineOverlay() {
     var bar = document.querySelector('[data-a-target="player-seekbar"]');
     if (!bar) return;
 
@@ -292,19 +311,25 @@ export function buildTwitchAudioUserscript(origin: string): string {
         : vodLengthSeconds;
     if (!total) return;
 
-    var overlay = bar.querySelector('.tsr-muted-overlay');
-    if (
-      overlay &&
-      overlay.getAttribute('data-total') === String(Math.round(total)) &&
-      overlay.getAttribute('data-count') === String(mutedSegments.length)
-    ) {
-      return; // already drawn for this duration and segment set
+    var recStart = getRecStartInVod();
+    var hasCoverage = Boolean(currentTrackId && trackDurationSec);
+    var key = [
+      Math.round(total),
+      mutedSegments.length,
+      Math.round(recStart),
+      Math.round(trackDurationSec || 0),
+      hasCoverage ? 1 : 0,
+    ].join('|');
+
+    var overlay = bar.querySelector('.tsr-timeline-overlay');
+    if (overlay && overlay.getAttribute('data-key') === key) {
+      return;
     }
 
     if (!overlay) {
       if (getComputedStyle(bar).position === 'static') bar.style.position = 'relative';
       overlay = document.createElement('div');
-      overlay.className = 'tsr-muted-overlay';
+      overlay.className = 'tsr-timeline-overlay';
       overlay.style.position = 'absolute';
       overlay.style.left = '0';
       overlay.style.top = '0';
@@ -316,23 +341,97 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
 
     overlay.innerHTML = '';
+
+    if (hasCoverage) {
+      var leftPct = Math.max(0, (recStart / total) * 100);
+      var widthPct = Math.min(100 - leftPct, (trackDurationSec / total) * 100);
+      var cov = document.createElement('div');
+      cov.style.position = 'absolute';
+      cov.style.top = '0';
+      cov.style.bottom = '0';
+      cov.style.left = leftPct + '%';
+      cov.style.width = Math.max(0.3, widthPct) + '%';
+      cov.style.background = 'rgba(63,213,109,0.35)';
+      cov.style.borderLeft = '2px solid rgba(63,213,109,0.9)';
+      cov.title = 'Здесь есть звук записи';
+      overlay.appendChild(cov);
+    }
+
     for (var i = 0; i < mutedSegments.length; i++) {
       var seg = mutedSegments[i];
-      var leftPct = (seg.offset / total) * 100;
-      var widthPct = (seg.duration / total) * 100;
-      if (!isFinite(leftPct)) continue;
+      var mLeft = (seg.offset / total) * 100;
+      var mWidth = (seg.duration / total) * 100;
+      if (!isFinite(mLeft)) continue;
       var mark = document.createElement('div');
       mark.style.position = 'absolute';
       mark.style.top = '0';
       mark.style.bottom = '0';
-      mark.style.left = Math.max(0, leftPct) + '%';
-      mark.style.width = Math.max(0.15, widthPct) + '%';
-      mark.style.background = 'rgba(229,72,77,0.65)';
+      mark.style.left = Math.max(0, mLeft) + '%';
+      mark.style.width = Math.max(0.15, mWidth) + '%';
+      mark.style.background = 'rgba(229,72,77,0.7)';
       mark.title = 'Оригинал заглушён здесь';
       overlay.appendChild(mark);
     }
-    overlay.setAttribute('data-total', String(Math.round(total)));
-    overlay.setAttribute('data-count', String(mutedSegments.length));
+
+    overlay.setAttribute('data-key', key);
+  }
+
+  function clearAudioObjectUrl() {
+    if (audioObjectUrl) {
+      try {
+        URL.revokeObjectURL(audioObjectUrl);
+      } catch (e) {}
+      audioObjectUrl = null;
+    }
+  }
+
+  // Pull the audio file through GM_xmlhttpRequest (privileged — bypasses the
+  // mixed-content block) and play it from a blob URL.
+  function loadAudioBlob(track) {
+    if (blobLoadingForId === track.id) return;
+    blobLoadingForId = track.id;
+    blobTriedForId = track.id;
+    setStatus('Загружаю аудио...');
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: SERVER + track.audioUrl,
+      responseType: 'arraybuffer',
+      onprogress: function (e) {
+        if (e && e.lengthComputable && e.total) {
+          setStatus('Загружаю аудио ' + Math.round((e.loaded / e.total) * 100) + '%...');
+        }
+      },
+      onload: function (res) {
+        blobLoadingForId = null;
+        if (currentTrackId !== track.id) return;
+        try {
+          clearAudioObjectUrl();
+          var blob = new Blob([res.response], { type: 'audio/mp4' });
+          audioObjectUrl = URL.createObjectURL(blob);
+          audio.src = audioObjectUrl;
+          audio.load();
+          setStatus('Аудио загружено');
+          syncNow(true);
+        } catch (e) {
+          setStatus('Не удалось загрузить аудио');
+        }
+      },
+      onerror: function () {
+        blobLoadingForId = null;
+        setStatus('Сервер недоступен — аудио не загружено');
+      },
+    });
+  }
+
+  function loadAudioSource(track) {
+    clearAudioObjectUrl();
+    if (mixedContent) {
+      loadAudioBlob(track);
+    } else {
+      audio.src = SERVER + track.audioUrl;
+      audio.load();
+      setStatus('Дорожка выбрана');
+    }
   }
 
   function selectTrack(id) {
@@ -340,23 +439,40 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (selectEl) selectEl.value = currentTrackId || '';
     if (currentTrackId) {
       var track = findTrack(currentTrackId);
-      audio.src = track ? SERVER + track.audioUrl : '';
-      audio.load();
-      setStatus('Дорожка выбрана');
+      trackDurationSec = (track && track.durationSec) || 0;
+      blobTriedForId = null;
+      if (track) loadAudioSource(track);
       // Picking a track with the original still playing is confusing — switch
       // straight to record-only so the selection is actually heard.
       if (mode === 'twitch') {
         applyMode('record');
       }
     } else {
+      trackDurationSec = 0;
       audio.pause();
       audio.removeAttribute('src');
+      clearAudioObjectUrl();
       var vv = getVideo();
       if (vv) vv.muted = false;
     }
     saveState();
     updateNowPlaying();
+    updateLegend();
     syncNow(true);
+  }
+
+  // Where in the VOD the recording begins. Recordings usually run until the
+  // stream ends, so a track shorter than the VOD started that much later —
+  // aligning to the tail lets mid-stream recordings sync without a huge offset.
+  function getRecStartInVod() {
+    if (!trackDurationSec) return 0;
+    var total =
+      boundVideo && isFinite(boundVideo.duration) && boundVideo.duration > 0
+        ? boundVideo.duration
+        : vodLengthSeconds;
+    if (!total) return 0;
+    var start = total - trackDurationSec;
+    return start > 1 ? start : 0;
   }
 
   function applyMode(next) {
@@ -395,7 +511,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (mode === 'record' && !v.muted) v.muted = true;
     if (mode === 'both' && v.muted) v.muted = false;
     if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
-    var target = v.currentTime + offset;
+    var target = v.currentTime - getRecStartInVod() + offset;
+    if (target < 0 || (trackDurationSec && target > trackDurationSec + 1)) {
+      // Outside the recorded range — nothing to play here.
+      if (!audio.paused) audio.pause();
+      return;
+    }
     if ((force || Math.abs(audio.currentTime - target) > MAX_DRIFT) && isFinite(target) && target >= 0) {
       audio.currentTime = target;
     }
@@ -405,7 +526,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       var played = audio.play();
       if (played && played.catch) {
         played.catch(function () {
-          setStatus('Браузер заблокировал звук — кликните по странице и нажмите play.');
+          setStatus('Браузер заблокировал звук — кликните по плееру, затем по «Запись».');
         });
       }
     }
@@ -456,6 +577,81 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var headerTitleEl = null;
   var toggleHintEl = null;
 
+  function applySavedPosition() {
+    if (!panel) return;
+    var pos = null;
+    try {
+      pos = JSON.parse(localStorage.getItem('tsr-audio-pos') || 'null');
+    } catch (e) {}
+    if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+      var maxLeft = Math.max(0, window.innerWidth - 60);
+      var maxTop = Math.max(0, window.innerHeight - 40);
+      panel.style.left = Math.min(Math.max(0, pos.left), maxLeft) + 'px';
+      panel.style.top = Math.min(Math.max(0, pos.top), maxTop) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    }
+  }
+
+  // Let the user drag the panel by its header. A real drag suppresses the
+  // collapse-toggle click that would otherwise fire on pointer release.
+  function enableDrag(header) {
+    var startX = 0;
+    var startY = 0;
+    var baseLeft = 0;
+    var baseTop = 0;
+    var dragging = false;
+    var moved = false;
+
+    header.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      dragging = true;
+      moved = false;
+      var rect = panel.getBoundingClientRect();
+      baseLeft = rect.left;
+      baseTop = rect.top;
+      startX = e.clientX;
+      startY = e.clientY;
+      try {
+        header.setPointerCapture(e.pointerId);
+      } catch (err) {}
+    });
+
+    header.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - startX;
+      var dy = e.clientY - startY;
+      if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      moved = true;
+      var maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
+      var maxTop = Math.max(0, window.innerHeight - 40);
+      panel.style.left = Math.min(Math.max(0, baseLeft + dx), maxLeft) + 'px';
+      panel.style.top = Math.min(Math.max(0, baseTop + dy), maxTop) + 'px';
+      panel.style.right = 'auto';
+      panel.style.bottom = 'auto';
+    });
+
+    header.addEventListener('pointerup', function (e) {
+      if (!dragging) return;
+      dragging = false;
+      try {
+        header.releasePointerCapture(e.pointerId);
+      } catch (err) {}
+      if (moved) {
+        suppressClick = true;
+        var rect = panel.getBoundingClientRect();
+        try {
+          localStorage.setItem(
+            'tsr-audio-pos',
+            JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }),
+          );
+        } catch (err) {}
+      }
+    });
+  }
+
+  var suppressClick = false;
+
   function createPanel() {
     // Bottom-LEFT, away from the VOD chat which sits on the right.
     panel = el('div', {
@@ -467,20 +663,26 @@ export function buildTwitchAudioUserscript(origin: string): string {
     });
 
     var header = el('div', {
-      padding: '8px 10px', cursor: 'pointer', display: 'flex',
+      padding: '8px 10px', cursor: 'move', display: 'flex',
       justifyContent: 'space-between', alignItems: 'center', fontWeight: '600', gap: '10px',
+      userSelect: 'none', touchAction: 'none',
     });
     headerTitleEl = el('span', null, '🎧 Звук записи (TSR)');
     header.appendChild(headerTitleEl);
     toggleHintEl = el('span', { opacity: '0.6' }, '▾');
     header.appendChild(toggleHintEl);
     header.addEventListener('click', function () {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       collapsed = !collapsed;
       try {
         localStorage.setItem('tsr-audio-collapsed', collapsed ? '1' : '0');
       } catch (e) {}
       applyCollapsed();
     });
+    enableDrag(header);
     panel.appendChild(header);
 
     bodyEl = el('div', { padding: '0 10px 10px 10px' });
@@ -550,6 +752,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     updateLegend();
     updateNowPlaying();
     applyCollapsed();
+    applySavedPosition();
     fetchTracks();
     fetchVodMeta();
   }
@@ -591,17 +794,35 @@ export function buildTwitchAudioUserscript(origin: string): string {
     modeButtons = {};
   }
 
+  // A direct <audio src> load can fail on the https Twitch page when the
+  // server is http (mixed content). Retry once through the blob loader.
+  audio.addEventListener('error', function () {
+    if (!currentTrackId || mixedContent) return;
+    if (blobTriedForId === currentTrackId) return;
+    var track = findTrack(currentTrackId);
+    if (track) {
+      setStatus('Прямая загрузка не удалась — пробую через прокси...');
+      loadAudioBlob(track);
+    }
+  });
+
+  try {
+    if (document.body) document.body.appendChild(audio);
+  } catch (e) {}
+
   function tick() {
     // Twitch is a SPA: react to URL changes without page reloads.
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       audio.pause();
       currentTrackId = null;
+      trackDurationSec = 0;
       boundVideo = null;
       metaVodId = null;
       autoMatchedTrack = null;
       mutedSegments = [];
       vodLengthSeconds = 0;
+      clearAudioObjectUrl();
       removePanel();
     }
 
@@ -616,7 +837,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
 
     syncNow(false);
-    renderMutedOverlay();
+    renderTimelineOverlay();
 
     if (mode !== 'twitch' && currentTrackId && !audio.error) {
       var v = getVideo();

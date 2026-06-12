@@ -49,6 +49,10 @@ model StreamSession {
   playbackPath       String?
   previewImageUrl    String?
   fileSizeBytes      String?
+  // Actual recorded length in seconds (probed from the output file). Unlike
+  // endedAt-startedAt it reflects when capture really started — important when
+  // the recorder joined the stream partway through.
+  durationSec        Int?
   errorMessage       String?
   chatAvailable      Boolean   @default(false)
   chatPath           String?
