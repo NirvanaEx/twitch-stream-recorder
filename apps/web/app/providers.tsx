@@ -96,6 +96,8 @@ type Dictionary = {
     added: string;
     autoRecordingStarted: string;
     autoRecordLabel: string;
+    audioOnlyLabel: string;
+    audioOnlyHint: string;
     autoRecordWaiting: string;
     refreshHint: string;
     twitchSetupTitle: string;
@@ -412,6 +414,9 @@ const dictionaries: Record<Locale, Dictionary> = {
       added: "Канал добавлен.",
       autoRecordingStarted: "Эфир уже шел, запись запущена автоматически.",
       autoRecordLabel: "Автозапись",
+      audioOnlyLabel: "Только звук",
+      audioOnlyHint:
+        "Записывать только аудиодорожку (поток audio_only, без видео). Удобно, когда стример хранит VOD: звук накладывается на VOD скриптом. Действует со следующей записи.",
       autoRecordWaiting: "Автозапись включена. Жду старта следующего эфира.",
       refreshHint: "Статус обновляется автоматически. Кнопка «Обновить» нужна только для ручной проверки.",
       twitchSetupTitle: "Twitch API не настроен, включен публичный режим.",
@@ -737,6 +742,9 @@ const dictionaries: Record<Locale, Dictionary> = {
       added: "Channel added.",
       autoRecordingStarted: "The stream was already live, so recording started automatically.",
       autoRecordLabel: "Auto record",
+      audioOnlyLabel: "Audio only",
+      audioOnlyHint:
+        "Record only the audio track (the audio_only stream variant, no video). Useful when the streamer keeps VODs: the script overlays the sound on the VOD. Takes effect from the next recording.",
       autoRecordWaiting: "Auto record is enabled. Waiting for the next stream to start.",
       refreshHint: "Status updates automatically. Use Refresh only for a manual recheck.",
       twitchSetupTitle: "Twitch API is not configured, public mode is enabled.",

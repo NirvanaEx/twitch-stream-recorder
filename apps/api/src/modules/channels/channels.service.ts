@@ -44,6 +44,7 @@ export class ChannelsService {
           profileImageUrl: channel.profileImageUrl,
           isEnabled: channel.isEnabled,
           autoRecord: channel.autoRecord,
+          audioOnly: channel.audioOnly,
           manualStopUntilOffline: channel.manualStopUntilOffline,
           preferredQuality: channel.preferredQuality,
           isLive: channel.isLive,
@@ -151,6 +152,9 @@ export class ChannelsService {
         ...(dto.displayName !== undefined ? { displayName: dto.displayName.trim() } : {}),
         ...(dto.isEnabled !== undefined ? { isEnabled: dto.isEnabled } : {}),
         ...(dto.autoRecord !== undefined ? { autoRecord: dto.autoRecord } : {}),
+        // Takes effect from the NEXT recording: an active capture keeps the
+        // mode it was started with.
+        ...(dto.audioOnly !== undefined ? { audioOnly: dto.audioOnly } : {}),
         ...(dto.preferredQuality !== undefined
           ? { preferredQuality: dto.preferredQuality }
           : {}),

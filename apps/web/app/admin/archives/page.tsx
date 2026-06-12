@@ -41,6 +41,7 @@ type ArchiveItem = {
   telegramChatUrl: string | null;
   telegramParts: TelegramPart[];
   localFileDeletedAt: string | null;
+  audioOnly: boolean;
 };
 
 type ArchivesResponse = {
@@ -227,6 +228,9 @@ export default function ArchivesPage() {
                     <tr key={archive.id}>
                       <td>@{archive.channelLogin}</td>
                       <td className="col-truncate" title={archive.title ?? ""}>
+                        {archive.audioOnly ? (
+                          <span title={t.channels.audioOnlyLabel}>🎧 </span>
+                        ) : null}
                         {archive.title || archive.channelDisplayName}
                       </td>
                       <td className="col-meta">{archive.categoryName ?? "—"}</td>

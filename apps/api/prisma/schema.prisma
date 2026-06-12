@@ -17,6 +17,10 @@ model Channel {
   autoRecord       Boolean   @default(true)
   manualStopUntilOffline Boolean @default(false)
   preferredQuality String    @default("best")
+  // Record only the audio_only Twitch stream variant (no video at all).
+  // Useful when the streamer keeps VODs: the audio overlays the VOD via the
+  // userscript, so storing the video again is a waste.
+  audioOnly        Boolean   @default(false)
   isLive           Boolean   @default(false)
   currentTitle     String?
   currentGameName  String?
@@ -50,6 +54,9 @@ model StreamSession {
   chatPath           String?
   stoppedByUser      Boolean   @default(false)
   savedChatOffsetSec Int?
+  // The session was captured in audio-only mode: playbackPath points to an
+  // .m4a, there is no video, and the Telegram copy is a single audio message.
+  audioOnly          Boolean   @default(false)
   // Telegram offload: none | pending | uploading | uploaded | error
   telegramStatus     String    @default("none")
   telegramUploadedAt DateTime?

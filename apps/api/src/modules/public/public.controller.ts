@@ -18,12 +18,20 @@ import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
 // A session whose local file is gone is still watchable when its parts were
-// uploaded to Telegram; the public video endpoint streams them back.
+// uploaded to Telegram; the public video endpoint streams them back. An
+// audio-only session has no parts — its Telegram copy is one audio message.
 function isTelegramPlayable(
   session: StreamSession & { telegramParts: TelegramUploadPart[] },
   locallyReady: boolean,
 ) {
-  return !locallyReady && session.telegramStatus === "uploaded" && session.telegramParts.length > 0;
+  if (locallyReady || session.telegramStatus !== "uploaded") {
+    return false;
+  }
+
+  return (
+    session.telegramParts.length > 0 ||
+    (session.audioOnly && Boolean(session.telegramAudioMessageId))
+  );
 }
 
 const DEFAULT_PAGE_SIZE = 12;
@@ -279,6 +287,7 @@ export class PublicStreamsController {
         // Public clients hit the public video endpoint — never the admin one.
         videoUrl: `/api/public/streams/${session.id}/video`,
         videoSource: playback.videoReady ? "local" : "telegram",
+        audioOnly: session.audioOnly,
         telegramParts: telegramPlayable
           ? session.telegramParts.map((part) => ({
               partIndex: part.partIndex,
@@ -333,7 +342,7 @@ export class PublicStreamsController {
   async streamVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      select: { id: true, videoStatus: true, playbackPath: true },
+      select: { id: true, videoStatus: true, playbackPath: true, audioOnly: true },
     });
 
     if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
@@ -350,17 +359,23 @@ export class PublicStreamsController {
     }
 
     if (!local) {
-      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
-      let downloadName: string | null = null;
+      const full = await this.prisma.streamSession.findUnique({
+        where: { id },
+        include: { channel: true },
+      });
+      const safeName = (full?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
 
-      if (req.query?.download === "1") {
-        const full = await this.prisma.streamSession.findUnique({
-          where: { id },
-          include: { channel: true },
-        });
-        const safeName = (full?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-        downloadName = `${safeName}-${id}-part${partIndex}.mp4`;
+      // Audio-only sessions have no video parts in Telegram — their copy is
+      // a single audio message served through the same endpoint.
+      if (session.audioOnly) {
+        const downloadName = req.query?.download === "1" ? `${safeName}-${id}.m4a` : null;
+        await this.telegramStreamService.streamAudioToResponse(id, req, res, downloadName);
+        return;
       }
+
+      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
+      const downloadName =
+        req.query?.download === "1" ? `${safeName}-${id}-part${partIndex}.mp4` : null;
 
       await this.telegramStreamService.streamToResponse(id, partIndex, req, res, downloadName);
       return;
@@ -368,6 +383,8 @@ export class PublicStreamsController {
 
     const { absolutePath, stat } = local;
     const range = req.headers.range as string | undefined;
+    const isAudioFile = absolutePath.toLowerCase().endsWith(".m4a");
+    const contentType = isAudioFile ? "audio/mp4" : "video/mp4";
 
     if (req.query?.download === "1") {
       const full = await this.prisma.streamSession.findUnique({
@@ -375,7 +392,10 @@ export class PublicStreamsController {
         include: { channel: true },
       });
       const safeName = (full?.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-      res.setHeader("Content-Disposition", `attachment; filename="${safeName}-${id}.mp4"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${safeName}-${id}.${isAudioFile ? "m4a" : "mp4"}"`,
+      );
     }
 
     if (range) {
@@ -388,7 +408,7 @@ export class PublicStreamsController {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
-        "Content-Type": "video/mp4",
+        "Content-Type": contentType,
       });
       createReadStream(absolutePath, { start, end }).pipe(res);
       return;
@@ -396,7 +416,7 @@ export class PublicStreamsController {
 
     res.writeHead(200, {
       "Content-Length": stat.size,
-      "Content-Type": "video/mp4",
+      "Content-Type": contentType,
       "Accept-Ranges": "bytes",
     });
     createReadStream(absolutePath).pipe(res);
