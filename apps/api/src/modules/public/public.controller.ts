@@ -1,13 +1,15 @@
 import {
   Controller,
   Get,
+  Header,
   NotFoundException,
   Param,
   Query,
   Req,
   Res,
 } from "@nestjs/common";
-import { createReadStream, type Stats } from "node:fs";
+import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
+import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
@@ -109,6 +111,134 @@ export class PublicStreamsController {
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     };
+  }
+
+  /**
+   * Audio tracks the Tampermonkey userscript can overlay on Twitch VODs.
+   * Declared before ":id" so the static segment wins the route match; CORS is
+   * open because the script calls this from twitch.tv.
+   */
+  @Get("audio-tracks")
+  @Header("Access-Control-Allow-Origin", "*")
+  async listAudioTracks() {
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        status: "completed",
+        audioDeletedAt: null,
+        OR: [{ audioPath: { not: null } }, { telegramAudioMessageId: { not: null } }],
+      },
+      include: {
+        channel: true,
+        telegramParts: { select: { durationSec: true } },
+      },
+      orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
+      take: 60,
+    });
+
+    const items = sessions
+      .filter(
+        (session) =>
+          (session.audioPath && existsSync(resolve(session.audioPath))) ||
+          session.telegramAudioMessageId,
+      )
+      .map((session) => {
+        // Parts carry the real recording duration; the startedAt/endedAt diff
+        // overstates it when the recorder joined the stream late.
+        const partsDuration = session.telegramParts.reduce(
+          (acc, part) => acc + (part.durationSec ?? 0),
+          0,
+        );
+        const timestampsDuration =
+          session.startedAt && session.endedAt
+            ? Math.max(
+                0,
+                Math.round(
+                  (session.endedAt.getTime() - session.startedAt.getTime()) / 1000,
+                ),
+              )
+            : null;
+
+        return {
+          id: session.id,
+          title: session.title,
+          channelLogin: session.channel.twitchLogin,
+          channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
+          startedAt: session.startedAt?.toISOString() ?? null,
+          durationSec: partsDuration > 0 ? partsDuration : timestampsDuration,
+          audioUrl: `/api/public/streams/${session.id}/audio`,
+        };
+      });
+
+    return { items };
+  }
+
+  @Get(":id/audio")
+  async streamAudio(@Param("id") id: string, @Req() req: any, @Res() res: any) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      include: { channel: true },
+    });
+
+    if (
+      !session ||
+      session.audioDeletedAt ||
+      (!session.audioPath && !session.telegramAudioMessageId)
+    ) {
+      throw new NotFoundException("Аудиодорожка не найдена.");
+    }
+
+    // The userscript loads this URL into an <audio> element on twitch.tv.
+    res.setHeader("Access-Control-Allow-Origin", "*");
+
+    let downloadName: string | null = null;
+
+    if (req.query?.download === "1") {
+      const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
+      downloadName = `${safeName}-${id}.m4a`;
+    }
+
+    const absolutePath = session.audioPath ? resolve(session.audioPath) : null;
+
+    if (!absolutePath || !existsSync(absolutePath)) {
+      // The local file is gone — stream the Telegram copy instead.
+      await this.telegramStreamService.streamAudioToResponse(id, req, res, downloadName);
+      return;
+    }
+
+    const stat = statSync(absolutePath);
+    const range = req.headers.range as string | undefined;
+
+    if (downloadName) {
+      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+    }
+
+    if (range) {
+      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
+      const start = Math.max(0, Number(rawStart) || 0);
+      const end = rawEnd ? Math.min(Number(rawEnd), stat.size - 1) : stat.size - 1;
+
+      if (start > end) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        res.end();
+        return;
+      }
+
+      res.writeHead(206, {
+        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": end - start + 1,
+        "Content-Type": "audio/mp4",
+      });
+      createReadStream(absolutePath, { start, end }).pipe(res);
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Length": stat.size,
+      "Content-Type": "audio/mp4",
+      "Accept-Ranges": "bytes",
+    });
+    createReadStream(absolutePath).pipe(res);
   }
 
   @Get(":id")

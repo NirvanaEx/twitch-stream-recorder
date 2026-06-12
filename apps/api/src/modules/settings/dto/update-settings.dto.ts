@@ -53,6 +53,18 @@ export class UpdateSettingsDto {
   @Max(3650)
   telegramKeepLocalDays?: number;
 
+  @IsOptional()
+  @IsBoolean()
+  audioTrackEnabled?: boolean;
+
+  // 0 disables the auto-deletion of audio tracks.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(3650)
+  audioKeepDays?: number;
+
   // Secrets: an empty string means "keep the stored value" so the settings
   // form can always submit the whole object without wiping them.
   @IsOptional()

@@ -1,5 +1,4 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { TelegramUploadPart } from "@prisma/client";
 import { Readable } from "node:stream";
 import { Api } from "telegram";
 import { returnBigInt } from "telegram/Helpers";
@@ -24,6 +23,16 @@ const DEFAULT_CACHE_MB = 192;
 // while; re-fetch the message when the cached one gets stale or rejected.
 const MEDIA_CACHE_TTL_MS = 5 * 60_000;
 
+// One Telegram message whose document we stream back over HTTP. cacheKey
+// scopes the media/chunk caches (a part id or an "audio:<sessionId>" tag).
+type StreamSource = {
+  cacheKey: string;
+  chatId: string;
+  messageId: string;
+  totalSize: number;
+  contentType: string;
+};
+
 @Injectable()
 export class TelegramStreamService {
   private readonly logger = new Logger(TelegramStreamService.name);
@@ -31,7 +40,7 @@ export class TelegramStreamService {
     string,
     { media: Api.TypeMessageMedia; fetchedAt: number }
   >();
-  // LRU chunk cache: key `${partId}:${alignedOffset}` -> raw 512 KB chunk.
+  // LRU chunk cache: key `${cacheKey}:${alignedOffset}` -> raw 512 KB chunk.
   private readonly chunkCache = new Map<string, Buffer>();
   private chunkCacheBytes = 0;
 
@@ -41,8 +50,8 @@ export class TelegramStreamService {
   ) {}
 
   /**
-   * Stream one uploaded part straight from Telegram into an HTTP response,
-   * honouring Range requests so the web player can seek.
+   * Stream one uploaded video part straight from Telegram into an HTTP
+   * response, honouring Range requests so the web player can seek.
    */
   async streamToResponse(
     sessionId: string,
@@ -71,9 +80,78 @@ export class TelegramStreamService {
       );
     }
 
+    await this.streamSourceToResponse(
+      {
+        cacheKey: part.id,
+        chatId: part.chatId,
+        messageId: part.messageId,
+        totalSize,
+        contentType: "video/mp4",
+      },
+      req,
+      res,
+      downloadName,
+    );
+  }
+
+  /**
+   * Stream the standalone audio track of a session from Telegram. Used when
+   * the local .m4a was already cleaned up but the Telegram copy still exists.
+   */
+  async streamAudioToResponse(
+    sessionId: string,
+    req: any,
+    res: any,
+    downloadName: string | null = null,
+  ) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (
+      !session ||
+      session.audioDeletedAt ||
+      !session.telegramAudioMessageId ||
+      !session.telegramAudioChatId
+    ) {
+      throw new NotFoundException(
+        `Telegram copy of the audio track for archive ${sessionId} was not found.`,
+      );
+    }
+
+    const totalSize = Number(session.audioSizeBytes ?? 0);
+
+    if (!Number.isFinite(totalSize) || totalSize <= 0) {
+      throw new NotFoundException(
+        `Audio track of archive ${sessionId} has no recorded size.`,
+      );
+    }
+
+    await this.streamSourceToResponse(
+      {
+        cacheKey: `audio:${session.id}`,
+        chatId: session.telegramAudioChatId,
+        messageId: session.telegramAudioMessageId,
+        totalSize,
+        contentType: "audio/mp4",
+      },
+      req,
+      res,
+      downloadName,
+    );
+  }
+
+  private async streamSourceToResponse(
+    source: StreamSource,
+    req: any,
+    res: any,
+    downloadName: string | null,
+  ) {
+    const totalSize = source.totalSize;
+
     // Resolve everything that can fail BEFORE writing the response head.
     const client = await this.telegramClientService.getClient();
-    let media = await this.resolveMedia(part);
+    let media = await this.resolveMedia(source);
 
     const range = req.headers.range as string | undefined;
     let start = 0;
@@ -99,7 +177,7 @@ export class TelegramStreamService {
 
     res.writeHead(statusCode, {
       "Content-Length": end - start + 1,
-      "Content-Type": "video/mp4",
+      "Content-Type": source.contentType,
       "Accept-Ranges": "bytes",
       // Let the browser keep fetched ranges (the mp4 index in particular) so
       // repeated seeks don't re-download them through Telegram.
@@ -109,11 +187,11 @@ export class TelegramStreamService {
         : {}),
     });
 
-    const resolveMedia = (force: boolean) => this.resolveMedia(part, force);
+    const resolveMedia = (force: boolean) => this.resolveMedia(source, force);
     const parallelChunks = this.getParallelChunks();
-    const cacheGet = (offset: number) => this.cacheGet(`${part.id}:${offset}`);
+    const cacheGet = (offset: number) => this.cacheGet(`${source.cacheKey}:${offset}`);
     const cachePut = (offset: number, buffer: Buffer) =>
-      this.cachePut(`${part.id}:${offset}`, buffer);
+      this.cachePut(`${source.cacheKey}:${offset}`, buffer);
 
     async function* byteRange() {
       let position = start;
@@ -235,7 +313,7 @@ export class TelegramStreamService {
     res.once("close", () => readable.destroy());
     readable.once("error", (error) => {
       this.logger.warn(
-        `Telegram stream for ${sessionId} part ${partIndex} failed: ${
+        `Telegram stream ${source.cacheKey} failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -294,27 +372,27 @@ export class TelegramStreamService {
     }
   }
 
-  private async resolveMedia(part: TelegramUploadPart, forceRefresh = false) {
-    const cached = this.mediaCache.get(part.id);
+  private async resolveMedia(source: StreamSource, forceRefresh = false) {
+    const cached = this.mediaCache.get(source.cacheKey);
 
     if (!forceRefresh && cached && Date.now() - cached.fetchedAt < MEDIA_CACHE_TTL_MS) {
       return cached.media;
     }
 
     const client = await this.telegramClientService.getClient();
-    const entity = await this.telegramClientService.resolveChat(part.chatId);
+    const entity = await this.telegramClientService.resolveChat(source.chatId);
     const messages = await client.getMessages(entity, {
-      ids: [Number(part.messageId)],
+      ids: [Number(source.messageId)],
     });
     const media = messages?.[0]?.media;
 
     if (!media) {
       throw new NotFoundException(
-        "The Telegram message with this video part no longer exists.",
+        "The Telegram message with this file no longer exists.",
       );
     }
 
-    this.mediaCache.set(part.id, { media, fetchedAt: Date.now() });
+    this.mediaCache.set(source.cacheKey, { media, fetchedAt: Date.now() });
     return media;
   }
 }

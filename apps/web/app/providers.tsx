@@ -20,6 +20,7 @@ type Dictionary = {
     recordingNow: string;
     archive: string;
     telegramStorage: string;
+    twitchAudio: string;
   };
   storage: {
     title: string;
@@ -189,6 +190,34 @@ type Dictionary = {
     telegramBotToken: string;
     telegramSecretSet: string;
     telegramSecretsHint: string;
+    audioTitle: string;
+    audioHint: string;
+    audioTrackEnabled: string;
+    audioKeepDays: string;
+    audioKeepDaysHint: string;
+  };
+  twitchAudio: {
+    title: string;
+    subtitle: string;
+    howTitle: string;
+    step1: string;
+    step2: string;
+    step3: string;
+    step4: string;
+    copyScript: string;
+    copied: string;
+    serverNote: string;
+    showScript: string;
+    hideScript: string;
+    tracksTitle: string;
+    tracksEmpty: string;
+    expireNote: string;
+    colChannel: string;
+    colTitle: string;
+    colDate: string;
+    colDuration: string;
+    download: string;
+    disabledNote: string;
   };
   errors: {
     apiUnavailable: string;
@@ -304,6 +333,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       recordingNow: "Сейчас пишется",
       archive: "Архив записей",
       telegramStorage: "Telegram",
+      twitchAudio: "Twitch аудио",
     },
     storage: {
       title: "Telegram-хранилище",
@@ -480,6 +510,41 @@ const dictionaries: Record<Locale, Dictionary> = {
       telegramSecretSet: "•••••• (задано)",
       telegramSecretsHint:
         "api_id/api_hash — с my.telegram.org, токен — у @BotFather. Пустое поле не меняет сохранённое значение.",
+      audioTitle: "Звуковая дорожка для Twitch",
+      audioHint:
+        "После записи звук сохраняется отдельным файлом (.m4a) и выгружается в Telegram. Его можно наложить на VOD в Twitch через скрипт со страницы «Twitch аудио».",
+      audioTrackEnabled: "Извлекать аудиодорожку из записей",
+      audioKeepDays: "Автоудаление аудио через, дней",
+      audioKeepDaysHint:
+        "Удаляются и локальный файл, и копия в Telegram (VOD на Twitch живёт ограниченное время). 0 — не удалять автоматически.",
+    },
+    twitchAudio: {
+      title: "Twitch аудио",
+      subtitle:
+        "Подмена звука в VOD на Twitch: рекордер сохраняет оригинальную аудиодорожку стрима, а Tampermonkey-скрипт накладывает её на VOD — там, где Twitch заглушил музыку.",
+      howTitle: "Как подключить",
+      step1: "Установите расширение Tampermonkey (Chrome / Firefox / Edge).",
+      step2: "Скопируйте скрипт кнопкой ниже.",
+      step3:
+        "В Tampermonkey нажмите «Создать новый скрипт», замените содержимое вставкой и сохраните (Ctrl+S).",
+      step4:
+        "Откройте любой VOD на twitch.tv — справа внизу появится панель: выберите дорожку и режим «Запись» или «Оба».",
+      copyScript: "Скопировать скрипт",
+      copied: "Скопировано ✓",
+      serverNote:
+        "Скрипт обращается к серверу по адресу {origin}. Этот адрес должен быть доступен из браузера, в котором вы смотрите Twitch — если смотрите не из домашней сети, откройте (пробросьте) порт наружу.",
+      showScript: "Показать скрипт",
+      hideScript: "Скрыть скрипт",
+      tracksTitle: "Доступные аудиодорожки",
+      tracksEmpty: "Аудиодорожек пока нет — они появятся после следующей завершённой записи.",
+      expireNote: "Аудиодорожки автоматически удаляются через {days} дн. после стрима.",
+      colChannel: "Канал",
+      colTitle: "Название",
+      colDate: "Дата",
+      colDuration: "Длительность",
+      download: "Скачать",
+      disabledNote:
+        "Извлечение аудиодорожки выключено в настройках — новые записи останутся без звука для Twitch.",
     },
     errors: {
       apiUnavailable: "API недоступен.",
@@ -593,6 +658,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       recordingNow: "Recording now",
       archive: "Archive",
       telegramStorage: "Telegram",
+      twitchAudio: "Twitch audio",
     },
     storage: {
       title: "Telegram storage",
@@ -769,6 +835,41 @@ const dictionaries: Record<Locale, Dictionary> = {
       telegramSecretSet: "•••••• (set)",
       telegramSecretsHint:
         "api_id/api_hash come from my.telegram.org, the token from @BotFather. Leave a field empty to keep the stored value.",
+      audioTitle: "Audio track for Twitch",
+      audioHint:
+        "After each recording the sound is saved as a standalone .m4a and uploaded to Telegram. The userscript from the \"Twitch audio\" page overlays it on the Twitch VOD.",
+      audioTrackEnabled: "Extract an audio track from recordings",
+      audioKeepDays: "Auto-delete audio after, days",
+      audioKeepDaysHint:
+        "Removes both the local file and the Telegram copy (Twitch VODs expire anyway). 0 disables auto-deletion.",
+    },
+    twitchAudio: {
+      title: "Twitch audio",
+      subtitle:
+        "Restore VOD sound on Twitch: the recorder keeps the original stream audio, and a Tampermonkey userscript overlays it on the VOD where Twitch muted the music.",
+      howTitle: "How to set up",
+      step1: "Install the Tampermonkey extension (Chrome / Firefox / Edge).",
+      step2: "Copy the script with the button below.",
+      step3:
+        "In Tampermonkey click \"Create a new script\", replace the contents with the clipboard and save (Ctrl+S).",
+      step4:
+        "Open any VOD on twitch.tv — a panel appears in the bottom-right: pick a track and the \"Recording\" or \"Both\" mode.",
+      copyScript: "Copy script",
+      copied: "Copied ✓",
+      serverNote:
+        "The script talks to the server at {origin}. That address must be reachable from the browser where you watch Twitch — forward the port if you are outside your home network.",
+      showScript: "Show script",
+      hideScript: "Hide script",
+      tracksTitle: "Available audio tracks",
+      tracksEmpty: "No audio tracks yet — they appear after the next finished recording.",
+      expireNote: "Audio tracks are deleted automatically {days} day(s) after the stream.",
+      colChannel: "Channel",
+      colTitle: "Title",
+      colDate: "Date",
+      colDuration: "Duration",
+      download: "Download",
+      disabledNote:
+        "Audio extraction is disabled in settings — new recordings will have no Twitch audio track.",
     },
     errors: {
       apiUnavailable: "API is unavailable.",

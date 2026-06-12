@@ -244,6 +244,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const settings = await this.getSettings();
       const configured = await this.telegramClientService.isConfigured();
 
+      // Audio tracks expire on their own schedule, regardless of whether the
+      // Telegram offload itself is configured or enabled.
+      await this.cleanupExpiredAudio(settings, configured);
+
       if (!configured || !settings.telegramChatId) {
         return;
       }
@@ -416,6 +420,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         startOffsetSec += partDurationSec;
       }
 
+      // Standalone audio track for the Twitch userscript: posted as one audio
+      // message. Best-effort — the video upload must not fail because of it.
+      if (session.audioPath && !session.telegramAudioMessageId && !session.audioDeletedAt) {
+        try {
+          await this.uploadAudioTrack(session, chatId);
+        } catch (error) {
+          this.logger.warn(
+            `${logPrefix} audio track upload failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
       // Chat backup: the messages live in the database, not in the video, so
       // a .tsr.json bundle is posted alongside the video. Best-effort — a
       // chat hiccup must not fail the video upload.
@@ -572,6 +590,143 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         rmSync(bundlePath, { force: true });
       } catch {
         // Best-effort temp cleanup.
+      }
+    }
+  }
+
+  /** Post the extracted .m4a to the channel and remember the message. */
+  private async uploadAudioTrack(session: SessionWithChannel, chatId: string) {
+    const audioPath = resolve(session.audioPath!);
+
+    if (!existsSync(audioPath) || statSync(audioPath).size === 0) {
+      return;
+    }
+
+    if (statSync(audioPath).size > this.getMaxPartBytes()) {
+      this.logger.warn(
+        `[telegram/${session.channel.twitchLogin}/${session.id}] audio track exceeds the Telegram size limit, keeping it local only.`,
+      );
+      return;
+    }
+
+    // probeVideoMeta only needs format.duration, which works for audio files
+    // too (the video stream entries just come back empty).
+    let durationSec = 0;
+    try {
+      durationSec = Math.round((await this.probeVideoMeta(audioPath)).durationSec);
+    } catch {
+      // Metadata is best-effort.
+    }
+
+    const client = await this.telegramClientService.getClient();
+    const entity = await this.telegramClientService.resolveChat(chatId);
+
+    const caption = [
+      `🎧 Звук: ${session.channel.displayName ?? session.channel.twitchLogin}`,
+      session.title ?? "",
+      session.startedAt
+        ? `📅 ${session.startedAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, 1024);
+
+    const message = await client.sendFile(entity, {
+      file: audioPath,
+      caption,
+      attributes: [
+        new Api.DocumentAttributeAudio({
+          duration: durationSec,
+          title: session.title ?? session.channel.twitchLogin,
+          performer: session.channel.displayName ?? session.channel.twitchLogin,
+        }),
+      ],
+    });
+
+    const media = message.media;
+    const fileId =
+      media instanceof Api.MessageMediaDocument && media.document instanceof Api.Document
+        ? String(media.document.id)
+        : null;
+
+    await this.prisma.streamSession.update({
+      where: { id: session.id },
+      data: {
+        telegramAudioChatId: chatId,
+        telegramAudioMessageId: String(message.id),
+        telegramAudioFileId: fileId,
+        telegramAudioUploadedAt: new Date(),
+      },
+    });
+
+    this.logger.log(
+      `[telegram/${session.channel.twitchLogin}/${session.id}] audio track uploaded.`,
+    );
+  }
+
+  /**
+   * Audio tracks are temporary by design — they exist to fix the sound of the
+   * matching Twitch VOD, which itself expires. After audioKeepDays both the
+   * local .m4a and the Telegram message are removed. A value of 0 disables
+   * the auto-deletion.
+   */
+  private async cleanupExpiredAudio(settings: AppSettings, telegramConfigured: boolean) {
+    if (settings.audioKeepDays <= 0) {
+      return;
+    }
+
+    const cutoff = new Date(Date.now() - settings.audioKeepDays * 24 * 60 * 60 * 1000);
+
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        audioDeletedAt: null,
+        endedAt: { lte: cutoff },
+        OR: [{ audioPath: { not: null } }, { telegramAudioMessageId: { not: null } }],
+      },
+      take: 20,
+    });
+
+    for (const session of sessions) {
+      try {
+        if (session.telegramAudioMessageId && session.telegramAudioChatId) {
+          // Without a working client the Telegram message cannot be revoked
+          // yet; skip and retry on a later tick instead of orphaning it.
+          if (!telegramConfigured) {
+            continue;
+          }
+
+          const client = await this.telegramClientService.getClient();
+          const entity = await this.telegramClientService.resolveChat(
+            session.telegramAudioChatId,
+          );
+          await client.deleteMessages(entity, [Number(session.telegramAudioMessageId)], {
+            revoke: true,
+          });
+        }
+
+        if (session.audioPath) {
+          const audioPath = resolve(session.audioPath);
+
+          if (existsSync(audioPath)) {
+            rmSync(audioPath, { force: true });
+          }
+        }
+
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: { audioDeletedAt: new Date() },
+        });
+
+        this.logger.log(
+          `Deleted expired audio track for session ${session.id}: older than ${settings.audioKeepDays} day(s).`,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to delete expired audio for session ${session.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
   }
