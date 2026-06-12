@@ -256,6 +256,11 @@ export class PublicStreamsController {
       channelLogin: session.channel.twitchLogin,
       channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
       startedAt: session.startedAt?.toISOString() ?? null,
+      // When the capture actually started (the session row is created right
+      // before streamlink spawns). Unlike startedAt (the Twitch go-live time)
+      // this anchors the track on the VOD timeline precisely even when the
+      // recorder joined mid-stream.
+      recordingStartedAt: session.createdAt.toISOString(),
       durationSec:
         session.durationSec ?? (partsDuration > 0 ? partsDuration : timestampsDuration),
       audioOnly: session.audioOnly,

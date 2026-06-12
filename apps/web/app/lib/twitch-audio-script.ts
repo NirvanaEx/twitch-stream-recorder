@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.3
+// @version      1.4
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -41,6 +41,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var tracks = [];
   var currentTrackId = null;
   var trackDurationSec = 0;
+  // Epoch ms of when the capture started; 0 = unknown (very old tracks).
+  var trackRecordStartMs = 0;
   var mode = 'twitch'; // twitch | record | both
   var offset = 0;
   var boundVideo = null;
@@ -57,6 +59,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
   // VOD metadata fetched from Twitch GQL for the current /videos/<id> page.
   var metaVodId = null;
   var vodLengthSeconds = 0;
+  // Epoch ms of the broadcast start — the zero point of the VOD timeline.
+  var vodCreatedAtMs = 0;
   var mutedSegments = []; // [{ offset, duration }]
   var autoMatchedTrack = null;
   var matchPending = false;
@@ -194,6 +198,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
           if (video) {
             login = video.owner && video.owner.login;
             date = video.createdAt || video.publishedAt || null;
+            vodCreatedAtMs = date ? (new Date(date).getTime() || 0) : 0;
             vodLengthSeconds = Number(video.lengthSeconds) || 0;
             var nodes =
               video.muteInfo &&
@@ -281,11 +286,20 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
   }
 
+  function fmtTime(sec) {
+    sec = Math.max(0, Math.round(sec));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    return (h > 0 ? h + ':' : '') + (m < 10 && h > 0 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
   function updateLegend() {
     if (!legendEl) return;
     var lines = [];
     if (currentTrackId && trackDurationSec) {
-      lines.push('🟢 Зелёным — где на таймлайне есть звук записи');
+      var recStart = getRecStartInVod();
+      lines.push('🟢 Запись на шкале: ' + fmtTime(recStart) + ' — ' + fmtTime(recStart + trackDurationSec));
     }
     if (mutedSegments && mutedSegments.length) {
       lines.push('🔴 Красным — заглушённые участки оригинала: ' + mutedSegments.length);
@@ -440,6 +454,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (currentTrackId) {
       var track = findTrack(currentTrackId);
       trackDurationSec = (track && track.durationSec) || 0;
+      trackRecordStartMs =
+        track && track.recordingStartedAt
+          ? (new Date(track.recordingStartedAt).getTime() || 0)
+          : 0;
       blobTriedForId = null;
       if (track) loadAudioSource(track);
       // Picking a track with the original still playing is confusing — switch
@@ -449,6 +467,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       }
     } else {
       trackDurationSec = 0;
+      trackRecordStartMs = 0;
       audio.pause();
       audio.removeAttribute('src');
       clearAudioObjectUrl();
@@ -461,18 +480,32 @@ export function buildTwitchAudioUserscript(origin: string): string {
     syncNow(true);
   }
 
-  // Where in the VOD the recording begins. Recordings usually run until the
-  // stream ends, so a track shorter than the VOD started that much later —
-  // aligning to the tail lets mid-stream recordings sync without a huge offset.
+  function getVodTotal() {
+    return boundVideo && isFinite(boundVideo.duration) && boundVideo.duration > 0
+      ? boundVideo.duration
+      : vodLengthSeconds;
+  }
+
+  // Where in the VOD the recording begins.
+  // Precise path: capture start minus broadcast start — both are known
+  // timestamps, so a recording that started mid-stream or stopped early lands
+  // exactly where it belongs. Fallback (no dates): assume the recording ran
+  // until the stream end and align it to the tail.
   function getRecStartInVod() {
-    if (!trackDurationSec) return 0;
-    var total =
-      boundVideo && isFinite(boundVideo.duration) && boundVideo.duration > 0
-        ? boundVideo.duration
-        : vodLengthSeconds;
-    if (!total) return 0;
-    var start = total - trackDurationSec;
-    return start > 1 ? start : 0;
+    var total = getVodTotal();
+
+    if (trackRecordStartMs && vodCreatedAtMs) {
+      var start = (trackRecordStartMs - vodCreatedAtMs) / 1000;
+      // Sanity check: a start outside the VOD means the dates do not belong
+      // to this broadcast (manually picked foreign track) — fall through.
+      if (isFinite(start) && start > -600 && (!total || start < total)) {
+        return Math.max(0, start);
+      }
+    }
+
+    if (!trackDurationSec || !total) return 0;
+    var tail = total - trackDurationSec;
+    return tail > 1 ? tail : 0;
   }
 
   function applyMode(next) {
@@ -712,11 +745,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
     bodyEl.appendChild(modeRow);
 
-    var offsetRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
+    var offsetRow = el('div', { display: 'flex', gap: '4px', alignItems: 'center', marginBottom: '8px' });
     offsetRow.appendChild(el('span', { opacity: '0.7' }, 'Сдвиг, c'));
+    offsetRow.appendChild(makeButton('−5', function () { setOffset(offset - 5); }));
     offsetRow.appendChild(makeButton('−0.5', function () { setOffset(offset - 0.5); }));
     offsetInput = el('input', {
-      width: '56px', background: '#0e0e10', color: '#efeff1',
+      width: '52px', background: '#0e0e10', color: '#efeff1',
       border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 4px', textAlign: 'center',
     });
     offsetInput.type = 'number';
@@ -725,6 +759,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     offsetInput.addEventListener('change', function () { setOffset(parseFloat(offsetInput.value) || 0); });
     offsetRow.appendChild(offsetInput);
     offsetRow.appendChild(makeButton('+0.5', function () { setOffset(offset + 0.5); }));
+    offsetRow.appendChild(makeButton('+5', function () { setOffset(offset + 5); }));
     bodyEl.appendChild(offsetRow);
 
     var volumeRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
@@ -817,11 +852,13 @@ export function buildTwitchAudioUserscript(origin: string): string {
       audio.pause();
       currentTrackId = null;
       trackDurationSec = 0;
+      trackRecordStartMs = 0;
       boundVideo = null;
       metaVodId = null;
       autoMatchedTrack = null;
       mutedSegments = [];
       vodLengthSeconds = 0;
+      vodCreatedAtMs = 0;
       clearAudioObjectUrl();
       removePanel();
     }
