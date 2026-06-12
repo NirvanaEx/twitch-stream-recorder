@@ -834,6 +834,10 @@ textarea {
 
 .replay-stage--theater > .notice { display: none; }
 
+/* Theater is a strict player+chat grid: any extra in-flow rows (part
+   selector, etc.) would steal a grid cell and shrink the video. */
+.replay-stage--theater > .action-row { display: none; }
+
 .replay-stage--normal:not(.has-chat) .replay-stage__player {
   max-width: 1200px;
   margin: 0 auto;

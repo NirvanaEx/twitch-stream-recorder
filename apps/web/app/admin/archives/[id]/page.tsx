@@ -149,6 +149,30 @@ export default function ArchiveReplayPage() {
     [activePart, data?.videoUrl],
   );
 
+  // Seamless playback: when every part has a known duration, the player shows
+  // ONE continuous timeline and switches parts internally.
+  const playlist = useMemo(
+    () =>
+      telegramParts.length > 0 &&
+      telegramParts.every((part) => (part.durationSec ?? 0) > 0)
+        ? telegramParts.map((part) => ({
+            src: buildAuthenticatedMediaUrl(part.streamUrl),
+            durationSec: part.durationSec as number,
+          }))
+        : null,
+    [telegramParts],
+  );
+
+  // Saved "continue watching" part, captured once for the player's start segment.
+  const initialSegmentRef = useRef(0);
+  if (initialSegmentRef.current === 0) {
+    initialSegmentRef.current = Math.max(1, readResume(params.id)?.part ?? 1);
+  }
+
+  const handleSegmentChange = useCallback((segment: number) => {
+    setCurrentPart(segment);
+  }, []);
+
   useEffect(() => {
     setCurrentPart(1);
   }, [params.id]);
@@ -242,9 +266,10 @@ export default function ArchiveReplayPage() {
     };
   }, [videoElement, data, currentPart, telegramParts.length]);
 
-  // Auto-advance to the next part when the current one finishes.
+  // Auto-advance to the next part when the current one finishes (fallback
+  // mode only — with a playlist the player handles this internally).
   useEffect(() => {
-    if (!videoElement || telegramParts.length < 2) return undefined;
+    if (playlist || !videoElement || telegramParts.length < 2) return undefined;
 
     const onEnded = () => {
       setCurrentPart((part) => {
@@ -258,11 +283,11 @@ export default function ArchiveReplayPage() {
 
     videoElement.addEventListener("ended", onEnded);
     return () => videoElement.removeEventListener("ended", onEnded);
-  }, [videoElement, telegramParts.length]);
+  }, [playlist, videoElement, telegramParts.length]);
 
-  // Resume playback once the next part's metadata is in.
+  // Resume playback once the next part's metadata is in (fallback mode).
   useEffect(() => {
-    if (!pendingAutoplay || !videoElement) return undefined;
+    if (playlist || !pendingAutoplay || !videoElement) return undefined;
 
     const onLoaded = () => {
       setPendingAutoplay(false);
@@ -271,7 +296,7 @@ export default function ArchiveReplayPage() {
 
     videoElement.addEventListener("loadedmetadata", onLoaded, { once: true });
     return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
-  }, [pendingAutoplay, videoElement, currentPart]);
+  }, [playlist, pendingAutoplay, videoElement, currentPart]);
 
   async function handleDelete() {
     if (!data || !window.confirm(t.archives.deleteConfirm)) return;
@@ -419,7 +444,7 @@ export default function ArchiveReplayPage() {
           <div className="notice info">{t.replay.recordingInProgress}</div>
         ) : null}
 
-        {telegramParts.length > 1 ? (
+        {!playlist && mode === "normal" && telegramParts.length > 1 ? (
           <div className="action-row" style={{ margin: "8px 0" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
               {t.archives.telegramPart}
@@ -448,6 +473,9 @@ export default function ArchiveReplayPage() {
           {data?.videoReady && videoSrc ? (
             <VideoPlayer
               src={videoSrc}
+              playlist={playlist ?? undefined}
+              initialSegment={initialSegmentRef.current}
+              onSegmentChange={handleSegmentChange}
               mode={mode}
               onModeChange={setMode}
               chatVisible={chatVisible}
