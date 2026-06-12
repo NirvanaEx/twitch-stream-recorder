@@ -63,6 +63,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.ensureDataLayout();
     await this.markStaleRecordingsAsStopped();
     await this.checkRecordingDependencies();
+    void this.recoverInterruptedRemuxes();
     await this.syncAllChannels();
 
     this.monitorTimer = setInterval(() => {
@@ -814,6 +815,129 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     for (const dir of ["records", "hls", "chat", "logs", "tmp"]) {
       mkdirSync(join(dataRoot, dir), { recursive: true });
     }
+  }
+
+  /**
+   * A restart that lands during the post-capture remux (or before it started)
+   * kills ffmpeg halfway: the session is marked as error, the .mp4 on disk is
+   * unplayable (no moov index), but the source .ts survives — finalize, which
+   * would have deleted it, never ran. Re-run the remux for those sessions and
+   * promote them back to completed so playback and the Telegram offload work.
+   */
+  private async recoverInterruptedRemuxes() {
+    if (!this.dependenciesReady) {
+      return;
+    }
+
+    const candidates = await this.prisma.streamSession.findMany({
+      where: {
+        status: "error",
+        recordingPath: { not: null },
+      },
+      include: { channel: true },
+    });
+
+    for (const session of candidates) {
+      const outputPath = resolve(session.recordingPath!);
+      const tsPath = outputPath.replace(/\.mp4$/i, ".ts");
+
+      if (!existsSync(tsPath) || statSync(tsPath).size === 0) {
+        continue;
+      }
+
+      if (this.activeRecordings.has(session.channelId)) {
+        continue;
+      }
+
+      const logPrefix = `[${session.channel.twitchLogin}/${session.id}]`;
+      this.logger.log(
+        `${logPrefix} found a leftover .ts from an interrupted remux; recovering the recording.`,
+      );
+
+      try {
+        await this.runFfmpegRemux(tsPath, outputPath);
+
+        const fileSizeBytes = existsSync(outputPath) ? statSync(outputPath).size : 0;
+
+        if (fileSizeBytes === 0) {
+          throw new Error("Recovered .mp4 is empty.");
+        }
+
+        try {
+          unlinkSync(tsPath);
+        } catch {
+          // Best-effort cleanup; ignore filesystem errors.
+        }
+
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: {
+            status: "completed",
+            videoStatus: "ready",
+            replayStatus: "ready",
+            errorMessage: null,
+            fileSizeBytes: String(fileSizeBytes),
+          },
+        });
+
+        this.logger.log(
+          `${logPrefix} recording recovered (${Math.round(fileSizeBytes / 1024 / 1024)} MB).`,
+        );
+        this.emitRealtime("recording:stopped", {
+          channelId: session.channelId,
+          sessionId: session.id,
+          status: "completed",
+        });
+        this.telegramService.kick();
+      } catch (error) {
+        this.logger.warn(
+          `${logPrefix} recovery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  private runFfmpegRemux(tsPath: string, outputPath: string) {
+    return new Promise<void>((resolvePromise, rejectPromise) => {
+      const ffmpegCommand = this.resolveFfmpegCommand();
+      const child = spawn(
+        ffmpegCommand.command,
+        [
+          ...ffmpegCommand.args,
+          "-y",
+          "-i",
+          tsPath,
+          "-c",
+          "copy",
+          "-bsf:a",
+          "aac_adtstoasc",
+          "-movflags",
+          "+faststart",
+          outputPath,
+        ],
+        {
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
+
+      let stderrTail = "";
+      child.stderr?.on("data", (chunk) => {
+        stderrTail = `${stderrTail}${chunk.toString()}`.slice(-2000);
+      });
+
+      child.once("error", (error) => rejectPromise(error));
+      child.once("exit", (code) => {
+        if (code === 0) {
+          resolvePromise();
+        } else {
+          rejectPromise(
+            new Error(`ffmpeg exited with code ${String(code)}: ${stderrTail.trim()}`),
+          );
+        }
+      });
+    });
   }
 
   private async markStaleRecordingsAsStopped() {
