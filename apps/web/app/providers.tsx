@@ -208,6 +208,7 @@ type Dictionary = {
     step4: string;
     copyScript: string;
     copied: string;
+    copyFailed: string;
     serverNote: string;
     showScript: string;
     hideScript: string;
@@ -540,6 +541,7 @@ const dictionaries: Record<Locale, Dictionary> = {
         "Откройте любой VOD на twitch.tv — справа внизу появится панель: выберите дорожку и режим «Запись» или «Оба».",
       copyScript: "Скопировать скрипт",
       copied: "Скопировано ✓",
+      copyFailed: "Не удалось скопировать автоматически — скрипт показан ниже, выделите и скопируйте вручную.",
       serverNote:
         "Скрипт обращается к серверу по адресу {origin}. Этот адрес должен быть доступен из браузера, в котором вы смотрите Twitch — если смотрите не из домашней сети, откройте (пробросьте) порт наружу.",
       showScript: "Показать скрипт",
@@ -873,6 +875,7 @@ const dictionaries: Record<Locale, Dictionary> = {
         "Open any VOD on twitch.tv — a panel appears in the bottom-right: pick a track and the \"Recording\" or \"Both\" mode.",
       copyScript: "Copy script",
       copied: "Copied ✓",
+      copyFailed: "Could not copy automatically — the script is shown below, select and copy it by hand.",
       serverNote:
         "The script talks to the server at {origin}. That address must be reachable from the browser where you watch Twitch — forward the port if you are outside your home network.",
       showScript: "Show script",

@@ -116,27 +116,57 @@ export default function TwitchAudioPage() {
     [origin],
   );
 
+  // Copy via a throwaway textarea. navigator.clipboard only exists in secure
+  // contexts (https), and this panel often runs over plain http, so the
+  // execCommand path must work on its own — independent of whether the script
+  // preview is currently shown.
+  function copyViaTextarea(text: string): boolean {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "0";
+    area.style.left = "0";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    document.body.removeChild(area);
+    return ok;
+  }
+
   async function handleCopy() {
     if (!script) return;
 
-    try {
-      await navigator.clipboard.writeText(script);
-    } catch {
-      // The clipboard API needs a secure context (https); over plain http
-      // fall back to selecting the hidden textarea and execCommand.
-      const area = scriptAreaRef.current;
-      if (!area) return;
-      setShowScript(true);
-      area.value = script;
-      area.focus();
-      area.select();
+    let ok = false;
+
+    if (navigator.clipboard && window.isSecureContext) {
       try {
-        document.execCommand("copy");
+        await navigator.clipboard.writeText(script);
+        ok = true;
       } catch {
-        return;
+        ok = false;
       }
     }
 
+    if (!ok) {
+      ok = copyViaTextarea(script);
+    }
+
+    if (!ok) {
+      // As a last resort, reveal the script so the user can select it by hand.
+      setShowScript(true);
+      setError(t.twitchAudio.copyFailed);
+      return;
+    }
+
+    setError(null);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   }
