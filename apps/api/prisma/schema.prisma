@@ -54,6 +54,8 @@ model StreamSession {
   telegramStatus     String    @default("none")
   telegramUploadedAt DateTime?
   telegramError      String?
+  // Message id of the chat bundle (.tsr.json) posted to the channel.
+  telegramChatMessageId String?
   // Set when the local video file was removed after a successful Telegram upload.
   localFileDeletedAt DateTime?
   createdAt          DateTime  @default(now())

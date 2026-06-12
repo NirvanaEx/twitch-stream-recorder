@@ -366,21 +366,27 @@ export default function PublicWatchPage({
         </header>
 
         {telegramParts.length > 1 ? (
-          <div className="action-row" style={{ margin: "8px 0", flexWrap: "wrap" }}>
-            {telegramParts.map((part) => (
-              <button
-                key={part.partIndex}
-                type="button"
-                className={`btn ${part.partIndex === currentPart ? "primary" : ""}`}
-                onClick={() => {
-                  if (part.partIndex === currentPart) return;
+          <div className="action-row" style={{ margin: "8px 0" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+              {t.archives.telegramPart}
+              <select
+                className="input"
+                style={{ width: "auto", padding: "4px 8px" }}
+                value={currentPart}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (next === currentPart) return;
                   setPendingAutoplay(true);
-                  setCurrentPart(part.partIndex);
+                  setCurrentPart(next);
                 }}
               >
-                {t.archives.telegramPart} {part.partIndex}/{part.partCount}
-              </button>
-            ))}
+                {telegramParts.map((part) => (
+                  <option key={part.partIndex} value={part.partIndex}>
+                    {part.partIndex} / {part.partCount}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         ) : null}
 

@@ -555,6 +555,15 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // Chat messages and emote snapshots reference the session without a
+    // foreign key, so they must be removed explicitly or they leak.
+    await this.prisma.chatMessage.deleteMany({
+      where: { streamSessionId: id },
+    });
+    await this.prisma.emoteSnapshot.deleteMany({
+      where: { streamSessionId: id },
+    });
+
     await this.prisma.streamSession.delete({
       where: { id },
     });
@@ -1096,6 +1105,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           : null,
       telegramError: session.telegramError,
       telegramUploadedAt: session.telegramUploadedAt,
+      telegramChatUrl:
+        session.telegramChatMessageId && (session.telegramParts ?? [])[0]
+          ? buildTelegramMessageUrl(
+              (session.telegramParts ?? [])[0].chatId,
+              session.telegramChatMessageId,
+            )
+          : null,
       localFileDeletedAt: session.localFileDeletedAt,
       telegramParts,
       createdAt: session.createdAt,
