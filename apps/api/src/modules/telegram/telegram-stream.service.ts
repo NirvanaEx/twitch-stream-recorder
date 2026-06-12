@@ -12,8 +12,13 @@ const CHUNK_SIZE = 512 * 1024;
 
 // How many 512 KB chunks are fetched from Telegram concurrently. Sequential
 // reads are capped by the round-trip to the DC (~1.5-3 MB/s); interleaved
-// workers overlap those round-trips. 4 workers keep ~2 MB in flight.
-const DEFAULT_PARALLEL_CHUNKS = 4;
+// workers overlap those round-trips. 6 workers keep ~3 MB in flight.
+const DEFAULT_PARALLEL_CHUNKS = 6;
+
+// In-memory LRU of downloaded chunks. Seeks usually re-read the same areas
+// (the mp4 index, recently watched ranges, timeline previews), so serving
+// them from RAM removes the multi-second round-trip to Telegram.
+const DEFAULT_CACHE_MB = 192;
 
 // Resolved messages carry a file_reference that Telegram expires after a
 // while; re-fetch the message when the cached one gets stale or rejected.
@@ -26,6 +31,9 @@ export class TelegramStreamService {
     string,
     { media: Api.TypeMessageMedia; fetchedAt: number }
   >();
+  // LRU chunk cache: key `${partId}:${alignedOffset}` -> raw 512 KB chunk.
+  private readonly chunkCache = new Map<string, Buffer>();
+  private chunkCacheBytes = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -93,6 +101,9 @@ export class TelegramStreamService {
       "Content-Length": end - start + 1,
       "Content-Type": "video/mp4",
       "Accept-Ranges": "bytes",
+      // Let the browser keep fetched ranges (the mp4 index in particular) so
+      // repeated seeks don't re-download them through Telegram.
+      "Cache-Control": "private, max-age=3600",
       ...(statusCode === 206
         ? { "Content-Range": `bytes ${start}-${end}/${totalSize}` }
         : {}),
@@ -100,14 +111,37 @@ export class TelegramStreamService {
 
     const resolveMedia = (force: boolean) => this.resolveMedia(part, force);
     const parallelChunks = this.getParallelChunks();
+    const cacheGet = (offset: number) => this.cacheGet(`${part.id}:${offset}`);
+    const cachePut = (offset: number, buffer: Buffer) =>
+      this.cachePut(`${part.id}:${offset}`, buffer);
 
     async function* byteRange() {
       let position = start;
       let refreshedReference = false;
 
       while (position <= end) {
+        // Serve everything we already have in the LRU cache first — typical
+        // for the mp4 index, re-watched ranges and timeline previews.
+        for (;;) {
+          const aligned = Math.floor(position / CHUNK_SIZE) * CHUNK_SIZE;
+          const cached = cacheGet(aligned);
+          if (!cached) break;
+
+          let buffer = cached.subarray(position - aligned);
+          const remaining = end - position + 1;
+          if (buffer.length > remaining) {
+            buffer = buffer.subarray(0, remaining);
+          }
+          if (buffer.length === 0) return;
+
+          yield buffer;
+          position += buffer.length;
+          if (position > end) return;
+        }
+
         const alignedStart = Math.floor(position / CHUNK_SIZE) * CHUNK_SIZE;
         let skip = position - alignedStart;
+        let chunkOffset = alignedStart;
 
         // N interleaved iterators: worker j reads chunks j, j+N, j+2N, ...
         // Consuming them round-robin restores sequential order while keeping
@@ -138,9 +172,13 @@ export class TelegramStreamService {
             // while the other workers' chunks are being consumed.
             pending[worker] = iterators[worker].next();
 
-            let buffer = Buffer.isBuffer(result.value)
+            const raw = Buffer.isBuffer(result.value)
               ? result.value
               : Buffer.from(result.value);
+            cachePut(chunkOffset, raw);
+            chunkOffset += raw.length;
+
+            let buffer = raw;
 
             if (skip > 0) {
               if (buffer.length <= skip) {
@@ -217,6 +255,43 @@ export class TelegramStreamService {
     return Number.isFinite(configured) && configured >= 1 && configured <= 16
       ? configured
       : DEFAULT_PARALLEL_CHUNKS;
+  }
+
+  private getCacheLimitBytes() {
+    const configured = Number.parseInt(process.env.TELEGRAM_STREAM_CACHE_MB ?? "", 10);
+
+    return (
+      (Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_CACHE_MB) *
+      1024 *
+      1024
+    );
+  }
+
+  private cacheGet(key: string): Buffer | null {
+    const buffer = this.chunkCache.get(key);
+    if (!buffer) return null;
+
+    // Refresh LRU position.
+    this.chunkCache.delete(key);
+    this.chunkCache.set(key, buffer);
+    return buffer;
+  }
+
+  private cachePut(key: string, buffer: Buffer) {
+    const limit = this.getCacheLimitBytes();
+    if (limit <= 0 || buffer.length === 0 || this.chunkCache.has(key)) return;
+
+    this.chunkCache.set(key, buffer);
+    this.chunkCacheBytes += buffer.length;
+
+    while (this.chunkCacheBytes > limit) {
+      const oldestKey = this.chunkCache.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+
+      const oldest = this.chunkCache.get(oldestKey);
+      this.chunkCache.delete(oldestKey);
+      this.chunkCacheBytes -= oldest?.length ?? 0;
+    }
   }
 
   private async resolveMedia(part: TelegramUploadPart, forceRefresh = false) {

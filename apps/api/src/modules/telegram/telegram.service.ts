@@ -664,6 +664,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       String(segmentSec),
       "-reset_timestamps",
       "1",
+      // moov up front in every part: without it the web player has to fetch
+      // the tail of a 1.9 GB file from Telegram before playback can start.
+      "-segment_format_options",
+      "movflags=+faststart",
       pattern,
     ]);
 

@@ -19,6 +19,11 @@ import {
 
 export type PlayerMode = "normal" | "theater" | "fullscreen";
 
+export type PlaylistSegment = {
+  src: string;
+  durationSec: number;
+};
+
 type VideoPlayerProps = {
   src: string;
   autoPlay?: boolean;
@@ -36,6 +41,17 @@ type VideoPlayerProps = {
   /** When set, overrides the in-page back behaviour for the X icon in theater / fullscreen. */
   onClose?: () => void;
   className?: string;
+  /**
+   * Seamless multi-part playback: when set (and every segment has a known
+   * duration), the player presents ONE continuous timeline over all segments,
+   * switching the underlying <video> src transparently on seek/end.
+   * Overrides `src`.
+   */
+  playlist?: PlaylistSegment[];
+  /** 1-based segment to start from (e.g. restored "continue watching" state). */
+  initialSegment?: number;
+  /** Notified with the 1-based segment index whenever the active segment changes. */
+  onSegmentChange?: (segment: number) => void;
 };
 
 const SKIP_SECONDS = 5;
@@ -66,6 +82,9 @@ export function VideoPlayer({
   title,
   onClose,
   className,
+  playlist,
+  initialSegment,
+  onSegmentChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -103,19 +122,115 @@ export function VideoPlayer({
     [onVideoElement],
   );
 
+  // ---- Virtual playlist (seamless multi-part playback) -------------------
+
+  const segments = useMemo(
+    () =>
+      playlist && playlist.length > 0 && playlist.every((item) => item.src && item.durationSec > 0)
+        ? playlist
+        : null,
+    [playlist],
+  );
+  const playlistKey = segments?.map((item) => item.src).join("|") ?? null;
+  const [segmentIndex, setSegmentIndex] = useState(0);
+
+  const segmentOffsets = useMemo(() => {
+    let acc = 0;
+    return (segments ?? []).map((item) => {
+      const offset = acc;
+      acc += item.durationSec;
+      return offset;
+    });
+  }, [segments]);
+
+  const totalDuration = useMemo(
+    () => (segments ?? []).reduce((acc, item) => acc + item.durationSec, 0),
+    [segments],
+  );
+
+  const effectiveSrc = segments
+    ? segments[Math.min(segmentIndex, segments.length - 1)].src
+    : src;
+
+  // Media event handlers and seek callbacks must not capture stale state.
+  const virtualRef = useRef({
+    segments,
+    offsets: segmentOffsets,
+    total: totalDuration,
+    index: segmentIndex,
+  });
+  virtualRef.current = {
+    segments,
+    offsets: segmentOffsets,
+    total: totalDuration,
+    index: segmentIndex,
+  };
+
+  // Seek/play to apply after the next segment's <video> src swap.
+  const pendingSeekRef = useRef<{ time: number; play: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!playlistKey) return;
+    const upper = Math.max(0, (virtualRef.current.segments?.length ?? 1) - 1);
+    setSegmentIndex(Math.min(Math.max((initialSegment ?? 1) - 1, 0), upper));
+    // The initial segment matters only when the playlist itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistKey]);
+
+  useEffect(() => {
+    if (segments) onSegmentChange?.(segmentIndex + 1);
+  }, [segments, segmentIndex, onSegmentChange]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+
+    const pending = pendingSeekRef.current;
+    if (!pending) return undefined;
+
+    const apply = () => {
+      pendingSeekRef.current = null;
+      if (pending.time > 0.1) v.currentTime = pending.time;
+      if (pending.play) void v.play().catch(() => undefined);
+    };
+
+    if (v.readyState >= 1) {
+      apply();
+      return undefined;
+    }
+
+    v.addEventListener("loadedmetadata", apply, { once: true });
+    return () => v.removeEventListener("loadedmetadata", apply);
+  }, [effectiveSrc, segmentIndex]);
+
   // Wire video → state.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return undefined;
 
+    const globalBase = () => {
+      const vr = virtualRef.current;
+      return vr.segments ? vr.offsets[vr.index] ?? 0 : 0;
+    };
+
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onTime = () => setCurrentTime(v.currentTime);
-    const onDuration = () => setDuration(Number.isFinite(v.duration) ? v.duration : 0);
+    const onTime = () => setCurrentTime(globalBase() + v.currentTime);
+    const onDuration = () => {
+      const vr = virtualRef.current;
+      setDuration(vr.segments ? vr.total : Number.isFinite(v.duration) ? v.duration : 0);
+    };
     const onProgress = () => {
       if (v.buffered.length > 0) {
-        setBufferedEnd(v.buffered.end(v.buffered.length - 1));
+        setBufferedEnd(globalBase() + v.buffered.end(v.buffered.length - 1));
       }
+    };
+    const onEnded = () => {
+      // Virtual playlist: roll into the next segment without user input.
+      const vr = virtualRef.current;
+      if (!vr.segments || vr.index >= vr.segments.length - 1) return;
+      pendingSeekRef.current = { time: 0, play: true };
+      setSegmentIndex(vr.index + 1);
     };
     const onWaiting = () => setWaiting(true);
     const onPlaying = () => {
@@ -147,12 +262,14 @@ export function VideoPlayer({
     v.addEventListener("seeked", onPlaying);
     v.addEventListener("volumechange", onVolume);
     v.addEventListener("ratechange", onRate);
+    v.addEventListener("ended", onEnded);
 
     onDuration();
     onVolume();
     onRate();
 
     return () => {
+      v.removeEventListener("ended", onEnded);
       v.removeEventListener("error", onError);
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
@@ -167,7 +284,7 @@ export function VideoPlayer({
       v.removeEventListener("volumechange", onVolume);
       v.removeEventListener("ratechange", onRate);
     };
-  }, [src]);
+  }, [effectiveSrc]);
 
   // Restore stored volume / muted across visits.
   useEffect(() => {
@@ -182,7 +299,7 @@ export function VideoPlayer({
     } catch {
       // Ignore broken localStorage.
     }
-  }, [src]);
+  }, [effectiveSrc]);
 
   useEffect(() => {
     try {
@@ -230,22 +347,50 @@ export function VideoPlayer({
     }
   }, [flashCenterHint]);
 
+  // Seeks operate on the GLOBAL timeline. In virtual-playlist mode the target
+  // may live in another segment: swap the src and defer the local seek.
+  const seekTo = useCallback((time: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const vr = virtualRef.current;
+
+    if (!vr.segments) {
+      const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
+      v.currentTime = Math.max(0, Math.min(cap, time));
+      return;
+    }
+
+    const target = Math.max(0, Math.min(vr.total > 0 ? vr.total - 0.5 : 0, time));
+    let index = vr.segments.length - 1;
+
+    for (let i = 0; i < vr.segments.length; i += 1) {
+      if (target < vr.offsets[i] + vr.segments[i].durationSec) {
+        index = i;
+        break;
+      }
+    }
+
+    const local = Math.max(0, target - vr.offsets[index]);
+
+    if (index === vr.index) {
+      v.currentTime = local;
+    } else {
+      pendingSeekRef.current = { time: local, play: !v.paused };
+      setSegmentIndex(index);
+    }
+  }, []);
+
   const seekBy = useCallback(
     (delta: number) => {
       const v = videoRef.current;
       if (!v) return;
-      const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
-      v.currentTime = Math.max(0, Math.min(cap, v.currentTime + delta));
+      const vr = virtualRef.current;
+      const globalNow = vr.segments ? (vr.offsets[vr.index] ?? 0) + v.currentTime : v.currentTime;
+      seekTo(globalNow + delta);
     },
-    [],
+    [seekTo],
   );
-
-  const seekTo = useCallback((time: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
-    v.currentTime = Math.max(0, Math.min(cap, time));
-  }, []);
 
   const adjustVolume = useCallback((delta: number) => {
     const v = videoRef.current;
@@ -474,15 +619,18 @@ export function VideoPlayer({
           event.preventDefault();
           seekTo(0);
           break;
-        case "End":
+        case "End": {
           event.preventDefault();
-          seekTo(v.duration || 0);
+          const vr = virtualRef.current;
+          seekTo(vr.segments ? vr.total : v.duration || 0);
           break;
+        }
         default:
           if (event.key >= "0" && event.key <= "9") {
             event.preventDefault();
             const pct = Number(event.key) / 10;
-            seekTo(pct * (v.duration || 0));
+            const vr = virtualRef.current;
+            seekTo(pct * (vr.segments ? vr.total : v.duration || 0));
           }
           break;
       }
@@ -511,11 +659,27 @@ export function VideoPlayer({
 
   // Hovering the timeline seeks a second, muted <video> to the hovered
   // position so the tooltip shows an actual frame (YouTube-style preview).
+  // In virtual-playlist mode the hovered global time maps to a segment-local
+  // one (the preview element's src is switched in render).
   useEffect(() => {
     const preview = previewVideoRef.current;
     if (!preview || !scrubPreview) return;
 
-    const target = Math.max(0, Math.floor(scrubPreview.time));
+    const vr = virtualRef.current;
+    let local = scrubPreview.time;
+
+    if (vr.segments) {
+      let index = vr.segments.length - 1;
+      for (let i = 0; i < vr.segments.length; i += 1) {
+        if (scrubPreview.time < vr.offsets[i] + vr.segments[i].durationSec) {
+          index = i;
+          break;
+        }
+      }
+      local = Math.max(0, scrubPreview.time - vr.offsets[index]);
+    }
+
+    const target = Math.max(0, Math.floor(local));
 
     if (Math.abs((preview.currentTime || 0) - target) >= 1) {
       try {
@@ -525,6 +689,19 @@ export function VideoPlayer({
       }
     }
   }, [scrubPreview]);
+
+  // Src for the hover-preview element: the hovered segment in playlist mode.
+  let previewSrc = effectiveSrc;
+  if (segments && scrubPreview) {
+    let index = segments.length - 1;
+    for (let i = 0; i < segments.length; i += 1) {
+      if (scrubPreview.time < segmentOffsets[i] + segments[i].durationSec) {
+        index = i;
+        break;
+      }
+    }
+    previewSrc = segments[index].src;
+  }
 
   const computePctFromEvent = (clientX: number) => {
     const bar = progressRef.current;
@@ -601,11 +778,11 @@ export function VideoPlayer({
         toggleFullscreen();
       }}
     >
-      {src ? (
+      {effectiveSrc ? (
         <video
           ref={setVideoNode}
           className="vp__video"
-          src={src}
+          src={effectiveSrc}
           autoPlay={autoPlay}
           poster={poster}
           preload="metadata"
@@ -638,7 +815,7 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {mediaError && src ? (
+      {mediaError && effectiveSrc ? (
         <div className="vp__error" role="alert">
           <div className="vp__error-text">{mediaError}</div>
           <button type="button" className="vp__error-retry" onClick={retryPlayback}>
@@ -647,7 +824,7 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {waiting && !mediaError && src ? (
+      {waiting && !mediaError && effectiveSrc ? (
         <div className="vp__buffering" aria-hidden>
           <SpinnerIcon size={36} />
         </div>
@@ -662,13 +839,13 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {!isPlaying && currentTime === 0 && src && !mediaError ? (
+      {!isPlaying && currentTime === 0 && effectiveSrc && !mediaError ? (
         <button type="button" className="vp__big-play" onClick={togglePlay} aria-label="Play">
           <PlayIcon size={44} />
         </button>
       ) : null}
 
-      {src ? (
+      {effectiveSrc ? (
         <div className="vp__controls">
           <div
             ref={progressRef}
@@ -692,7 +869,7 @@ export function VideoPlayer({
               <video
                 ref={previewVideoRef}
                 className="vp__scrub-video"
-                src={src || undefined}
+                src={previewSrc || undefined}
                 muted
                 playsInline
                 preload="metadata"

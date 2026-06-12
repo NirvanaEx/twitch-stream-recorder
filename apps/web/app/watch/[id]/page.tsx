@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
 import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
@@ -84,9 +84,35 @@ export default function PublicWatchPage({
       ? telegramParts[Math.min(currentPart, telegramParts.length) - 1]
       : null;
 
-  // Auto-advance to the next part when the current one finishes.
+  // Seamless playback: when every part has a known duration, the player shows
+  // ONE continuous timeline and switches parts internally.
+  const playlist = useMemo(
+    () =>
+      telegramParts.length > 0 &&
+      telegramParts.every((part) => (part.durationSec ?? 0) > 0)
+        ? telegramParts.map((part) => ({
+            src: buildMediaUrl(part.streamUrl),
+            durationSec: part.durationSec as number,
+          }))
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data?.videoSource, data?.telegramParts],
+  );
+
+  // Saved "continue watching" part, captured once for the player's start segment.
+  const initialSegmentRef = useRef(0);
+  if (initialSegmentRef.current === 0) {
+    initialSegmentRef.current = Math.max(1, readResume(id)?.part ?? 1);
+  }
+
+  const handleSegmentChange = useCallback((segment: number) => {
+    setCurrentPart(segment);
+  }, []);
+
+  // Auto-advance to the next part when the current one finishes (fallback
+  // mode only — with a playlist the player handles this internally).
   useEffect(() => {
-    if (!videoElement || telegramParts.length < 2) return undefined;
+    if (playlist || !videoElement || telegramParts.length < 2) return undefined;
 
     const onEnded = () => {
       setCurrentPart((part) => {
@@ -100,11 +126,11 @@ export default function PublicWatchPage({
 
     videoElement.addEventListener("ended", onEnded);
     return () => videoElement.removeEventListener("ended", onEnded);
-  }, [videoElement, telegramParts.length]);
+  }, [playlist, videoElement, telegramParts.length]);
 
-  // Resume playback once the next part's metadata is in.
+  // Resume playback once the next part's metadata is in (fallback mode).
   useEffect(() => {
-    if (!pendingAutoplay || !videoElement) return undefined;
+    if (playlist || !pendingAutoplay || !videoElement) return undefined;
 
     const onLoaded = () => {
       setPendingAutoplay(false);
@@ -113,7 +139,7 @@ export default function PublicWatchPage({
 
     videoElement.addEventListener("loadedmetadata", onLoaded, { once: true });
     return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
-  }, [pendingAutoplay, videoElement, currentPart]);
+  }, [playlist, pendingAutoplay, videoElement, currentPart]);
 
   // ---- "Continue watching": restore and persist the position locally ----
 
@@ -365,7 +391,7 @@ export default function PublicWatchPage({
           </div>
         </header>
 
-        {telegramParts.length > 1 ? (
+        {!playlist && mode === "normal" && telegramParts.length > 1 ? (
           <div className="action-row" style={{ margin: "8px 0" }}>
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
               {t.archives.telegramPart}
@@ -393,6 +419,9 @@ export default function PublicWatchPage({
         <div className="replay-stage__player">
           <VideoPlayer
             src={videoSrc}
+            playlist={playlist ?? undefined}
+            initialSegment={initialSegmentRef.current}
+            onSegmentChange={handleSegmentChange}
             poster={posterSrc}
             mode={mode}
             onModeChange={setMode}
