@@ -507,6 +507,24 @@ export function VideoPlayer({
   // ---- Progress bar -----------------------------------------------------
 
   const progressRef = useRef<HTMLDivElement | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Hovering the timeline seeks a second, muted <video> to the hovered
+  // position so the tooltip shows an actual frame (YouTube-style preview).
+  useEffect(() => {
+    const preview = previewVideoRef.current;
+    if (!preview || !scrubPreview) return;
+
+    const target = Math.max(0, Math.floor(scrubPreview.time));
+
+    if (Math.abs((preview.currentTime || 0) - target) >= 1) {
+      try {
+        preview.currentTime = target;
+      } catch {
+        // Metadata not loaded yet; the next hover move will retry.
+      }
+    }
+  }, [scrubPreview]);
 
   const computePctFromEvent = (clientX: number) => {
     const bar = progressRef.current;
@@ -593,14 +611,6 @@ export function VideoPlayer({
           preload="metadata"
           playsInline
           onPointerUp={handleVideoPointerUp}
-          onClick={(event) => {
-            // Click-on-video toggles play. Don't intercept double-click, and
-            // ignore the synthetic click that follows a touch tap — touch is
-            // fully handled in onPointerUp.
-            if (event.detail > 1) return;
-            if (Date.now() - lastTouchAtRef.current < 700) return;
-            togglePlay();
-          }}
         />
       ) : (
         <div className="vp__empty">{emptyText ?? "—"}</div>
@@ -670,11 +680,28 @@ export function VideoPlayer({
             <div className="vp__progress-track" />
             <div className="vp__progress-buffered" style={{ width: `${bufferedPct}%` }} />
             <div className="vp__progress-played" style={{ width: `${progressPct}%` }} />
-            {scrubPreview ? (
-              <div className="vp__scrub-preview" style={{ left: `${scrubPreview.left}%` }}>
-                {formatTime(scrubPreview.time)}
-              </div>
-            ) : null}
+            {/* Kept mounted so the preview video's metadata loads only once. */}
+            <div
+              className="vp__scrub-preview"
+              style={{
+                left: `clamp(86px, ${scrubPreview?.left ?? 0}%, calc(100% - 86px))`,
+                visibility: scrubPreview ? "visible" : "hidden",
+              }}
+              aria-hidden
+            >
+              <video
+                ref={previewVideoRef}
+                className="vp__scrub-video"
+                src={src || undefined}
+                muted
+                playsInline
+                preload="metadata"
+                tabIndex={-1}
+              />
+              <span className="vp__scrub-time">
+                {scrubPreview ? formatTime(scrubPreview.time) : ""}
+              </span>
+            </div>
             <div className="vp__progress-thumb" style={{ left: `${progressPct}%` }} />
           </div>
 
