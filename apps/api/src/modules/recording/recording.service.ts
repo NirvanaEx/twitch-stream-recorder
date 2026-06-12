@@ -742,6 +742,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
           : null;
 
+      const durationSec =
+        finalStatus === "completed" && fileSizeBytes > 0
+          ? await this.probeDurationSec(activeRecording.outputPath)
+          : null;
+
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
@@ -758,6 +763,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           ...(audio
             ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
             : {}),
+          ...(durationSec ? { durationSec } : {}),
         },
       });
 
@@ -967,6 +973,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             ? null
             : await this.extractAudioTrack(outputPath, logPrefix);
 
+        const durationSec = await this.probeDurationSec(outputPath);
+
         await this.prisma.streamSession.update({
           where: { id: session.id },
           data: {
@@ -978,6 +986,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             ...(audio
               ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
               : {}),
+            ...(durationSec ? { durationSec } : {}),
           },
         });
 
@@ -1081,6 +1090,35 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
       return null;
     }
+  }
+
+  /** Read the real media duration (seconds) of a finished file via ffprobe. */
+  private probeDurationSec(filePath: string): Promise<number | null> {
+    return new Promise((resolvePromise) => {
+      try {
+        const probe = spawn("ffprobe", [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration",
+          "-of",
+          "default=noprint_wrappers=1:nokey=1",
+          filePath,
+        ]);
+
+        let output = "";
+        probe.stdout?.on("data", (chunk) => {
+          output += chunk.toString();
+        });
+        probe.once("error", () => resolvePromise(null));
+        probe.once("exit", () => {
+          const seconds = Number.parseFloat(output.trim());
+          resolvePromise(Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null);
+        });
+      } catch {
+        resolvePromise(null);
+      }
+    });
   }
 
   private runFfmpegRemux(tsPath: string, outputPath: string, audioOnly = false) {
@@ -1268,6 +1306,15 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       startedAt: session.startedAt,
       endedAt: session.endedAt,
       fileSizeBytes: playback.fileSizeBytes,
+      // Real recorded length; falls back to the stream span only when unknown.
+      durationSec:
+        session.durationSec ??
+        (session.startedAt && session.endedAt
+          ? Math.max(
+              0,
+              Math.round((session.endedAt.getTime() - session.startedAt.getTime()) / 1000),
+            )
+          : null),
       videoReady: playback.videoReady || telegramPlayable,
       videoSource: playback.videoReady ? "local" : telegramPlayable ? "telegram" : null,
       chatAvailable: session.chatAvailable,

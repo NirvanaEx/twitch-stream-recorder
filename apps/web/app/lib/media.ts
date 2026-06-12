@@ -86,6 +86,20 @@ export function formatDuration(startedAt: string | null | undefined, now = Date.
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+/** Format a known duration in seconds as "1h 23m" / "12m 5s" / "45s". */
+export function formatSeconds(durationSec: number | null | undefined): string {
+  if (!durationSec || !Number.isFinite(durationSec) || durationSec <= 0) return "—";
+
+  const total = Math.floor(durationSec);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 export function formatPeriod(
   startedAt: string | null | undefined,
   endedAt: string | null | undefined,
