@@ -52,6 +52,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var matchPending = false;
 
   var legendEl = null;
+  var nowPlayingEl = null;
+  var collapsed = false;
+  try {
+    collapsed = localStorage.getItem('tsr-audio-collapsed') === '1';
+  } catch (e) {}
 
   var panel = null;
   var bodyEl = null;
@@ -338,21 +343,30 @@ export function buildTwitchAudioUserscript(origin: string): string {
       audio.src = track ? SERVER + track.audioUrl : '';
       audio.load();
       setStatus('Дорожка выбрана');
+      // Picking a track with the original still playing is confusing — switch
+      // straight to record-only so the selection is actually heard.
+      if (mode === 'twitch') {
+        applyMode('record');
+      }
     } else {
       audio.pause();
       audio.removeAttribute('src');
+      var vv = getVideo();
+      if (vv) vv.muted = false;
     }
     saveState();
+    updateNowPlaying();
     syncNow(true);
   }
 
   function applyMode(next) {
     mode = next;
     var v = getVideo();
-    if (mode === 'twitch') {
+    if (mode === 'twitch' || !currentTrackId) {
       audio.pause();
       if (v) v.muted = false;
     } else {
+      // record => original muted; both => original audible alongside the audio.
       if (v) v.muted = (mode === 'record');
       syncNow(true);
     }
@@ -360,6 +374,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       modeButtons[key].style.background = key === mode ? '#9147ff' : '#2f2f35';
     }
     saveState();
+    updateNowPlaying();
   }
 
   function bindVideo(v) {
@@ -375,6 +390,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
     var v = getVideo();
     if (!v || mode === 'twitch' || !currentTrackId) return;
     bindVideo(v);
+    // Twitch's player keeps resetting video.muted on its own events, which is
+    // why the original audio leaks back in record mode — re-assert it here.
+    if (mode === 'record' && !v.muted) v.muted = true;
+    if (mode === 'both' && v.muted) v.muted = false;
     if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
     var target = v.currentTime + offset;
     if ((force || Math.abs(audio.currentTime - target) > MAX_DRIFT) && isFinite(target) && target >= 0) {
@@ -417,29 +436,60 @@ export function buildTwitchAudioUserscript(origin: string): string {
     return button;
   }
 
+  function applyCollapsed() {
+    if (!panel || !bodyEl || !headerTitleEl || !toggleHintEl) return;
+    if (collapsed) {
+      bodyEl.style.display = 'none';
+      panel.style.width = 'auto';
+      panel.style.opacity = '0.85';
+      headerTitleEl.textContent = '🎧';
+      toggleHintEl.textContent = '▲';
+    } else {
+      bodyEl.style.display = 'block';
+      panel.style.width = '290px';
+      panel.style.opacity = '1';
+      headerTitleEl.textContent = '🎧 Звук записи (TSR)';
+      toggleHintEl.textContent = '▾';
+    }
+  }
+
+  var headerTitleEl = null;
+  var toggleHintEl = null;
+
   function createPanel() {
+    // Bottom-LEFT, away from the VOD chat which sits on the right.
     panel = el('div', {
-      position: 'fixed', right: '16px', bottom: '16px', zIndex: '99999',
+      position: 'fixed', left: '16px', bottom: '16px', zIndex: '99999',
       background: '#18181b', color: '#efeff1', borderRadius: '8px',
       border: '1px solid #2f2f35', font: '12px/1.4 Inter, sans-serif',
-      width: '300px', boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+      width: '290px', boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+      transition: 'opacity 0.15s',
     });
 
     var header = el('div', {
       padding: '8px 10px', cursor: 'pointer', display: 'flex',
-      justifyContent: 'space-between', alignItems: 'center', fontWeight: '600',
+      justifyContent: 'space-between', alignItems: 'center', fontWeight: '600', gap: '10px',
     });
-    header.appendChild(el('span', null, '🎧 Звук записи (TSR)'));
-    var toggleHint = el('span', { opacity: '0.6' }, '−');
-    header.appendChild(toggleHint);
+    headerTitleEl = el('span', null, '🎧 Звук записи (TSR)');
+    header.appendChild(headerTitleEl);
+    toggleHintEl = el('span', { opacity: '0.6' }, '▾');
+    header.appendChild(toggleHintEl);
     header.addEventListener('click', function () {
-      var hidden = bodyEl.style.display === 'none';
-      bodyEl.style.display = hidden ? 'block' : 'none';
-      toggleHint.textContent = hidden ? '−' : '+';
+      collapsed = !collapsed;
+      try {
+        localStorage.setItem('tsr-audio-collapsed', collapsed ? '1' : '0');
+      } catch (e) {}
+      applyCollapsed();
     });
     panel.appendChild(header);
 
     bodyEl = el('div', { padding: '0 10px 10px 10px' });
+
+    nowPlayingEl = el('div', {
+      fontWeight: '600', padding: '6px 8px', borderRadius: '4px',
+      marginBottom: '8px', background: '#2f2f35', textAlign: 'center',
+    }, '');
+    bodyEl.appendChild(nowPlayingEl);
 
     selectEl = el('select', {
       width: '100%', background: '#0e0e10', color: '#efeff1',
@@ -498,14 +548,42 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
     renderOptions();
     updateLegend();
+    updateNowPlaying();
+    applyCollapsed();
     fetchTracks();
     fetchVodMeta();
+  }
+
+  // Big, unambiguous indicator of what is actually coming out of the speakers.
+  function updateNowPlaying() {
+    if (!nowPlayingEl) return;
+
+    if (!currentTrackId || mode === 'twitch') {
+      nowPlayingEl.textContent = '▶ Twitch (оригинал)';
+      nowPlayingEl.style.background = '#2f2f35';
+      nowPlayingEl.style.color = '#efeff1';
+      return;
+    }
+
+    if (mode === 'record') {
+      nowPlayingEl.textContent = '▶ Запись (звук Twitch выключен)';
+      nowPlayingEl.style.background = '#1f7a3d';
+      nowPlayingEl.style.color = '#fff';
+      return;
+    }
+
+    nowPlayingEl.textContent = '▶ Оба (Twitch + запись)';
+    nowPlayingEl.style.background = '#5a3d9c';
+    nowPlayingEl.style.color = '#fff';
   }
 
   function removePanel() {
     if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
     panel = null;
     bodyEl = null;
+    headerTitleEl = null;
+    toggleHintEl = null;
+    nowPlayingEl = null;
     selectEl = null;
     statusEl = null;
     offsetInput = null;

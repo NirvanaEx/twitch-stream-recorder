@@ -720,6 +720,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Revoke the Telegram audio message of a session (best-effort). Used both by
+   * the expiry sweep and by manual audio deletion from the panel.
+   */
+  async deleteAudioMessage(session: {
+    id: string;
+    telegramAudioChatId: string | null;
+    telegramAudioMessageId: string | null;
+  }) {
+    if (!session.telegramAudioMessageId || !session.telegramAudioChatId) {
+      return;
+    }
+
+    try {
+      const configured = await this.telegramClientService.isConfigured();
+      if (!configured) {
+        return;
+      }
+
+      const client = await this.telegramClientService.getClient();
+      const entity = await this.telegramClientService.resolveChat(session.telegramAudioChatId);
+      await client.deleteMessages(entity, [Number(session.telegramAudioMessageId)], {
+        revoke: true,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to delete Telegram audio message for session ${session.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Audio tracks are temporary by design — they exist to fix the sound of the
    * matching Twitch VOD, which itself expires. After audioKeepDays both the
    * local .m4a and the Telegram message are removed. A value of 0 disables

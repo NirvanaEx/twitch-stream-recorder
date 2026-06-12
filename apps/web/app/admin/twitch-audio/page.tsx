@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiGet } from "../../lib/api";
+import { apiGet, apiSend } from "../../lib/api";
+import { useAuth } from "../../lib/auth-context";
 import { buildTwitchAudioUserscript } from "../../lib/twitch-audio-script";
 import { useLanguage } from "../../providers";
 
@@ -13,6 +14,7 @@ type AudioTrack = {
   channelDisplayName: string;
   startedAt: string | null;
   durationSec: number | null;
+  audioOnly: boolean;
   audioUrl: string;
 };
 
@@ -30,19 +32,33 @@ function formatDuration(sec: number | null): string {
 
 export default function TwitchAudioPage() {
   const { t } = useLanguage();
+  const { hasPermission } = useAuth();
   const [origin, setOrigin] = useState("");
   const [tracks, setTracks] = useState<AudioTrack[] | null>(null);
   const [settings, setSettings] = useState<AudioSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showScript, setShowScript] = useState(false);
   const scriptAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const canManage = hasPermission("manage_archives");
 
   // The script bakes in the address the panel is opened from: that is the
   // address the user's browser can already reach.
   useEffect(() => {
     setOrigin(window.location.origin);
   }, []);
+
+  const loadTracks = async () => {
+    try {
+      const response = await apiGet<{ items: AudioTrack[] }>("public/streams/audio-tracks");
+      setTracks(response.items);
+      setError(null);
+    } catch {
+      setError(t.errors.apiUnavailable);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +89,27 @@ export default function TwitchAudioPage() {
       cancelled = true;
     };
   }, [t.errors.apiUnavailable]);
+
+  async function handleDelete(track: AudioTrack) {
+    const confirmText = track.audioOnly
+      ? t.twitchAudio.deleteConfirmAudioOnly
+      : t.twitchAudio.deleteConfirm;
+    if (!window.confirm(confirmText)) return;
+
+    setBusyId(track.id);
+    setNotice(null);
+    setError(null);
+    try {
+      await apiSend(`archives/${track.id}/audio`, "DELETE");
+      await loadTracks();
+      setNotice(t.twitchAudio.deleted);
+      window.setTimeout(() => setNotice(null), 2500);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const script = useMemo(
     () => (origin ? buildTwitchAudioUserscript(origin) : ""),
@@ -114,6 +151,8 @@ export default function TwitchAudioPage() {
       </section>
 
       {error ? <div className="notice error">{error}</div> : null}
+
+      {notice ? <div className="notice success">{notice}</div> : null}
 
       {settings && !settings.audioTrackEnabled ? (
         <div className="notice error">
@@ -217,16 +256,31 @@ export default function TwitchAudioPage() {
                           ? new Date(track.startedAt).toLocaleString()
                           : "—"}
                       </td>
-                      <td className="col-meta">{formatDuration(track.durationSec)}</td>
+                      <td className="col-meta">
+                        {track.audioOnly ? "🎧 " : ""}
+                        {formatDuration(track.durationSec)}
+                      </td>
                       <td className="col-actions">
-                        <a
-                          className="btn"
-                          href={`${track.audioUrl}?download=1`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {t.twitchAudio.download}
-                        </a>
+                        <div className="action-row">
+                          <a
+                            className="btn"
+                            href={`${track.audioUrl}?download=1`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {t.twitchAudio.download}
+                          </a>
+                          {canManage ? (
+                            <button
+                              className="btn danger"
+                              type="button"
+                              disabled={busyId === track.id}
+                              onClick={() => void handleDelete(track)}
+                            >
+                              {t.twitchAudio.deleteAudio}
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}

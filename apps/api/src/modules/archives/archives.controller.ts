@@ -17,6 +17,7 @@ export class ArchivesController {
     this.getArchive = this.getArchive.bind(this);
     this.streamArchiveVideo = this.streamArchiveVideo.bind(this);
     this.deleteArchive = this.deleteArchive.bind(this);
+    this.deleteArchiveAudio = this.deleteArchiveAudio.bind(this);
     this.getArchiveChat = this.getArchiveChat.bind(this);
   }
 
@@ -115,6 +116,12 @@ export class ArchivesController {
   @Get(":id")
   getArchive(@Param("id") id: string) {
     return this.recordingService.getArchiveById(id);
+  }
+
+  @RequirePermissions("manage_archives")
+  @Delete(":id/audio")
+  deleteArchiveAudio(@Param("id") id: string) {
+    return this.recordingService.deleteAudioTrack(id);
   }
 
   @RequirePermissions("manage_archives")

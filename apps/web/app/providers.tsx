@@ -219,6 +219,10 @@ type Dictionary = {
     colDate: string;
     colDuration: string;
     download: string;
+    deleteAudio: string;
+    deleteConfirm: string;
+    deleteConfirmAudioOnly: string;
+    deleted: string;
     disabledNote: string;
   };
   errors: {
@@ -548,6 +552,11 @@ const dictionaries: Record<Locale, Dictionary> = {
       colDate: "Дата",
       colDuration: "Длительность",
       download: "Скачать",
+      deleteAudio: "Удалить звук",
+      deleteConfirm: "Удалить аудиодорожку? Локальный файл и копия в Telegram будут удалены.",
+      deleteConfirmAudioOnly:
+        "Это запись «только звук» — удаление аудио удалит саму запись целиком. Продолжить?",
+      deleted: "Аудиодорожка удалена",
       disabledNote:
         "Извлечение аудиодорожки выключено в настройках — новые записи останутся без звука для Twitch.",
     },
@@ -876,6 +885,11 @@ const dictionaries: Record<Locale, Dictionary> = {
       colDate: "Date",
       colDuration: "Duration",
       download: "Download",
+      deleteAudio: "Delete audio",
+      deleteConfirm: "Delete the audio track? The local file and the Telegram copy will be removed.",
+      deleteConfirmAudioOnly:
+        "This is an audio-only recording — deleting the audio removes the whole recording. Continue?",
+      deleted: "Audio track deleted",
       disabledNote:
         "Audio extraction is disabled in settings — new recordings will have no Twitch audio track.",
     },
