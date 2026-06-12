@@ -590,6 +590,56 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
+  /**
+   * Remove the standalone audio track of a recording: the local .m4a and the
+   * Telegram audio message. For an audio-only session the track IS the whole
+   * recording, so this deletes the archive entirely.
+   */
+  async deleteAudioTrack(id: string) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+    });
+
+    if (!session) {
+      throw new NotFoundException(`Archive ${id} was not found.`);
+    }
+
+    // Revoke the Telegram copy first (best-effort) for both cases.
+    await this.telegramService.deleteAudioMessage(session);
+
+    if (session.audioOnly) {
+      // The audio is the recording — fall back to a full archive deletion.
+      return this.deleteArchive(id);
+    }
+
+    if (session.audioPath) {
+      const audioPath = resolve(session.audioPath);
+      if (existsSync(audioPath)) {
+        rmSync(audioPath, { force: true });
+      }
+    }
+
+    await this.prisma.streamSession.update({
+      where: { id },
+      data: {
+        audioPath: null,
+        audioSizeBytes: null,
+        telegramAudioChatId: null,
+        telegramAudioMessageId: null,
+        telegramAudioFileId: null,
+        telegramAudioUploadedAt: null,
+        audioDeletedAt: new Date(),
+      },
+    });
+
+    this.emitRealtime("telegram:updated", {
+      sessionId: id,
+      telegramStatus: session.telegramStatus,
+    });
+
+    return { ok: true };
+  }
+
   async getPlayableFile(id: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
