@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.2
+// @version      1.3
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -49,7 +49,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   // An http server cannot be loaded into an <audio> element on the https
   // Twitch page (mixed content), so in that case we pull the file through the
   // privileged GM_xmlhttpRequest and play it from a blob instead.
-  var mixedContent = location.protocol === 'https:' && /^http:\/\//i.test(SERVER);
+  var mixedContent = location.protocol === 'https:' && SERVER.slice(0, 7).toLowerCase() === 'http://';
   var audioObjectUrl = null;
   var blobLoadingForId = null;
   var blobTriedForId = null;
@@ -292,7 +292,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
     if (lines.length) {
       legendEl.style.display = 'block';
-      legendEl.textContent = lines.join('\n');
+      legendEl.textContent = lines.join('\\n');
       legendEl.style.whiteSpace = 'pre-line';
     } else {
       legendEl.style.display = 'none';
