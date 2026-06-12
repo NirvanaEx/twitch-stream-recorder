@@ -7,7 +7,13 @@ import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
 import { Pagination } from "../../components/Pagination";
-import { DownloadIcon, PlayIcon, SendIcon, TrashIcon } from "../../components/icons";
+import {
+  DownloadIcon,
+  HardDriveIcon,
+  PlayIcon,
+  SendIcon,
+  TrashIcon,
+} from "../../components/icons";
 
 type TelegramPart = {
   partIndex: number;
@@ -27,6 +33,7 @@ type ArchiveItem = {
   fileSizeBytes: string | null;
   videoReady: boolean;
   videoUrl: string | null;
+  videoSource: "local" | "telegram" | null;
   telegramStatus: string;
   telegramProgress: number | null;
   telegramError: string | null;
@@ -229,7 +236,25 @@ export default function ArchivesPage() {
                       <td className="col-meta">
                         {formatPeriod(archive.startedAt, archive.endedAt)}
                       </td>
-                      <td className="col-meta">{formatFileSize(archive.fileSizeBytes)}</td>
+                      <td className="col-meta">
+                        <span
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                          title={
+                            archive.videoSource === "telegram"
+                              ? "Telegram"
+                              : archive.videoSource === "local"
+                                ? t.replay.sourceLocal
+                                : undefined
+                          }
+                        >
+                          {archive.videoSource === "telegram" ? (
+                            <SendIcon size={13} />
+                          ) : archive.videoSource === "local" ? (
+                            <HardDriveIcon size={13} />
+                          ) : null}
+                          {formatFileSize(archive.fileSizeBytes)}
+                        </span>
+                      </td>
                       <td className="col-meta">{renderTelegramCell(archive)}</td>
                       <td className="col-actions">
                         <div className="action-row">

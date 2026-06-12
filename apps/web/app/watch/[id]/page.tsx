@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
 import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
+import { clearResume, readResume, saveResume } from "../../lib/resume";
 import { useLanguage } from "../../providers";
 import { ChatReplay } from "../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
-import { DownloadIcon } from "../../components/icons";
+import { DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
 
 type PublicTelegramPart = {
   partIndex: number;
@@ -113,6 +114,91 @@ export default function PublicWatchPage({
     videoElement.addEventListener("loadedmetadata", onLoaded, { once: true });
     return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
   }, [pendingAutoplay, videoElement, currentPart]);
+
+  // ---- "Continue watching": restore and persist the position locally ----
+
+  const resumePartAppliedRef = useRef(false);
+  const resumeSeekAppliedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (resumePartAppliedRef.current || !data) return;
+    resumePartAppliedRef.current = true;
+
+    const saved = readResume(id);
+    if (
+      saved &&
+      telegramParts.length > 1 &&
+      saved.part >= 1 &&
+      saved.part <= telegramParts.length
+    ) {
+      setCurrentPart(saved.part);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, telegramParts.length, id]);
+
+  useEffect(() => {
+    if (!videoElement || !data) return undefined;
+
+    const key = `${id}:${currentPart}`;
+    if (resumeSeekAppliedRef.current === key) return undefined;
+
+    const saved = readResume(id);
+    if (!saved || saved.part !== currentPart || saved.time < 10) {
+      resumeSeekAppliedRef.current = key;
+      return undefined;
+    }
+
+    const apply = () => {
+      resumeSeekAppliedRef.current = key;
+      const total = videoElement.duration;
+      if (Number.isFinite(total) && total > 0 && saved.time > total - 30) return;
+      videoElement.currentTime = saved.time;
+    };
+
+    if (videoElement.readyState >= 1) {
+      apply();
+      return undefined;
+    }
+
+    videoElement.addEventListener("loadedmetadata", apply, { once: true });
+    return () => videoElement.removeEventListener("loadedmetadata", apply);
+  }, [videoElement, data, currentPart, id]);
+
+  useEffect(() => {
+    if (!videoElement || !data) return undefined;
+
+    let lastSavedAt = 0;
+
+    const save = () => {
+      const time = videoElement.currentTime;
+      if (!Number.isFinite(time) || time < 10) return;
+
+      const total = videoElement.duration;
+      const isLastPart = telegramParts.length === 0 || currentPart >= telegramParts.length;
+
+      if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
+        clearResume(id);
+        return;
+      }
+
+      saveResume(id, currentPart, time);
+    };
+
+    const onTimeUpdate = () => {
+      const now = Date.now();
+      if (now - lastSavedAt < 5000) return;
+      lastSavedAt = now;
+      save();
+    };
+
+    videoElement.addEventListener("timeupdate", onTimeUpdate);
+    videoElement.addEventListener("pause", save);
+
+    return () => {
+      videoElement.removeEventListener("timeupdate", onTimeUpdate);
+      videoElement.removeEventListener("pause", save);
+    };
+  }, [videoElement, data, currentPart, telegramParts.length, id]);
 
   useEffect(() => {
     setChatVisible(readStoredChatPref());
@@ -252,7 +338,12 @@ export default function PublicWatchPage({
               </span>
             ) : null}
             {data.videoSource ? (
-              <span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                {data.videoSource === "telegram" ? (
+                  <SendIcon size={13} />
+                ) : (
+                  <HardDriveIcon size={13} />
+                )}
                 {t.replay.sourceLabel}:{" "}
                 <strong>
                   {data.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}

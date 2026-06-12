@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../../lib/api";
 import {
   buildAuthenticatedMediaUrl,
@@ -14,7 +14,8 @@ import { useRealtimeRefresh } from "../../../lib/use-realtime-refresh";
 import { useLanguage } from "../../../providers";
 import { ChatReplay } from "../../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
-import { DownloadIcon, TrashIcon } from "../../../components/icons";
+import { DownloadIcon, HardDriveIcon, SendIcon, TrashIcon } from "../../../components/icons";
+import { clearResume, readResume, saveResume } from "../../../lib/resume";
 
 type TelegramPart = {
   partIndex: number;
@@ -152,6 +153,95 @@ export default function ArchiveReplayPage() {
     setCurrentPart(1);
   }, [params.id]);
 
+  // ---- "Continue watching": restore and persist the position locally ----
+
+  const resumePartAppliedRef = useRef(false);
+  const resumeSeekAppliedRef = useRef<string | null>(null);
+
+  // Restore the saved part once the part list is known.
+  useEffect(() => {
+    if (resumePartAppliedRef.current || !data) return;
+    resumePartAppliedRef.current = true;
+
+    const saved = readResume(data.item.id);
+    if (
+      saved &&
+      telegramParts.length > 1 &&
+      saved.part >= 1 &&
+      saved.part <= telegramParts.length
+    ) {
+      setCurrentPart(saved.part);
+    }
+  }, [data, telegramParts.length]);
+
+  // Restore the saved position inside the current part (once per part).
+  useEffect(() => {
+    if (!videoElement || !data || data.item.status === "recording") return undefined;
+
+    const key = `${data.item.id}:${currentPart}`;
+    if (resumeSeekAppliedRef.current === key) return undefined;
+
+    const saved = readResume(data.item.id);
+    if (!saved || saved.part !== currentPart || saved.time < 10) {
+      resumeSeekAppliedRef.current = key;
+      return undefined;
+    }
+
+    const apply = () => {
+      resumeSeekAppliedRef.current = key;
+      const total = videoElement.duration;
+      // Don't resume right at the very end of the recording.
+      if (Number.isFinite(total) && total > 0 && saved.time > total - 30) return;
+      videoElement.currentTime = saved.time;
+    };
+
+    if (videoElement.readyState >= 1) {
+      apply();
+      return undefined;
+    }
+
+    videoElement.addEventListener("loadedmetadata", apply, { once: true });
+    return () => videoElement.removeEventListener("loadedmetadata", apply);
+  }, [videoElement, data, currentPart]);
+
+  // Persist progress every few seconds and on pause; forget it once the
+  // viewer is near the end of the last part.
+  useEffect(() => {
+    if (!videoElement || !data || data.item.status === "recording") return undefined;
+
+    let lastSavedAt = 0;
+
+    const save = () => {
+      const time = videoElement.currentTime;
+      if (!Number.isFinite(time) || time < 10) return;
+
+      const total = videoElement.duration;
+      const isLastPart = telegramParts.length === 0 || currentPart >= telegramParts.length;
+
+      if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
+        clearResume(data.item.id);
+        return;
+      }
+
+      saveResume(data.item.id, currentPart, time);
+    };
+
+    const onTimeUpdate = () => {
+      const now = Date.now();
+      if (now - lastSavedAt < 5000) return;
+      lastSavedAt = now;
+      save();
+    };
+
+    videoElement.addEventListener("timeupdate", onTimeUpdate);
+    videoElement.addEventListener("pause", save);
+
+    return () => {
+      videoElement.removeEventListener("timeupdate", onTimeUpdate);
+      videoElement.removeEventListener("pause", save);
+    };
+  }, [videoElement, data, currentPart, telegramParts.length]);
+
   // Auto-advance to the next part when the current one finishes.
   useEffect(() => {
     if (!videoElement || telegramParts.length < 2) return undefined;
@@ -255,7 +345,12 @@ export default function ArchiveReplayPage() {
                 <strong>{formatFileSize(data?.item.fileSizeBytes)}</strong>
               </span>
               {data?.item.videoSource ? (
-                <span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  {data.item.videoSource === "telegram" ? (
+                    <SendIcon size={13} />
+                  ) : (
+                    <HardDriveIcon size={13} />
+                  )}
                   {t.replay.sourceLabel}:
                   <strong>
                     {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
