@@ -130,6 +130,15 @@ type Dictionary = {
     openInTelegram: string;
     telegramPart: string;
     localFileDeleted: string;
+    details: string;
+    detailsTitle: string;
+    detailsStatus: string;
+    detailsUploadedAt: string;
+    detailsParts: string;
+    detailsChatBundle: string;
+    detailsLocalCopy: string;
+    detailsLocalCopyKept: string;
+    detailsLocalCopyDeleted: string;
   };
   replay: {
     withChat: string;
@@ -411,6 +420,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       openInTelegram: "Открыть в Telegram",
       telegramPart: "Часть",
       localFileDeleted: "Локальный файл удалён, запись доступна в Telegram.",
+      details: "Подробности",
+      detailsTitle: "Хранилище записи",
+      detailsStatus: "Статус",
+      detailsUploadedAt: "Выгружено",
+      detailsParts: "Части в Telegram",
+      detailsChatBundle: "Чат (файл .tsr.json)",
+      detailsLocalCopy: "Локальная копия",
+      detailsLocalCopyKept: "на диске сервера",
+      detailsLocalCopyDeleted: "удалена",
     },
     replay: {
       withChat: "С чатом",
@@ -691,6 +709,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       openInTelegram: "Open in Telegram",
       telegramPart: "Part",
       localFileDeleted: "Local file removed; the recording is available in Telegram.",
+      details: "Details",
+      detailsTitle: "Recording storage",
+      detailsStatus: "Status",
+      detailsUploadedAt: "Uploaded",
+      detailsParts: "Parts in Telegram",
+      detailsChatBundle: "Chat (.tsr.json file)",
+      detailsLocalCopy: "Local copy",
+      detailsLocalCopyKept: "kept on server disk",
+      detailsLocalCopyDeleted: "deleted",
     },
     replay: {
       withChat: "With chat",

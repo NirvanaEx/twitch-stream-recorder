@@ -37,6 +37,8 @@ type ArchiveItem = {
   telegramStatus: string;
   telegramProgress: number | null;
   telegramError: string | null;
+  telegramUploadedAt: string | null;
+  telegramChatUrl: string | null;
   telegramParts: TelegramPart[];
   localFileDeletedAt: string | null;
 };
@@ -58,6 +60,7 @@ export default function ArchivesPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [detailsArchive, setDetailsArchive] = useState<ArchiveItem | null>(null);
 
   const loadArchives = useCallback(async () => {
     try {
@@ -103,25 +106,16 @@ export default function ArchivesPage() {
   function renderTelegramCell(archive: ArchiveItem) {
     if (archive.telegramStatus === "uploaded" && archive.telegramParts.length > 0) {
       return (
-        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-          {archive.telegramParts.map((part) =>
-            part.url ? (
-              <a
-                key={part.partIndex}
-                href={part.url}
-                target="_blank"
-                rel="noreferrer"
-                title={t.archives.openInTelegram}
-              >
-                {part.partCount > 1
-                  ? `${t.archives.telegramPart} ${part.partIndex}/${part.partCount}`
-                  : t.archives.telegramUploaded}
-              </a>
-            ) : (
-              <span key={part.partIndex}>{t.archives.telegramUploaded}</span>
-            ),
-          )}
-        </span>
+        <button
+          type="button"
+          className="btn"
+          style={{ padding: "3px 10px", fontSize: 12 }}
+          onClick={() => setDetailsArchive(archive)}
+          title={t.archives.details}
+        >
+          {t.archives.telegramUploaded}
+          {archive.telegramParts.length > 1 ? ` · ${archive.telegramParts.length}` : ""}
+        </button>
       );
     }
 
@@ -164,9 +158,15 @@ export default function ArchivesPage() {
 
     if (archive.telegramStatus === "error") {
       return (
-        <span style={{ color: "var(--danger, #e5484d)" }} title={archive.telegramError ?? ""}>
+        <button
+          type="button"
+          className="btn"
+          style={{ padding: "3px 10px", fontSize: 12, color: "var(--danger, #e5484d)" }}
+          onClick={() => setDetailsArchive(archive)}
+          title={archive.telegramError ?? t.archives.details}
+        >
           {t.archives.telegramError}
-        </span>
+        </button>
       );
     }
 
@@ -350,6 +350,81 @@ export default function ArchivesPage() {
           </>
         )}
       </section>
+
+      {detailsArchive ? (
+        <div className="modal-overlay" onClick={() => setDetailsArchive(null)}>
+          <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3 className="page-title" style={{ fontSize: 16 }}>
+                {t.archives.detailsTitle}
+              </h3>
+              <button type="button" className="btn" onClick={() => setDetailsArchive(null)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-row">
+              <span className="modal-row-label">{t.common.title}</span>
+              <span>{detailsArchive.title || detailsArchive.channelDisplayName}</span>
+            </div>
+
+            <div className="modal-row">
+              <span className="modal-row-label">{t.archives.detailsStatus}</span>
+              <span>
+                {detailsArchive.telegramStatus === "uploaded"
+                  ? t.archives.telegramUploaded
+                  : detailsArchive.telegramStatus === "error"
+                    ? `${t.archives.telegramError}: ${detailsArchive.telegramError ?? "—"}`
+                    : detailsArchive.telegramStatus}
+              </span>
+            </div>
+
+            {detailsArchive.telegramUploadedAt ? (
+              <div className="modal-row">
+                <span className="modal-row-label">{t.archives.detailsUploadedAt}</span>
+                <span>{new Date(detailsArchive.telegramUploadedAt).toLocaleString()}</span>
+              </div>
+            ) : null}
+
+            <div className="modal-row">
+              <span className="modal-row-label">{t.archives.detailsLocalCopy}</span>
+              <span>
+                {detailsArchive.localFileDeletedAt
+                  ? t.archives.detailsLocalCopyDeleted
+                  : t.archives.detailsLocalCopyKept}
+              </span>
+            </div>
+
+            {detailsArchive.telegramParts.length > 0 ? (
+              <div className="modal-row">
+                <span className="modal-row-label">{t.archives.detailsParts}</span>
+                <span className="modal-part-links">
+                  {detailsArchive.telegramParts.map((part) =>
+                    part.url ? (
+                      <a key={part.partIndex} href={part.url} target="_blank" rel="noreferrer">
+                        {t.archives.telegramPart} {part.partIndex}/{part.partCount} ↗
+                      </a>
+                    ) : (
+                      <span key={part.partIndex}>
+                        {t.archives.telegramPart} {part.partIndex}/{part.partCount}
+                      </span>
+                    ),
+                  )}
+                </span>
+              </div>
+            ) : null}
+
+            {detailsArchive.telegramChatUrl ? (
+              <div className="modal-row">
+                <span className="modal-row-label">{t.archives.detailsChatBundle}</span>
+                <a href={detailsArchive.telegramChatUrl} target="_blank" rel="noreferrer">
+                  {t.archives.openInTelegram} ↗
+                </a>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

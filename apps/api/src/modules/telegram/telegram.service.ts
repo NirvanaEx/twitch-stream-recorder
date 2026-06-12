@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { AppSettings, Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
 import { PrismaService } from "../prisma/prisma.service";
@@ -416,12 +416,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         startOffsetSec += partDurationSec;
       }
 
+      // Chat backup: the messages live in the database, not in the video, so
+      // a .tsr.json bundle is posted alongside the video. Best-effort — a
+      // chat hiccup must not fail the video upload.
+      let telegramChatMessageId = session.telegramChatMessageId;
+
+      if (!telegramChatMessageId) {
+        try {
+          telegramChatMessageId = await this.uploadChatBundle(session, chatId);
+        } catch (error) {
+          this.logger.warn(
+            `${logPrefix} chat bundle upload failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
           telegramStatus: "uploaded",
           telegramUploadedAt: new Date(),
           telegramError: null,
+          telegramChatMessageId,
         },
       });
 
@@ -480,6 +498,82 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         : null;
 
     return { messageId: String(message.id), fileId };
+  }
+
+  /**
+   * Build the same .tsr.json bundle the admin UI offers for download and post
+   * it to the channel as a document. Returns the message id, or null when the
+   * session has no chat messages.
+   */
+  private async uploadChatBundle(session: SessionWithChannel, chatId: string) {
+    const [messages, snapshot] = await Promise.all([
+      this.prisma.chatMessage.findMany({
+        where: { streamSessionId: session.id },
+        orderBy: { relativeTimeSec: "asc" },
+        take: 100000,
+      }),
+      this.prisma.emoteSnapshot.findUnique({
+        where: { streamSessionId: session.id },
+      }),
+    ]);
+
+    if (messages.length === 0) {
+      return null;
+    }
+
+    const bundle = {
+      version: 1,
+      kind: "tsr-archive-bundle",
+      meta: {
+        id: session.id,
+        title: session.title,
+        categoryName: session.categoryName,
+        channelLogin: session.channel.twitchLogin,
+        channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
+        startedAt: session.startedAt?.toISOString() ?? null,
+        endedAt: session.endedAt?.toISOString() ?? null,
+      },
+      messages: messages.map((message) => ({
+        id: message.id,
+        authorLogin: message.authorLogin,
+        authorDisplayName: message.authorDisplayName,
+        authorColor: message.authorColor,
+        textRaw: message.textRaw,
+        relativeTimeSec: message.relativeTimeSec,
+        messageTimestamp: message.messageTimestamp.toISOString(),
+        isDeleted: message.isDeleted,
+      })),
+      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+    };
+
+    const tempDir = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram");
+    mkdirSync(tempDir, { recursive: true });
+
+    const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
+    const bundlePath = join(tempDir, `${safeName}-${session.id}.tsr.json`);
+
+    try {
+      writeFileSync(bundlePath, JSON.stringify(bundle), "utf8");
+
+      const client = await this.telegramClientService.getClient();
+      const entity = await this.telegramClientService.resolveChat(chatId);
+
+      const message = await client.sendFile(entity, {
+        file: bundlePath,
+        caption: `💬 Чат: ${session.channel.displayName ?? session.channel.twitchLogin} — ${
+          session.title ?? ""
+        }`.slice(0, 1024),
+        forceDocument: true,
+      });
+
+      return String(message.id);
+    } finally {
+      try {
+        rmSync(bundlePath, { force: true });
+      } catch {
+        // Best-effort temp cleanup.
+      }
+    }
   }
 
   private async cleanupUploadedLocalFiles(keepLocalDays: number) {
