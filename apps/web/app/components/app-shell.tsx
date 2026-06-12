@@ -18,7 +18,6 @@ import {
   SendIcon,
   SettingsIcon,
   ShieldIcon,
-  TvIcon,
   UserIcon,
   UsersIcon,
 } from "./icons";
@@ -101,7 +100,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       title: t.nav.groupRecords,
       items: [
         { href: "/admin", label: t.common.dashboard, Icon: HomeIcon, permission: "view_archives" },
-        { href: "/admin/channels", label: t.common.channels, Icon: TvIcon, permission: "manage_channels" },
         { href: "/admin/recording", label: t.nav.recordingNow, Icon: RecordIcon, permission: "view_recording" },
         { href: "/admin/archives", label: t.nav.archive, Icon: ArchiveIcon, permission: "view_archives" },
         { href: "/admin/twitch-audio", label: t.nav.twitchAudio, Icon: MusicIcon, permission: "view_archives" },

@@ -389,8 +389,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       sizeLabel: "Размер",
     },
     dashboard: {
-      title: "Состояние записи",
-      subtitle: "Только важное: кто сейчас в эфире, кто записывается и что уже можно открыть.",
+      title: "Обзор и каналы",
+      subtitle: "Один центр управления: статус эфира, добавление каналов, запуск записи и последние архивы.",
       trackedChannels: "Каналов",
       liveNow: "Сейчас в эфире",
       recordingNow: "Сейчас пишется",
@@ -722,8 +722,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       sizeLabel: "Size",
     },
     dashboard: {
-      title: "Recording status",
-      subtitle: "Only what matters: who is live, what is recording now, and what is ready to open.",
+      title: "Overview & channels",
+      subtitle: "One control center: live status, adding channels, starting recordings and recent archives.",
       trackedChannels: "Channels",
       liveNow: "Live now",
       recordingNow: "Recording now",
