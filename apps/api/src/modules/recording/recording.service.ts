@@ -555,6 +555,14 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (session.audioPath) {
+      const audioPath = resolve(session.audioPath);
+
+      if (existsSync(audioPath)) {
+        rmSync(audioPath, { force: true });
+      }
+    }
+
     // Chat messages and emote snapshots reference the session without a
     // foreign key, so they must be removed explicitly or they leak.
     await this.prisma.chatMessage.deleteMany({
@@ -663,6 +671,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      // The standalone audio track is extracted before the session flips to
+      // completed so the Telegram offloader picks it up together with the video.
+      const audio =
+        finalStatus === "completed" && fileSizeBytes > 0
+          ? await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
+          : null;
+
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
@@ -675,6 +690,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           errorMessage,
           ...(fileSizeBytes === 0
             ? { recordingPath: null, playbackPath: null }
+            : {}),
+          ...(audio
+            ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
             : {}),
         },
       });
@@ -878,6 +896,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           // Best-effort cleanup; ignore filesystem errors.
         }
 
+        const audio = session.audioPath
+          ? null
+          : await this.extractAudioTrack(outputPath, logPrefix);
+
         await this.prisma.streamSession.update({
           where: { id: session.id },
           data: {
@@ -886,6 +908,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             replayStatus: "ready",
             errorMessage: null,
             fileSizeBytes: String(fileSizeBytes),
+            ...(audio
+              ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
+              : {}),
           },
         });
 
@@ -905,6 +930,89 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           }`,
         );
       }
+    }
+  }
+
+  /**
+   * Pull the AAC track out of a finished recording into a standalone .m4a
+   * (stream copy, no re-encode). The Twitch userscript overlays it on the VOD
+   * to restore DMCA-muted sound. Best-effort: a failure here must never fail
+   * the recording itself.
+   */
+  private async extractAudioTrack(videoPath: string, logPrefix: string) {
+    const settings = await this.prisma.appSettings.upsert({
+      where: { id: "default" },
+      create: { id: "default" },
+      update: {},
+    });
+
+    if (!settings.audioTrackEnabled) {
+      return null;
+    }
+
+    const audioPath = videoPath.replace(/\.mp4$/i, ".m4a");
+
+    try {
+      const ffmpegCommand = this.resolveFfmpegCommand();
+
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        const child = spawn(
+          ffmpegCommand.command,
+          [
+            ...ffmpegCommand.args,
+            "-y",
+            "-i",
+            videoPath,
+            "-vn",
+            "-acodec",
+            "copy",
+            "-movflags",
+            "+faststart",
+            audioPath,
+          ],
+          { stdio: ["ignore", "ignore", "pipe"] },
+        );
+
+        let stderrTail = "";
+        child.stderr?.on("data", (chunk) => {
+          stderrTail = `${stderrTail}${chunk.toString()}`.slice(-2000);
+        });
+
+        child.once("error", (error) => rejectPromise(error));
+        child.once("exit", (code) => {
+          if (code === 0) {
+            resolvePromise();
+          } else {
+            rejectPromise(
+              new Error(`ffmpeg exited with code ${String(code)}: ${stderrTail.trim()}`),
+            );
+          }
+        });
+      });
+
+      const sizeBytes = existsSync(audioPath) ? statSync(audioPath).size : 0;
+
+      if (sizeBytes === 0) {
+        throw new Error("ffmpeg produced an empty audio file.");
+      }
+
+      this.logger.log(
+        `${logPrefix} audio track extracted (${Math.round(sizeBytes / 1024 / 1024)} MB).`,
+      );
+
+      return { path: audioPath, sizeBytes };
+    } catch (error) {
+      this.logger.warn(
+        `${logPrefix} audio extraction failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      try {
+        rmSync(audioPath, { force: true });
+      } catch {
+        // Best-effort cleanup; ignore filesystem errors.
+      }
+      return null;
     }
   }
 
@@ -1114,6 +1222,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           : null,
       localFileDeletedAt: session.localFileDeletedAt,
       telegramParts,
+      // The standalone audio track for the Twitch userscript: available while
+      // it exists locally or in Telegram and was not auto-expired.
+      audioAvailable:
+        !session.audioDeletedAt &&
+        Boolean(session.audioPath || session.telegramAudioMessageId),
       createdAt: session.createdAt,
     };
   }

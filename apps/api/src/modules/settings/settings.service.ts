@@ -39,6 +39,8 @@ export class SettingsService {
         telegramEnabled: dto.telegramEnabled ?? false,
         telegramChatId: dto.telegramChatId ?? "",
         telegramKeepLocalDays: dto.telegramKeepLocalDays ?? 7,
+        audioTrackEnabled: dto.audioTrackEnabled ?? true,
+        audioKeepDays: dto.audioKeepDays ?? 30,
         telegramApiId: telegramApiId ?? "",
         telegramApiHash: telegramApiHash ?? "",
         telegramBotToken: telegramBotToken ?? "",
@@ -53,6 +55,8 @@ export class SettingsService {
         telegramEnabled: dto.telegramEnabled,
         telegramChatId: dto.telegramChatId,
         telegramKeepLocalDays: dto.telegramKeepLocalDays,
+        audioTrackEnabled: dto.audioTrackEnabled,
+        audioKeepDays: dto.audioKeepDays,
         telegramApiId,
         telegramApiHash,
         telegramBotToken,
@@ -73,6 +77,8 @@ export class SettingsService {
       telegramEnabled: settings.telegramEnabled,
       telegramChatId: settings.telegramChatId,
       telegramKeepLocalDays: settings.telegramKeepLocalDays,
+      audioTrackEnabled: settings.audioTrackEnabled,
+      audioKeepDays: settings.audioKeepDays,
       // Secrets never leave the API; the UI only learns whether they are set
       // (either in the database or via env fallback).
       telegramApiIdSet: Boolean(

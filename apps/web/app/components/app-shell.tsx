@@ -13,6 +13,7 @@ import {
   HardDriveIcon,
   HomeIcon,
   MenuIcon,
+  MusicIcon,
   RecordIcon,
   SendIcon,
   SettingsIcon,
@@ -103,6 +104,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         { href: "/admin/channels", label: t.common.channels, Icon: TvIcon, permission: "manage_channels" },
         { href: "/admin/recording", label: t.nav.recordingNow, Icon: RecordIcon, permission: "view_recording" },
         { href: "/admin/archives", label: t.nav.archive, Icon: ArchiveIcon, permission: "view_archives" },
+        { href: "/admin/twitch-audio", label: t.nav.twitchAudio, Icon: MusicIcon, permission: "view_archives" },
       ],
     },
     {

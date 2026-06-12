@@ -58,6 +58,18 @@ model StreamSession {
   telegramChatMessageId String?
   // Set when the local video file was removed after a successful Telegram upload.
   localFileDeletedAt DateTime?
+  // Standalone audio track (.m4a) extracted after the recording so it can be
+  // overlaid on the Twitch VOD (DMCA-muted sections) via the userscript.
+  audioPath          String?
+  audioSizeBytes     String?
+  // Telegram copy of the audio track (single message, not split into parts).
+  telegramAudioChatId     String?
+  telegramAudioMessageId  String?
+  telegramAudioFileId     String?
+  telegramAudioUploadedAt DateTime?
+  // Set when the audio track was auto-removed (local file and the Telegram
+  // message) after audioKeepDays — Twitch VODs expire, so audio is temporary.
+  audioDeletedAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -131,6 +143,11 @@ model AppSettings {
   telegramApiId         String   @default("")
   telegramApiHash       String   @default("")
   telegramBotToken      String   @default("")
+  // Extract a standalone audio track (.m4a) from every finished recording.
+  audioTrackEnabled     Boolean  @default(true)
+  // Audio tracks are temporary (matched to Twitch VOD lifetime): both the
+  // local file and the Telegram copy are deleted after this many days.
+  audioKeepDays         Int      @default(30)
   updatedAt             DateTime @updatedAt
 }
 

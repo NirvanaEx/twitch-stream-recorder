@@ -14,6 +14,8 @@ type SettingsResponse = {
   telegramEnabled: boolean;
   telegramChatId: string;
   telegramKeepLocalDays: number;
+  audioTrackEnabled: boolean;
+  audioKeepDays: number;
   telegramApiIdSet: boolean;
   telegramApiHashSet: boolean;
   telegramBotTokenSet: boolean;
@@ -55,6 +57,8 @@ export default function SettingsPage() {
     telegramEnabled: false,
     telegramChatId: "",
     telegramKeepLocalDays: 7,
+    audioTrackEnabled: true,
+    audioKeepDays: 30,
     telegramApiIdSet: false,
     telegramApiHashSet: false,
     telegramBotTokenSet: false,
@@ -336,6 +340,47 @@ export default function SettingsPage() {
                       }))
                     }
                   />
+                </label>
+              </div>
+
+              <div>
+                <h3 className="page-title" style={{ fontSize: 16, marginBottom: 8 }}>
+                  {t.settings.audioTitle}
+                </h3>
+                <p className="page-copy" style={{ fontSize: 12 }}>
+                  {t.settings.audioHint}
+                </p>
+
+                <label className="toggle-row">
+                  <div className="toggle-copy">
+                    <strong>{t.settings.audioTrackEnabled}</strong>
+                  </div>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={form.audioTrackEnabled}
+                      onChange={(event) =>
+                        setForm((c) => ({ ...c, audioTrackEnabled: event.target.checked }))
+                      }
+                    />
+                    <span className="slider" />
+                  </span>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">{t.settings.audioKeepDays}</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    value={form.audioKeepDays}
+                    onChange={(event) =>
+                      setForm((c) => ({ ...c, audioKeepDays: Number(event.target.value) }))
+                    }
+                  />
+                  <span className="page-copy" style={{ fontSize: 12 }}>
+                    {t.settings.audioKeepDaysHint}
+                  </span>
                 </label>
               </div>
 
