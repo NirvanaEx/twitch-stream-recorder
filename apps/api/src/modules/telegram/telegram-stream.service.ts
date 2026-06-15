@@ -9,12 +9,13 @@ import { TelegramClientService } from "./telegram-client.service";
 // size to divide 1 MB; 512 KB satisfies both and is the maximum allowed.
 const CHUNK_SIZE = 512 * 1024;
 
-// How many 512 KB chunks are fetched from Telegram concurrently. Sequential
-// reads are capped by the round-trip to the DC (~1.5-3 MB/s); interleaved
-// workers overlap those round-trips. 12 workers keep ~6 MB in flight, which
-// covers 1x-2x playback of a source-quality recording. Override with
-// TELEGRAM_STREAM_PARALLELISM (1-32); lower it if the bot hits FLOOD_WAIT.
-const DEFAULT_PARALLEL_CHUNKS = 12;
+// How many 512 KB chunks are fetched from Telegram concurrently. All requests
+// share ONE MTProto connection, so this is NOT "more workers = more speed":
+// past a handful of in-flight requests Telegram throttles the connection and
+// throughput DROPS (raising this to 12 made playback worse). 6 is the sweet
+// spot. Tune per-deployment with TELEGRAM_STREAM_PARALLELISM (1-32) — if the
+// stream stalls, try LOWER values (3-4) before higher ones.
+const DEFAULT_PARALLEL_CHUNKS = 6;
 
 // In-memory LRU of downloaded chunks. Seeks usually re-read the same areas
 // (the mp4 index, recently watched ranges, timeline previews), so serving
