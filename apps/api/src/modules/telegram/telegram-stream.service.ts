@@ -11,8 +11,10 @@ const CHUNK_SIZE = 512 * 1024;
 
 // How many 512 KB chunks are fetched from Telegram concurrently. Sequential
 // reads are capped by the round-trip to the DC (~1.5-3 MB/s); interleaved
-// workers overlap those round-trips. 6 workers keep ~3 MB in flight.
-const DEFAULT_PARALLEL_CHUNKS = 6;
+// workers overlap those round-trips. 12 workers keep ~6 MB in flight, which
+// covers 1x-2x playback of a source-quality recording. Override with
+// TELEGRAM_STREAM_PARALLELISM (1-32); lower it if the bot hits FLOOD_WAIT.
+const DEFAULT_PARALLEL_CHUNKS = 12;
 
 // In-memory LRU of downloaded chunks. Seeks usually re-read the same areas
 // (the mp4 index, recently watched ranges, timeline previews), so serving
@@ -22,6 +24,16 @@ const DEFAULT_CACHE_MB = 192;
 // Resolved messages carry a file_reference that Telegram expires after a
 // while; re-fetch the message when the cached one gets stale or rejected.
 const MEDIA_CACHE_TTL_MS = 5 * 60_000;
+
+// A transient Telegram failure mid-stream (timeout, dropped chunk, brief
+// flood) used to abort the whole HTTP response — the player then showed a
+// "network error" the viewer had to clear by hand. Retry the current position
+// a few times with backoff instead, turning a hiccup into a short stall.
+const MAX_CHUNK_RETRIES = 6;
+const RETRY_BASE_DELAY_MS = 400;
+
+// How often an active stream logs its throughput.
+const SPEED_LOG_INTERVAL_MS = 5_000;
 
 // One Telegram message whose document we stream back over HTTP. cacheKey
 // scopes the media/chunk caches (a part id or an "audio:<sessionId>" tag).
@@ -193,9 +205,19 @@ export class TelegramStreamService {
     const cachePut = (offset: number, buffer: Buffer) =>
       this.cachePut(`${source.cacheKey}:${offset}`, buffer);
 
+    // Throughput accounting (logged periodically + on close). `downloaded`
+    // counts raw bytes pulled from Telegram; `served` counts bytes handed to
+    // the client (a re-watched range is served from cache without downloading).
+    const logger = this.logger;
+    const startedAt = Date.now();
+    let downloadedBytes = 0;
+    let servedBytes = 0;
+
     async function* byteRange() {
       let position = start;
-      let refreshedReference = false;
+      let retries = 0;
+      let lastErrorPosition = -1;
+      let refRefreshes = 0;
 
       while (position <= end) {
         // Serve everything we already have in the LRU cache first — typical
@@ -212,6 +234,7 @@ export class TelegramStreamService {
           }
           if (buffer.length === 0) return;
 
+          servedBytes += buffer.length;
           yield buffer;
           position += buffer.length;
           if (position > end) return;
@@ -253,6 +276,7 @@ export class TelegramStreamService {
             const raw = Buffer.isBuffer(result.value)
               ? result.value
               : Buffer.from(result.value);
+            downloadedBytes += raw.length;
             cachePut(chunkOffset, raw);
             chunkOffset += raw.length;
 
@@ -273,6 +297,7 @@ export class TelegramStreamService {
               buffer = buffer.subarray(0, remaining);
             }
 
+            servedBytes += buffer.length;
             yield buffer;
             position += buffer.length;
 
@@ -283,11 +308,32 @@ export class TelegramStreamService {
             worker = (worker + 1) % parallelChunks;
           }
         } catch (error) {
-          // The cached file_reference expired mid-stream: refresh the message
-          // once and resume from the current position.
-          if (!refreshedReference && String(error).includes("FILE_REFERENCE")) {
-            refreshedReference = true;
+          const message = String(error);
+
+          // The cached file_reference expires periodically on long streams;
+          // refresh the message and resume from the current position.
+          if (message.includes("FILE_REFERENCE")) {
+            refRefreshes += 1;
+            if (refRefreshes > 3) throw error;
             media = await resolveMedia(true);
+            continue;
+          }
+
+          // Any other transient failure (timeout, dropped chunk, brief flood):
+          // retry the current position a few times with backoff instead of
+          // killing the whole response. Reset the counter whenever we managed
+          // to advance since the last error.
+          if (position !== lastErrorPosition) {
+            retries = 0;
+            lastErrorPosition = position;
+          }
+          retries += 1;
+          if (retries <= MAX_CHUNK_RETRIES) {
+            logger.warn(
+              `Telegram stream ${source.cacheKey}: chunk error at byte ${position} ` +
+                `(attempt ${retries}/${MAX_CHUNK_RETRIES}): ${message}`,
+            );
+            await sleep(RETRY_BASE_DELAY_MS * retries);
             continue;
           }
           throw error;
@@ -310,8 +356,54 @@ export class TelegramStreamService {
 
     const readable = Readable.from(byteRange());
 
-    res.once("close", () => readable.destroy());
+    // Log the live throughput so a "слишком медленно" complaint can be checked
+    // against actual numbers (MB/s from Telegram vs. delivered to the client).
+    let lastLogAt = startedAt;
+    let lastDownloaded = 0;
+    let lastServed = 0;
+    const speedTimer = setInterval(() => {
+      const now = Date.now();
+      const dt = (now - lastLogAt) / 1000;
+      if (dt <= 0) return;
+      const dlDelta = downloadedBytes - lastDownloaded;
+      const servedDelta = servedBytes - lastServed;
+      lastLogAt = now;
+      lastDownloaded = downloadedBytes;
+      lastServed = servedBytes;
+      // Stay quiet while the player is paused / fully buffered.
+      if (dlDelta === 0 && servedDelta === 0) return;
+      logger.log(
+        `Telegram stream ${source.cacheKey}: ${(dlDelta / 1_048_576 / dt).toFixed(2)} MB/s ` +
+          `from Telegram, ${(servedDelta / 1_048_576 / dt).toFixed(2)} MB/s to client ` +
+          `(served ${(servedBytes / 1_048_576).toFixed(0)} MB)`,
+      );
+    }, SPEED_LOG_INTERVAL_MS);
+    speedTimer.unref();
+
+    let finalized = false;
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+      clearInterval(speedTimer);
+      if (servedBytes === 0) return;
+      const elapsed = (Date.now() - startedAt) / 1000;
+      logger.log(
+        `Telegram stream ${source.cacheKey} finished: served ` +
+          `${(servedBytes / 1_048_576).toFixed(1)} MB (downloaded ` +
+          `${(downloadedBytes / 1_048_576).toFixed(1)} MB from Telegram) in ` +
+          `${elapsed.toFixed(1)}s — avg ` +
+          `${(downloadedBytes / 1_048_576 / Math.max(0.001, elapsed)).toFixed(2)} MB/s ` +
+          `from Telegram, range ${start}-${end}`,
+      );
+    };
+
+    res.once("close", () => {
+      readable.destroy();
+      finalize();
+    });
+    readable.once("end", finalize);
     readable.once("error", (error) => {
+      finalize();
       this.logger.warn(
         `Telegram stream ${source.cacheKey} failed: ${
           error instanceof Error ? error.message : String(error)
@@ -330,7 +422,7 @@ export class TelegramStreamService {
   private getParallelChunks() {
     const configured = Number.parseInt(process.env.TELEGRAM_STREAM_PARALLELISM ?? "", 10);
 
-    return Number.isFinite(configured) && configured >= 1 && configured <= 16
+    return Number.isFinite(configured) && configured >= 1 && configured <= 32
       ? configured
       : DEFAULT_PARALLEL_CHUNKS;
   }
@@ -395,4 +487,8 @@ export class TelegramStreamService {
     this.mediaCache.set(source.cacheKey, { media, fetchedAt: Date.now() });
     return media;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
