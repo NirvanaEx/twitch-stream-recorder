@@ -58,6 +58,12 @@ const SKIP_SECONDS = 5;
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const HIDE_DELAY_MS = 2500;
 const DOUBLE_TAP_MS = 350;
+// Transient network errors (a dropped Telegram-backed range, a proxy timeout)
+// shouldn't dump the viewer onto a manual "retry" button. Silently reload and
+// resume from the same spot a few times first; only fall back to the manual
+// overlay once those are exhausted.
+const MAX_AUTO_RETRIES = 4;
+const AUTO_RETRY_DELAY_MS = 1500;
 
 /**
  * YouTube-style video player. Handles its own controls + global keyboard
@@ -90,6 +96,10 @@ export function VideoPlayer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const centerIconTimerRef = useRef<number | null>(null);
+  const autoRetryRef = useRef<{ count: number; timer: number | null }>({
+    count: 0,
+    timer: null,
+  });
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -236,6 +246,12 @@ export function VideoPlayer({
     const onPlaying = () => {
       setWaiting(false);
       setMediaError(null);
+      // Playback recovered — forget earlier transient failures.
+      autoRetryRef.current.count = 0;
+      if (autoRetryRef.current.timer) {
+        window.clearTimeout(autoRetryRef.current.timer);
+        autoRetryRef.current.timer = null;
+      }
     };
     const onVolume = () => {
       setVolume(v.volume);
@@ -243,6 +259,31 @@ export function VideoPlayer({
     };
     const onRate = () => setPlaybackRate(v.playbackRate);
     const onError = () => {
+      const isNetwork = v.error?.code === MediaError.MEDIA_ERR_NETWORK;
+
+      // Auto-recover from transient network drops (slow Telegram range, proxy
+      // timeout) without bothering the user. Reload and resume from the same
+      // spot, with a growing delay; reset happens on the next "playing".
+      if (isNetwork && autoRetryRef.current.count < MAX_AUTO_RETRIES) {
+        autoRetryRef.current.count += 1;
+        const attempt = autoRetryRef.current.count;
+        const resumeAt = v.currentTime;
+        setMediaError(null);
+        setWaiting(true);
+        if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
+        autoRetryRef.current.timer = window.setTimeout(() => {
+          autoRetryRef.current.timer = null;
+          v.load();
+          const onLoaded = () => {
+            v.removeEventListener("loadedmetadata", onLoaded);
+            if (Number.isFinite(resumeAt) && resumeAt > 0) v.currentTime = resumeAt;
+            void v.play().catch(() => undefined);
+          };
+          v.addEventListener("loadedmetadata", onLoaded);
+        }, AUTO_RETRY_DELAY_MS * attempt);
+        return;
+      }
+
       setWaiting(false);
       setMediaError(describeMediaError(v.error));
     };
@@ -486,6 +527,7 @@ export function VideoPlayer({
   useEffect(() => () => {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
+    if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
   }, []);
 
   // ---- Touch gestures -----------------------------------------------------

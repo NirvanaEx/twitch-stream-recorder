@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "../lib/api";
 
 type ChatMessage = {
@@ -122,14 +122,20 @@ export function ChatReplay({
     return () => window.clearInterval(timer);
   }, [endpoint, isLive, staticData]);
 
-  // Track video time.
+  // Track video time. `timeupdate` fires ~4x/sec; chat only needs 1s
+  // granularity, so we quantise to whole seconds and skip the state update
+  // (and the whole re-render) when the second hasn't changed. This alone cuts
+  // chat re-renders ~75% and stops the chat from competing with video decode.
   useEffect(() => {
     if (!videoElement) return undefined;
 
-    const handler = () => setCurrentTime(videoElement.currentTime);
+    const handler = () => {
+      const next = Math.floor(videoElement.currentTime);
+      setCurrentTime((prev) => (prev === next ? prev : next));
+    };
     videoElement.addEventListener("timeupdate", handler);
     videoElement.addEventListener("seeked", handler);
-    setCurrentTime(videoElement.currentTime);
+    handler();
 
     return () => {
       videoElement.removeEventListener("timeupdate", handler);
@@ -145,27 +151,50 @@ export function ChatReplay({
     return map;
   }, [data?.emotes]);
 
+  // The deleted-filtered, time-sorted message list. Recomputed only when the
+  // data or the "show deleted" toggle changes — NOT on every timeupdate.
+  const timeline = useMemo(() => {
+    const all = data?.messages ?? [];
+    return showDeleted ? all : all.filter((message) => !message.isDeleted);
+  }, [data, showDeleted]);
+
   // Twitch-style: show only messages whose render_time has been reached, keep
-  // the last MAX_VISIBLE so the chat doesn't grow unbounded. When the user
-  // seeks back, only messages up to the new currentTime are shown.
+  // the last MAX_VISIBLE so the chat doesn't grow unbounded. Messages arrive
+  // sorted by relativeTimeSec and renderTime is just a constant shift of it, so
+  // the cutoff is a binary search instead of an O(n) scan over ~50k messages on
+  // every (now per-second) update.
   const visibleMessages = useMemo(() => {
-    if (!data) return [];
+    if (timeline.length === 0) return [];
 
-    const reached = data.messages.filter((message) => {
-      if (!showDeleted && message.isDeleted) return false;
-
-      // Live recordings: always show everything that has been captured so far.
-      if (isLive || !videoElement) return true;
-
-      const renderTime = message.relativeTimeSec - baseOffsetSec + offset;
-      return renderTime <= currentTime;
-    });
-
-    return reached.slice(-MAX_VISIBLE).map((message) => ({
+    const toEntry = (message: ChatMessage) => ({
       message,
       renderTime: message.relativeTimeSec - baseOffsetSec + offset,
-    }));
-  }, [data, currentTime, offset, showDeleted, isLive, videoElement, baseOffsetSec]);
+    });
+
+    // Live recordings (or no video): show the latest captured messages.
+    if (isLive || !videoElement) {
+      return timeline.slice(-MAX_VISIBLE).map(toEntry);
+    }
+
+    // VOD: find how many messages have reached their render time. We want the
+    // count of messages with relativeTimeSec <= currentTime + baseOffsetSec
+    // - offset (the inverse of renderTime <= currentTime).
+    const threshold = currentTime + baseOffsetSec - offset;
+    let lo = 0;
+    let hi = timeline.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (timeline[mid].relativeTimeSec <= threshold) lo = mid + 1;
+      else hi = mid;
+    }
+
+    const start = Math.max(0, lo - MAX_VISIBLE);
+    const entries = [];
+    for (let i = start; i < lo; i += 1) {
+      entries.push(toEntry(timeline[i]));
+    }
+    return entries;
+  }, [timeline, currentTime, offset, baseOffsetSec, isLive, videoElement]);
 
   // Twitch-style auto-scroll: only stick to the bottom while the user is
   // already there. If they scroll up to read older messages we stop forcing
@@ -282,7 +311,7 @@ function formatRenderTime(seconds: number) {
   return `${minutes}:${secs.toString().padStart(2, "0")}`;
 }
 
-function ChatMessageItem({
+const ChatMessageItem = memo(function ChatMessageItem({
   message,
   renderTime,
   emoteMap,
@@ -329,7 +358,7 @@ function ChatMessageItem({
       </span>
     </div>
   );
-}
+});
 
 type Token =
   | { type: "text"; value: string }
