@@ -19,6 +19,13 @@ export class ArchivesController {
     this.deleteArchive = this.deleteArchive.bind(this);
     this.deleteArchiveAudio = this.deleteArchiveAudio.bind(this);
     this.getArchiveChat = this.getArchiveChat.bind(this);
+    this.getStreamStats = this.getStreamStats.bind(this);
+  }
+
+  @Get(":id/stream-stats")
+  getStreamStats(@Param("id") id: string) {
+    const stats = this.telegramStreamService.getLiveStats(id);
+    return stats ? { active: true, ...stats } : { active: false };
   }
 
   @Get(":id/chat")

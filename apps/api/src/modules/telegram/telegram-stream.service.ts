@@ -33,17 +33,31 @@ const MEDIA_CACHE_TTL_MS = 5 * 60_000;
 const MAX_CHUNK_RETRIES = 6;
 const RETRY_BASE_DELAY_MS = 400;
 
-// How often an active stream logs its throughput.
-const SPEED_LOG_INTERVAL_MS = 5_000;
+// How often an active stream logs its throughput / refreshes the live stats.
+const SPEED_LOG_INTERVAL_MS = 2_000;
+
+// Live stats older than this are considered idle (no active playback).
+const LIVE_STATS_TTL_MS = 8_000;
 
 // One Telegram message whose document we stream back over HTTP. cacheKey
 // scopes the media/chunk caches (a part id or an "audio:<sessionId>" tag).
+// statsKey groups live throughput by the archive the viewer is watching.
 type StreamSource = {
   cacheKey: string;
+  statsKey: string;
   chatId: string;
   messageId: string;
   totalSize: number;
   contentType: string;
+};
+
+// Live throughput for an archive being streamed from Telegram, surfaced in the
+// admin panel so speed can be seen without tailing container logs.
+type LiveStreamStat = {
+  mbpsFromTelegram: number;
+  mbpsToClient: number;
+  servedBytes: number;
+  updatedAt: number;
 };
 
 @Injectable()
@@ -56,6 +70,23 @@ export class TelegramStreamService {
   // LRU chunk cache: key `${cacheKey}:${alignedOffset}` -> raw 512 KB chunk.
   private readonly chunkCache = new Map<string, Buffer>();
   private chunkCacheBytes = 0;
+  // Latest throughput sample per statsKey (archive id), for the panel widget.
+  private readonly liveStats = new Map<string, LiveStreamStat>();
+
+  /** Current Telegram throughput for an archive, or null when idle. */
+  getLiveStats(statsKey: string) {
+    const stat = this.liveStats.get(statsKey);
+    if (!stat) return null;
+    if (Date.now() - stat.updatedAt > LIVE_STATS_TTL_MS) {
+      this.liveStats.delete(statsKey);
+      return null;
+    }
+    return {
+      mbpsFromTelegram: Number(stat.mbpsFromTelegram.toFixed(2)),
+      mbpsToClient: Number(stat.mbpsToClient.toFixed(2)),
+      servedMb: Math.round(stat.servedBytes / 1_048_576),
+    };
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -96,6 +127,7 @@ export class TelegramStreamService {
     await this.streamSourceToResponse(
       {
         cacheKey: part.id,
+        statsKey: sessionId,
         chatId: part.chatId,
         messageId: part.messageId,
         totalSize,
@@ -143,6 +175,7 @@ export class TelegramStreamService {
     await this.streamSourceToResponse(
       {
         cacheKey: `audio:${session.id}`,
+        statsKey: session.id,
         chatId: session.telegramAudioChatId,
         messageId: session.telegramAudioMessageId,
         totalSize,
@@ -362,6 +395,8 @@ export class TelegramStreamService {
     let lastLogAt = startedAt;
     let lastDownloaded = 0;
     let lastServed = 0;
+    const liveStats = this.liveStats;
+    let lastLoggedAt = startedAt;
     const speedTimer = setInterval(() => {
       const now = Date.now();
       const dt = (now - lastLogAt) / 1000;
@@ -373,11 +408,27 @@ export class TelegramStreamService {
       lastServed = servedBytes;
       // Stay quiet while the player is paused / fully buffered.
       if (dlDelta === 0 && servedDelta === 0) return;
-      logger.log(
-        `Telegram stream ${source.cacheKey}: ${(dlDelta / 1_048_576 / dt).toFixed(2)} MB/s ` +
-          `from Telegram, ${(servedDelta / 1_048_576 / dt).toFixed(2)} MB/s to client ` +
-          `(served ${(servedBytes / 1_048_576).toFixed(0)} MB)`,
-      );
+
+      const mbpsFromTelegram = dlDelta / 1_048_576 / dt;
+      const mbpsToClient = servedDelta / 1_048_576 / dt;
+
+      // Publish for the panel widget every interval...
+      liveStats.set(source.statsKey, {
+        mbpsFromTelegram,
+        mbpsToClient,
+        servedBytes,
+        updatedAt: now,
+      });
+
+      // ...but only write the (noisier) console line every ~6s.
+      if (now - lastLoggedAt >= 6_000) {
+        lastLoggedAt = now;
+        logger.log(
+          `Telegram stream ${source.cacheKey}: ${mbpsFromTelegram.toFixed(2)} MB/s ` +
+            `from Telegram, ${mbpsToClient.toFixed(2)} MB/s to client ` +
+            `(served ${(servedBytes / 1_048_576).toFixed(0)} MB)`,
+        );
+      }
     }, SPEED_LOG_INTERVAL_MS);
     speedTimer.unref();
 

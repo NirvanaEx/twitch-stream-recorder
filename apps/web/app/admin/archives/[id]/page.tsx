@@ -82,6 +82,13 @@ export default function ArchiveReplayPage() {
   // 1-based index of the Telegram part being played (split recordings only).
   const [currentPart, setCurrentPart] = useState(1);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
+  // Live Telegram streaming throughput, shown as a chip next to the source.
+  const [tgStats, setTgStats] = useState<{
+    active: boolean;
+    mbpsFromTelegram?: number;
+    mbpsToClient?: number;
+    servedMb?: number;
+  } | null>(null);
 
   // Restore the user's stored chat preference on mount. Default is ON;
   // toggling the in-player chat button persists the choice for next time.
@@ -176,6 +183,36 @@ export default function ArchiveReplayPage() {
   useEffect(() => {
     setCurrentPart(1);
   }, [params.id]);
+
+  // Poll live Telegram throughput while watching a Telegram-sourced archive.
+  // The endpoint is cheap and returns { active: false } when nothing streams.
+  useEffect(() => {
+    if (data?.item.videoSource !== "telegram") {
+      setTgStats(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const poll = () => {
+      apiGet<{
+        active: boolean;
+        mbpsFromTelegram?: number;
+        mbpsToClient?: number;
+        servedMb?: number;
+      }>(`archives/${params.id}/stream-stats`)
+        .then((stats) => {
+          if (!cancelled) setTgStats(stats);
+        })
+        .catch(() => undefined);
+    };
+
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [data?.item.videoSource, params.id]);
 
   // ---- "Continue watching": restore and persist the position locally ----
 
@@ -380,6 +417,23 @@ export default function ArchiveReplayPage() {
                   <strong>
                     {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
                   </strong>
+                  {data.item.videoSource === "telegram" && tgStats?.active ? (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        padding: "1px 8px",
+                        borderRadius: 999,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: "rgba(124, 77, 255, 0.16)",
+                        color: "var(--accent)",
+                        whiteSpace: "nowrap",
+                      }}
+                      title="Скорость загрузки из Telegram прямо сейчас"
+                    >
+                      ▼ {tgStats.mbpsFromTelegram?.toFixed(2)} МБ/с
+                    </span>
+                  ) : null}
                 </span>
               ) : null}
             </div>
