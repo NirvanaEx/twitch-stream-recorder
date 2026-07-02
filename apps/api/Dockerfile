@@ -21,4 +21,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 
 EXPOSE 3001
-CMD ["sh", "-c", "npx prisma db push && node dist/main.js"]
+# Retry the schema sync instead of dying: when postgres is still warming up
+# after a reboot, a one-shot "db push" used to crash-loop the container and
+# the panel answered 502 the whole time. "exec" hands PID 1 to node so it
+# receives SIGTERM and shuts down recordings cleanly.
+CMD ["sh", "-c", "until npx prisma db push; do echo 'prisma db push failed, retrying in 5s...'; sleep 5; done; exec node dist/main.js"]

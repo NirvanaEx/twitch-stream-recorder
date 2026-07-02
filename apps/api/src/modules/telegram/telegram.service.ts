@@ -14,8 +14,17 @@ import { Api } from "telegram";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TelegramClientService } from "./telegram-client.service";
+import { TelegramStreamService } from "./telegram-stream.service";
 
 const SCAN_INTERVAL_MS = 60_000;
+
+// Uploads and player streaming share ONE MTProto connection: a running
+// 1.9 GB part upload starves every viewer (and vice versa), which is what
+// made the site "hang" right after a recording finished. While someone is
+// watching, new uploads politely wait — but only this long, so uploads can
+// never be starved forever by a paused player that keeps its socket open.
+const UPLOAD_YIELD_TO_PLAYBACK_MS = 5 * 60_000;
+const UPLOAD_YIELD_POLL_MS = 10_000;
 
 // Telegram bots can upload files up to 2000 MB via MTProto. Keep a margin
 // below it because ffmpeg segments are cut on keyframes and can overshoot
@@ -60,6 +69,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly telegramClientService: TelegramClientService,
+    private readonly telegramStreamService: TelegramStreamService,
   ) {}
 
   async onModuleInit() {
@@ -290,7 +300,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      await this.yieldToPlayback();
       await this.uploadSession(session, settings.telegramChatId);
+    }
+  }
+
+  /**
+   * Wait (bounded) while a viewer is streaming from Telegram, so an upload
+   * does not fight the playback for the shared MTProto connection.
+   */
+  private async yieldToPlayback() {
+    if (!this.telegramStreamService.hasActiveStreams()) {
+      return;
+    }
+
+    this.logger.log(
+      "Telegram playback is active — postponing the upload to keep the player smooth.",
+    );
+
+    const waitStart = Date.now();
+
+    while (
+      this.telegramStreamService.hasActiveStreams() &&
+      Date.now() - waitStart < UPLOAD_YIELD_TO_PLAYBACK_MS
+    ) {
+      await sleep(UPLOAD_YIELD_POLL_MS);
     }
   }
 
@@ -431,6 +465,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
 
         const caption = this.buildCaption(session, index + 1, partPaths.length);
+
+        // Re-check between parts too: a multi-part upload runs for a long
+        // time and a viewer may have started watching meanwhile.
+        await this.yieldToPlayback();
 
         this.logger.log(
           `${logPrefix} uploading part ${index + 1}/${partPaths.length} (${Math.round(
@@ -1045,4 +1083,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       timestamp: new Date().toISOString(),
     });
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

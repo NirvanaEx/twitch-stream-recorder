@@ -258,9 +258,14 @@ export class PublicStreamsController {
       startedAt: session.startedAt?.toISOString() ?? null,
       // When the capture actually started (the session row is created right
       // before streamlink spawns). Unlike startedAt (the Twitch go-live time)
-      // this anchors the track on the VOD timeline precisely even when the
-      // recorder joined mid-stream.
+      // this anchors the track on the VOD timeline even when the recorder
+      // joined mid-stream.
       recordingStartedAt: session.createdAt.toISOString(),
+      // When the capture process exited. recordingEndedAt - durationSec is a
+      // MORE precise start anchor than recordingStartedAt: the row is created
+      // before streamlink even connects, and --hls-live-restart rewinds the
+      // live playlist, so the first recorded frame predates createdAt.
+      recordingEndedAt: session.captureEndedAt?.toISOString() ?? null,
       durationSec:
         session.durationSec ?? (partsDuration > 0 ? partsDuration : timestampsDuration),
       audioOnly: session.audioOnly,
