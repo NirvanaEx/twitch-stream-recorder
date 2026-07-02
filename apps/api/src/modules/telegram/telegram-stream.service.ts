@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { Readable } from "node:stream";
 import { Api } from "telegram";
 import { returnBigInt } from "telegram/Helpers";
@@ -19,8 +24,25 @@ const DEFAULT_PARALLEL_CHUNKS = 6;
 
 // In-memory LRU of downloaded chunks. Seeks usually re-read the same areas
 // (the mp4 index, recently watched ranges, timeline previews), so serving
-// them from RAM removes the multi-second round-trip to Telegram.
-const DEFAULT_CACHE_MB = 192;
+// them from RAM removes the multi-second round-trip to Telegram. Buffers live
+// OUTSIDE the V8 heap, so this must stay well below the container's memory
+// limit — 64 MB covers the mp4 index and the recent window without pushing a
+// small VPS into swap/OOM (192 MB did exactly that).
+const DEFAULT_CACHE_MB = 64;
+
+// How many HTTP responses may pull from Telegram at the same time. Every
+// stream keeps PARALLEL_CHUNKS requests in flight on the ONE shared MTProto
+// connection, so unbounded concurrency (a viewer scrubbing the timeline opens
+// a new range request per seek) floods that connection: every stream crawls,
+// the queued 512 KB chunks pile up in memory and the whole API looks frozen.
+// Excess requests briefly wait for a slot instead. Tune with
+// TELEGRAM_STREAM_MAX_CONCURRENT (1-16).
+const DEFAULT_MAX_CONCURRENT_STREAMS = 3;
+const STREAM_SLOT_WAIT_MS = 15_000;
+
+// Resolved message medias are small, but the map is keyed per part/audio and
+// would otherwise grow for as long as the process lives.
+const MEDIA_CACHE_MAX_ENTRIES = 64;
 
 // Resolved messages carry a file_reference that Telegram expires after a
 // while; re-fetch the message when the cached one gets stale or rejected.
@@ -72,6 +94,14 @@ export class TelegramStreamService {
   private chunkCacheBytes = 0;
   // Latest throughput sample per statsKey (archive id), for the panel widget.
   private readonly liveStats = new Map<string, LiveStreamStat>();
+  // Concurrency gate for the shared MTProto connection (see the constant).
+  private activeStreams = 0;
+  private readonly slotWaiters: Array<() => void> = [];
+
+  /** True while at least one HTTP response is pulling data from Telegram. */
+  hasActiveStreams() {
+    return this.activeStreams > 0;
+  }
 
   /** Current Telegram throughput for an archive, or null when idle. */
   getLiveStats(statsKey: string) {
@@ -193,11 +223,38 @@ export class TelegramStreamService {
     res: any,
     downloadName: string | null,
   ) {
+    const releaseSlot = await this.acquireStreamSlot();
+
+    try {
+      await this.streamSourceWithSlot(source, req, res, downloadName, releaseSlot);
+    } catch (error) {
+      // On a successful start the slot is released by finalize(); make sure a
+      // failure before that point does not leak it (releasing twice is a no-op).
+      releaseSlot();
+      throw error;
+    }
+  }
+
+  private async streamSourceWithSlot(
+    source: StreamSource,
+    req: any,
+    res: any,
+    downloadName: string | null,
+    releaseSlot: () => void,
+  ) {
     const totalSize = source.totalSize;
 
     // Resolve everything that can fail BEFORE writing the response head.
     const client = await this.telegramClientService.getClient();
     let media = await this.resolveMedia(source);
+
+    // The client may have gone away while this request waited for a stream
+    // slot or for Telegram; its "close" event has already fired, so the
+    // listener below would never run and the slot would leak.
+    if (res.destroyed || res.writableEnded) {
+      releaseSlot();
+      return;
+    }
 
     const range = req.headers.range as string | undefined;
     let start = 0;
@@ -437,6 +494,7 @@ export class TelegramStreamService {
       if (finalized) return;
       finalized = true;
       clearInterval(speedTimer);
+      releaseSlot();
       if (servedBytes === 0) return;
       const elapsed = (Date.now() - startedAt) / 1000;
       logger.log(
@@ -477,6 +535,54 @@ export class TelegramStreamService {
     return Number.isFinite(configured) && configured >= 1 && configured <= 32
       ? configured
       : DEFAULT_PARALLEL_CHUNKS;
+  }
+
+  private getMaxConcurrentStreams() {
+    const configured = Number.parseInt(
+      process.env.TELEGRAM_STREAM_MAX_CONCURRENT ?? "",
+      10,
+    );
+
+    return Number.isFinite(configured) && configured >= 1 && configured <= 16
+      ? configured
+      : DEFAULT_MAX_CONCURRENT_STREAMS;
+  }
+
+  /**
+   * Take a slot in the stream-concurrency gate, waiting briefly when all
+   * slots are busy (a seek storm). Returns an idempotent release callback.
+   */
+  private async acquireStreamSlot(): Promise<() => void> {
+    // Queue behind existing waiters so slots are handed out in FIFO order.
+    if (this.activeStreams >= this.getMaxConcurrentStreams() || this.slotWaiters.length > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const waiter = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          const index = this.slotWaiters.indexOf(waiter);
+          if (index !== -1) this.slotWaiters.splice(index, 1);
+          reject(
+            new ServiceUnavailableException(
+              "Слишком много одновременных потоков из Telegram — повторите чуть позже.",
+            ),
+          );
+        }, STREAM_SLOT_WAIT_MS);
+        this.slotWaiters.push(waiter);
+      });
+    }
+
+    this.activeStreams += 1;
+    let released = false;
+
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeStreams -= 1;
+      const next = this.slotWaiters.shift();
+      if (next) next();
+    };
   }
 
   private getCacheLimitBytes() {
@@ -537,6 +643,13 @@ export class TelegramStreamService {
     }
 
     this.mediaCache.set(source.cacheKey, { media, fetchedAt: Date.now() });
+
+    while (this.mediaCache.size > MEDIA_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.mediaCache.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      this.mediaCache.delete(oldestKey);
+    }
+
     return media;
   }
 }

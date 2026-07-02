@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.4
+// @version      1.5
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -43,6 +43,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var trackDurationSec = 0;
   // Epoch ms of when the capture started; 0 = unknown (very old tracks).
   var trackRecordStartMs = 0;
+  // Epoch ms of when the capture process exited; 0 = unknown. The preferred
+  // anchor: end minus duration gives the true start even when the recorder
+  // rewound the live playlist on startup.
+  var trackRecordEndMs = 0;
   var mode = 'twitch'; // twitch | record | both
   var offset = 0;
   var boundVideo = null;
@@ -172,29 +176,43 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   // Ask Twitch (public GQL) who owns this VOD, when it was recorded and which
   // segments are muted, then look up the matching recording on our server.
+  // The muteInfo part of the schema has changed before; when the full query
+  // fails, retry once without it so at least the auto-match keeps working.
   function fetchVodMeta() {
     var vodId = getVodId();
     if (!vodId || metaVodId === vodId) return;
     metaVodId = vodId;
     matchPending = true;
+    requestVodMeta(vodId, true);
+  }
 
-    var body = JSON.stringify({
-      query:
-        'query($id: ID!){ video(id:$id){ lengthSeconds createdAt publishedAt owner{ login } ' +
-        'muteInfo{ mutedSegmentConnection{ nodes{ offset duration } } } } }',
-      variables: { id: vodId },
-    });
+  function requestVodMeta(vodId, withMuteInfo) {
+    var query = withMuteInfo
+      ? 'query($id: ID!){ video(id:$id){ lengthSeconds createdAt publishedAt owner{ login } ' +
+        'muteInfo{ mutedSegmentConnection{ nodes{ offset duration } } } } }'
+      : 'query($id: ID!){ video(id:$id){ lengthSeconds createdAt publishedAt owner{ login } } }';
 
     GM_xmlhttpRequest({
       method: 'POST',
       url: GQL_URL,
       headers: { 'Client-ID': GQL_CLIENT_ID, 'Content-Type': 'application/json' },
-      data: body,
+      data: JSON.stringify({ query: query, variables: { id: vodId } }),
       onload: function (res) {
         var login = null;
         var date = null;
+        var video = null;
         try {
-          var video = JSON.parse(res.responseText).data.video;
+          var payload = JSON.parse(res.responseText);
+          video = payload && payload.data && payload.data.video;
+        } catch (e) {}
+
+        // A schema error kills the whole query — retry the reduced one.
+        if (!video && withMuteInfo) {
+          requestVodMeta(vodId, false);
+          return;
+        }
+
+        try {
           if (video) {
             login = video.owner && video.owner.login;
             date = video.createdAt || video.publishedAt || null;
@@ -458,6 +476,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
         track && track.recordingStartedAt
           ? (new Date(track.recordingStartedAt).getTime() || 0)
           : 0;
+      trackRecordEndMs =
+        track && track.recordingEndedAt
+          ? (new Date(track.recordingEndedAt).getTime() || 0)
+          : 0;
       blobTriedForId = null;
       if (track) loadAudioSource(track);
       // Picking a track with the original still playing is confusing — switch
@@ -468,6 +490,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     } else {
       trackDurationSec = 0;
       trackRecordStartMs = 0;
+      trackRecordEndMs = 0;
       audio.pause();
       audio.removeAttribute('src');
       clearAudioObjectUrl();
@@ -487,17 +510,25 @@ export function buildTwitchAudioUserscript(origin: string): string {
   }
 
   // Where in the VOD the recording begins.
-  // Precise path: capture start minus broadcast start — both are known
-  // timestamps, so a recording that started mid-stream or stopped early lands
-  // exactly where it belongs. Fallback (no dates): assume the recording ran
-  // until the stream end and align it to the tail.
+  // Most precise: capture END minus the real duration — the start computed
+  // this way is immune to the recorder's startup delay and to the live
+  // playlist rewind, both of which skew the capture-start timestamp.
+  // Next: capture start minus broadcast start. Fallback (no dates): assume
+  // the recording ran until the stream end and align it to the tail.
   function getRecStartInVod() {
     var total = getVodTotal();
 
-    if (trackRecordStartMs && vodCreatedAtMs) {
-      var start = (trackRecordStartMs - vodCreatedAtMs) / 1000;
+    if (trackRecordEndMs && trackDurationSec && vodCreatedAtMs) {
+      var fromEnd = (trackRecordEndMs - vodCreatedAtMs) / 1000 - trackDurationSec;
       // Sanity check: a start outside the VOD means the dates do not belong
       // to this broadcast (manually picked foreign track) — fall through.
+      if (isFinite(fromEnd) && fromEnd > -600 && (!total || fromEnd < total)) {
+        return Math.max(0, fromEnd);
+      }
+    }
+
+    if (trackRecordStartMs && vodCreatedAtMs) {
+      var start = (trackRecordStartMs - vodCreatedAtMs) / 1000;
       if (isFinite(start) && start > -600 && (!total || start < total)) {
         return Math.max(0, start);
       }
@@ -853,6 +884,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       currentTrackId = null;
       trackDurationSec = 0;
       trackRecordStartMs = 0;
+      trackRecordEndMs = 0;
       boundVideo = null;
       metaVodId = null;
       autoMatchedTrack = null;

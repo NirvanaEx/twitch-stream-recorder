@@ -688,6 +688,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   ) {
     const logPrefix = `[${channel.twitchLogin}/${session.id}]`;
 
+    // Captured the instant streamlink exits — finalize() runs after the remux
+    // and audio extraction, which would skew the capture-end timestamp the
+    // userscript uses to anchor the audio track on the VOD timeline.
+    let captureEndedAt: Date | null = null;
+
     activeRecording.streamlinkProcess.stderr?.on("data", (chunk) => {
       this.logger.log(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
     });
@@ -764,6 +769,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
             : {}),
           ...(durationSec ? { durationSec } : {}),
+          ...(captureEndedAt ? { captureEndedAt } : {}),
         },
       });
 
@@ -807,6 +813,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     };
 
     activeRecording.streamlinkProcess.once("exit", (code) => {
+      captureEndedAt = new Date();
       this.logger.log(`${logPrefix} streamlink exited with code ${String(code)}`);
       void this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
     });

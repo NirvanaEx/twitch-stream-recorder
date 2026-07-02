@@ -15,6 +15,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse();
 
+    // A media stream that fails mid-flight has already sent its headers;
+    // trying to write a JSON error on top would throw inside the filter.
+    if (response.headersSent) {
+      this.logger.error(
+        exception instanceof Error ? exception.message : String(exception),
+        exception instanceof Error ? exception.stack : undefined,
+      );
+      try {
+        response.destroy();
+      } catch {
+        // The socket is already gone.
+      }
+      return;
+    }
+
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const payload = exception.getResponse();

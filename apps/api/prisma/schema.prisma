@@ -81,6 +81,12 @@ model StreamSession {
   // Set when the audio track was auto-removed (local file and the Telegram
   // message) after audioKeepDays — Twitch VODs expire, so audio is temporary.
   audioDeletedAt     DateTime?
+  // The moment the capture process (streamlink) exited — BEFORE the remux,
+  // unlike endedAt which lands minutes later. captureEndedAt - durationSec is
+  // the most precise "where the recording starts on the VOD timeline" anchor:
+  // immune to both the capture startup delay and the --hls-live-restart
+  // rewind that make createdAt drift.
+  captureEndedAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
