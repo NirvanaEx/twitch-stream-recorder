@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.7
+// @version      1.8
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается, громкость до 300% с компрессором.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -160,6 +160,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var vodCreatedAtMs = 0;
   var mutedSegments = []; // [{ offset, duration }]
   var autoMatchedTrack = null;
+  // Все дорожки этого же эфира (рекордер перезапускался — сессий несколько):
+  // скрипт переключается между ними сам, по позиции на шкале VOD.
+  var groupTracks = [];
   var matchPending = false;
 
   var legendEl = null;
@@ -356,15 +359,21 @@ export function buildTwitchAudioUserscript(origin: string): string {
   function matchTrack(login, date) {
     var url =
       SERVER + '/api/public/streams/audio-tracks/match?channel=' + encodeURIComponent(login) +
-      (date ? '&date=' + encodeURIComponent(date) : '');
+      (date ? '&date=' + encodeURIComponent(date) : '') +
+      (vodLengthSeconds ? '&length=' + Math.round(vodLengthSeconds) : '');
     GM_xmlhttpRequest({
       method: 'GET',
       url: url,
       onload: function (res) {
         try {
-          autoMatchedTrack = (JSON.parse(res.responseText).item) || null;
+          var payload = JSON.parse(res.responseText);
+          autoMatchedTrack = payload.item || null;
+          groupTracks = payload.items && payload.items.length
+            ? payload.items
+            : autoMatchedTrack ? [autoMatchedTrack] : [];
         } catch (e) {
           autoMatchedTrack = null;
+          groupTracks = [];
         }
         matchPending = false;
         resolveSelection();
@@ -398,6 +407,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
 
     if (autoMatchedTrack) {
+      for (var g = 0; g < groupTracks.length; g++) {
+        ensureTrackInList(groupTracks[g]);
+      }
       ensureTrackInList(autoMatchedTrack);
       var channelOffset = loadChannelOffset(autoMatchedTrack.channelLogin);
       if (channelOffset !== null) {
@@ -405,10 +417,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
         if (offsetInput) offsetInput.value = offset.toFixed(1);
       }
       selectTrack(autoMatchedTrack.id);
+      var groupNote = groupTracks.length > 1 ? ' · дорожек: ' + groupTracks.length : '';
       setStatus(
-        channelOffset !== null
+        (channelOffset !== null
           ? 'Дорожка найдена · сдвиг канала ' + channelOffset.toFixed(1) + ' c'
-          : 'Дорожка найдена автоматически',
+          : 'Дорожка найдена автоматически') + groupNote,
       );
       return;
     }
@@ -433,12 +446,15 @@ export function buildTwitchAudioUserscript(origin: string): string {
   function updateLegend() {
     if (!legendEl) return;
     var lines = [];
+    if (groupTracks.length > 1) {
+      lines.push('🎧 Дорожек этого стрима: ' + groupTracks.length + ' — переключаются сами');
+    }
     if (currentTrackId && trackDurationSec) {
       var recStart = getRecStartInVod();
       lines.push('🟢 Запись на шкале: ' + fmtTime(recStart) + ' — ' + fmtTime(recStart + trackDurationSec));
     }
     if (mutedSegments && mutedSegments.length) {
-      lines.push('🔴 Красным — заглушённые участки оригинала: ' + mutedSegments.length);
+      lines.push('🔴 В режиме «Twitch» полоска сверху — заглушённые места: ' + mutedSegments.length);
     }
     if (lines.length) {
       legendEl.style.display = 'block';
@@ -449,8 +465,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
   }
 
-  // Draw two things on the Twitch seekbar: a green band where the recording's
-  // audio covers the VOD, and red marks where Twitch muted the original.
+  // Тонкая полоска НАД сикбаром Twitch (сам сикбар не трогаем): в режиме
+  // «Twitch» красным показаны заглушённые места оригинала, в режимах с
+  // записью зелёным — покрытие наших дорожек (всех сегментов группы).
   function renderTimelineOverlay() {
     var bar = document.querySelector('[data-a-target="player-seekbar"]');
     if (!bar) return;
@@ -461,14 +478,25 @@ export function buildTwitchAudioUserscript(origin: string): string {
         : vodLengthSeconds;
     if (!total) return;
 
-    var recStart = getRecStartInVod();
-    var hasCoverage = Boolean(currentTrackId && trackDurationSec);
+    var showRecord = mode !== 'twitch' && Boolean(currentTrackId);
+    var bands = [];
+    if (showRecord) {
+      var list = groupTracks.length ? groupTracks : [findTrack(currentTrackId)];
+      for (var t = 0; t < list.length; t++) {
+        if (!list[t] || !(list[t].durationSec > 0)) continue;
+        bands.push({ start: getRecStartForTrack(list[t]), duration: list[t].durationSec });
+      }
+    }
+
     var key = [
       Math.round(total),
+      mode,
       mutedSegments.length,
-      Math.round(recStart),
-      Math.round(trackDurationSec || 0),
-      hasCoverage ? 1 : 0,
+      bands
+        .map(function (band) {
+          return Math.round(band.start) + ':' + Math.round(band.duration);
+        })
+        .join(','),
     ].join('|');
 
     var overlay = bar.querySelector('.tsr-timeline-overlay');
@@ -482,9 +510,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
       overlay.className = 'tsr-timeline-overlay';
       overlay.style.position = 'absolute';
       overlay.style.left = '0';
-      overlay.style.top = '0';
       overlay.style.right = '0';
-      overlay.style.bottom = '0';
+      overlay.style.top = '-7px';
+      overlay.style.height = '3px';
       overlay.style.pointerEvents = 'none';
       overlay.style.zIndex = '15';
       bar.appendChild(overlay);
@@ -492,35 +520,30 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
     overlay.innerHTML = '';
 
-    if (hasCoverage) {
-      var leftPct = Math.max(0, (recStart / total) * 100);
-      var widthPct = Math.min(100 - leftPct, (trackDurationSec / total) * 100);
-      var cov = document.createElement('div');
-      cov.style.position = 'absolute';
-      cov.style.top = '0';
-      cov.style.bottom = '0';
-      cov.style.left = leftPct + '%';
-      cov.style.width = Math.max(0.3, widthPct) + '%';
-      cov.style.background = 'rgba(63,213,109,0.35)';
-      cov.style.borderLeft = '2px solid rgba(63,213,109,0.9)';
-      cov.title = 'Здесь есть звук записи';
-      overlay.appendChild(cov);
+    function addBand(startSec, durationSec, color) {
+      var leftPct = (startSec / total) * 100;
+      var widthPct = (durationSec / total) * 100;
+      if (!isFinite(leftPct) || !isFinite(widthPct)) return;
+      leftPct = Math.max(0, leftPct);
+      var node = document.createElement('div');
+      node.style.position = 'absolute';
+      node.style.top = '0';
+      node.style.bottom = '0';
+      node.style.left = leftPct + '%';
+      node.style.width = Math.max(0.15, Math.min(100 - leftPct, widthPct)) + '%';
+      node.style.background = color;
+      node.style.borderRadius = '2px';
+      overlay.appendChild(node);
     }
 
-    for (var i = 0; i < mutedSegments.length; i++) {
-      var seg = mutedSegments[i];
-      var mLeft = (seg.offset / total) * 100;
-      var mWidth = (seg.duration / total) * 100;
-      if (!isFinite(mLeft)) continue;
-      var mark = document.createElement('div');
-      mark.style.position = 'absolute';
-      mark.style.top = '0';
-      mark.style.bottom = '0';
-      mark.style.left = Math.max(0, mLeft) + '%';
-      mark.style.width = Math.max(0.15, mWidth) + '%';
-      mark.style.background = 'rgba(229,72,77,0.7)';
-      mark.title = 'Оригинал заглушён здесь';
-      overlay.appendChild(mark);
+    if (showRecord) {
+      for (var b = 0; b < bands.length; b++) {
+        addBand(bands[b].start, bands[b].duration, 'rgba(63,213,109,0.95)');
+      }
+    } else {
+      for (var m = 0; m < mutedSegments.length; m++) {
+        addBand(mutedSegments[m].offset, mutedSegments[m].duration, 'rgba(229,72,77,0.95)');
+      }
     }
 
     overlay.setAttribute('data-key', key);
@@ -620,13 +643,19 @@ export function buildTwitchAudioUserscript(origin: string): string {
   }
 
   // ---- Прогрессивная загрузка по частям (Range) --------------------------
-  // Сервер отдаёт диапазоны, а .m4a записан с faststart (метаданные в начале
-  // файла), поэтому скачанный префикс уже можно играть: звук включается после
-  // первого куска, остальное докачивается в фоне. Подмена blob по мере
-  // роста происходит редко (каждый раз объём утраивается), позицию после
-  // подмены восстанавливает syncNow.
+  // Файл качается кусками по 8 МБ и НЕ подряд: сначала голова (там благодаря
+  // faststart лежит mp4-индекс), затем куски вокруг места, которое сейчас
+  // смотрят, потом всё остальное. В blob дыры заполняются нулями — индекс
+  // настоящий, поэтому перемотка в любую уже скачанную область работает
+  // сразу, не дожидаясь конца загрузки. Куда качать в первую очередь,
+  // загрузчику сообщает syncNow (поле targetByte).
   var PROGRESSIVE_CHUNK_BYTES = 8 * 1024 * 1024;
+  // Сколько байт до/после текущей позиции должно быть скачано, чтобы играть.
+  var PLAYBACK_BACK_MARGIN_BYTES = 512 * 1024;
+  var PLAYBACK_LOOKAHEAD_BYTES = 2 * 1024 * 1024;
   var progressiveState = null;
+  // Один общий буфер нулей для всех дыр, чтобы не плодить копии.
+  var zeroChunkBuffer = null;
 
   function abortProgressive() {
     progressiveState = null;
@@ -665,28 +694,114 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   function startProgressiveDownload(track) {
     var state = {
-      trackId: track.id,
-      chunks: [],
-      loaded: 0,
+      track: track,
+      chunks: {}, // индекс куска -> ArrayBuffer
+      haveCount: 0,
+      totalChunks: 0,
       total: 0,
-      // Сколько байт уже отдано в <audio> (граница проигрываемой части).
-      playableBytes: 0,
-      nextSwapAt: PROGRESSIVE_CHUNK_BYTES,
+      // Какие куски вошли в текущий blob (null — blob ещё не создавался).
+      blobHave: null,
+      // Байтовая позиция, которую сейчас смотрят; обновляет syncNow.
+      targetByte: 0,
       retries: 0,
+      lastErrorSwapAt: 0,
     };
     progressiveState = state;
     setStatus('Загружаю аудио...');
-    fetchNextChunk(track, state);
+    fetchNextChunk(state);
   }
 
-  function finishProgressive(track, state) {
+  function chunkIndexAt(byte) {
+    return Math.floor(byte / PROGRESSIVE_CHUNK_BYTES);
+  }
+
+  // Порядок закачки: голова файла (mp4-индекс), затем от текущей позиции
+  // зрителя до конца, затем оставшиеся дыры с начала.
+  function nextChunkIndex(state) {
+    if (!(0 in state.chunks)) return 0;
+    if (state.totalChunks > 1 && !(1 in state.chunks)) return 1;
+    var priority = Math.min(
+      state.totalChunks - 1,
+      Math.max(0, chunkIndexAt(state.targetByte)),
+    );
+    for (var i = priority; i < state.totalChunks; i++) {
+      if (!(i in state.chunks)) return i;
+    }
+    for (var j = 0; j < priority; j++) {
+      if (!(j in state.chunks)) return j;
+    }
+    return -1;
+  }
+
+  // Есть ли данные вокруг текущей позиции: в скачанном (inBlob=false) или в
+  // уже отданном плееру blob (inBlob=true).
+  function progressiveWindowReady(state, inBlob) {
+    if (!state.totalChunks) return false;
+    var from = Math.max(
+      0,
+      chunkIndexAt(Math.max(0, state.targetByte - PLAYBACK_BACK_MARGIN_BYTES)),
+    );
+    var to = Math.min(
+      state.totalChunks - 1,
+      chunkIndexAt(state.targetByte + PLAYBACK_LOOKAHEAD_BYTES),
+    );
+    for (var i = from; i <= to; i++) {
+      var present = inBlob ? Boolean(state.blobHave && state.blobHave[i]) : i in state.chunks;
+      if (!present) return false;
+    }
+    return true;
+  }
+
+  // Собирает blob из скачанных кусков (дыры — нулями) и отдаёт его в <audio>.
+  // Подмена не бесплатна (короткий рестарт элемента), поэтому вызывается
+  // только когда открывает зрителю новую область.
+  function swapProgressiveBlob(state) {
+    if (!state.total || !state.totalChunks) return;
+    if (!zeroChunkBuffer) zeroChunkBuffer = new ArrayBuffer(PROGRESSIVE_CHUNK_BYTES);
+    var parts = [];
+    var have = new Array(state.totalChunks);
+    for (var i = 0; i < state.totalChunks; i++) {
+      var expected = Math.min(
+        PROGRESSIVE_CHUNK_BYTES,
+        state.total - i * PROGRESSIVE_CHUNK_BYTES,
+      );
+      if (i in state.chunks) {
+        parts.push(state.chunks[i]);
+        have[i] = true;
+      } else {
+        parts.push(
+          expected === PROGRESSIVE_CHUNK_BYTES ? zeroChunkBuffer : new ArrayBuffer(expected),
+        );
+        have[i] = false;
+      }
+    }
+    state.blobHave = have;
+    try {
+      applyAudioBlob(new Blob(parts, { type: 'audio/mp4' }));
+      syncNow(true);
+    } catch (e) {}
+  }
+
+  function maybeSwapProgressive(state) {
+    // Голова обязательна: без неё элемент не распарсит файл вообще.
+    if (!(0 in state.chunks)) return;
+    if (state.totalChunks > 1 && !(1 in state.chunks)) return;
+    if (!progressiveWindowReady(state, false)) return; // вокруг зрителя пусто
+    if (state.blobHave && progressiveWindowReady(state, true)) return; // уже играется
+    swapProgressiveBlob(state);
+  }
+
+  function finishProgressive(state) {
+    var track = state.track;
     if (progressiveState === state) progressiveState = null;
     blobLoadingForId = null;
-    var blob = new Blob(state.chunks, { type: 'audio/mp4' });
+    var parts = [];
+    for (var i = 0; i < state.totalChunks; i++) parts.push(state.chunks[i]);
+    var blob = new Blob(parts, { type: 'audio/mp4' });
     if (currentTrackId === track.id) {
       try {
         applyAudioBlob(blob);
-        setStatus('Аудио загружено');
+        setStatus('Аудио загружено полностью');
         syncNow(true);
       } catch (e) {
         setStatus('Не удалось загрузить аудио');
@@ -696,7 +811,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     cachePutAudio(track.id, blob);
   }
 
-  function retryChunk(track, state) {
+  function retryChunk(state) {
     state.retries += 1;
     if (state.retries > 3) {
       if (progressiveState === state) progressiveState = null;
@@ -704,69 +819,84 @@ export function buildTwitchAudioUserscript(origin: string): string {
       setStatus('Сервер недоступен — аудио не загружено');
       return;
     }
-    setTimeout(function () { fetchNextChunk(track, state); }, 1000 * state.retries);
+    setTimeout(function () { fetchNextChunk(state); }, 1000 * state.retries);
   }
 
-  function fetchNextChunk(track, state) {
-    if (progressiveState !== state || currentTrackId !== track.id) return;
-    var start = state.loaded;
+  function fetchNextChunk(state) {
+    if (progressiveState !== state || currentTrackId !== state.track.id) return;
+    // Пока total неизвестен (до первого ответа), качаем нулевой кусок.
+    var index = state.total ? nextChunkIndex(state) : 0;
+    if (index === -1) {
+      finishProgressive(state);
+      return;
+    }
+    var start = index * PROGRESSIVE_CHUNK_BYTES;
+    var end = state.total
+      ? Math.min(state.total, start + PROGRESSIVE_CHUNK_BYTES) - 1
+      : start + PROGRESSIVE_CHUNK_BYTES - 1;
     GM_xmlhttpRequest({
       method: 'GET',
-      url: SERVER + track.audioUrl,
+      url: SERVER + state.track.audioUrl,
       responseType: 'arraybuffer',
-      headers: { Range: 'bytes=' + start + '-' + (start + PROGRESSIVE_CHUNK_BYTES - 1) },
+      headers: { Range: 'bytes=' + start + '-' + end },
       onload: function (res) {
-        if (progressiveState !== state || currentTrackId !== track.id) return;
+        if (progressiveState !== state || currentTrackId !== state.track.id) return;
         if ((res.status !== 206 && res.status !== 200) || !res.response) {
-          retryChunk(track, state);
+          retryChunk(state);
           return;
         }
         state.retries = 0;
-        state.chunks.push(res.response);
-        state.loaded += res.response.byteLength;
 
         // Сервер не понял Range и прислал файл целиком — он уже полон.
         if (res.status === 200) {
-          state.total = state.loaded;
-          finishProgressive(track, state);
+          if (index !== 0) {
+            // Полный файл в ответ на неголовной кусок — что-то не так,
+            // записывать его как кусок нельзя.
+            retryChunk(state);
+            return;
+          }
+          state.total = res.response.byteLength;
+          state.totalChunks = 1;
+          state.chunks = { 0: res.response };
+          state.haveCount = 1;
+          finishProgressive(state);
           return;
         }
 
         if (!state.total) {
           var match = /bytes\\s+\\d+-\\d+\\/(\\d+)/i.exec(res.responseHeaders || '');
-          if (match) state.total = parseInt(match[1], 10) || 0;
+          var parsedTotal = match ? parseInt(match[1], 10) || 0 : 0;
+          if (!parsedTotal) {
+            retryChunk(state);
+            return;
+          }
+          state.total = parsedTotal;
+          state.totalChunks = Math.max(1, Math.ceil(parsedTotal / PROGRESSIVE_CHUNK_BYTES));
         }
 
-        var isLastChunk =
-          (state.total && state.loaded >= state.total) ||
-          res.response.byteLength < PROGRESSIVE_CHUNK_BYTES;
-        if (isLastChunk) {
-          finishProgressive(track, state);
+        if (!(index in state.chunks)) {
+          state.chunks[index] = res.response;
+          state.haveCount += 1;
+        }
+
+        if (state.haveCount >= state.totalChunks) {
+          finishProgressive(state);
           return;
         }
 
-        if (state.loaded >= state.nextSwapAt) {
-          state.playableBytes = state.loaded;
-          try {
-            applyAudioBlob(new Blob(state.chunks, { type: 'audio/mp4' }));
-            syncNow(true);
-          } catch (e) {}
-          state.nextSwapAt = state.loaded * 3;
-        }
+        maybeSwapProgressive(state);
 
-        if (state.total) {
-          var pct = Math.min(99, Math.round((state.loaded / state.total) * 100));
-          setStatus(
-            'Загружаю аудио ' + pct + '%' +
-            (state.playableBytes ? ' — уже можно слушать' : '...'),
-          );
-        }
+        var pct = Math.min(99, Math.round((state.haveCount / state.totalChunks) * 100));
+        setStatus(
+          'Загружаю аудио ' + pct + '%' +
+          (state.blobHave ? ' — можно слушать и перематывать' : '...'),
+        );
 
-        fetchNextChunk(track, state);
+        fetchNextChunk(state);
       },
       onerror: function () {
-        if (progressiveState !== state || currentTrackId !== track.id) return;
-        retryChunk(track, state);
+        if (progressiveState !== state || currentTrackId !== state.track.id) return;
+        retryChunk(state);
       },
     });
   }
@@ -834,11 +964,16 @@ export function buildTwitchAudioUserscript(origin: string): string {
   // playlist rewind, both of which skew the capture-start timestamp.
   // Next: capture start minus broadcast start. Fallback (no dates): assume
   // the recording ran until the stream end and align it to the tail.
-  function getRecStartInVod() {
+  function getRecStartForTrack(track) {
     var total = getVodTotal();
+    var durationSec = (track && track.durationSec) || 0;
+    var recordEndMs =
+      track && track.recordingEndedAt ? (new Date(track.recordingEndedAt).getTime() || 0) : 0;
+    var recordStartMs =
+      track && track.recordingStartedAt ? (new Date(track.recordingStartedAt).getTime() || 0) : 0;
 
-    if (trackRecordEndMs && trackDurationSec && vodCreatedAtMs) {
-      var fromEnd = (trackRecordEndMs - vodCreatedAtMs) / 1000 - trackDurationSec;
+    if (recordEndMs && durationSec && vodCreatedAtMs) {
+      var fromEnd = (recordEndMs - vodCreatedAtMs) / 1000 - durationSec;
       // Sanity check: a start outside the VOD means the dates do not belong
       // to this broadcast (manually picked foreign track) — fall through.
       if (isFinite(fromEnd) && fromEnd > -600 && (!total || fromEnd < total)) {
@@ -846,16 +981,20 @@ export function buildTwitchAudioUserscript(origin: string): string {
       }
     }
 
-    if (trackRecordStartMs && vodCreatedAtMs) {
-      var start = (trackRecordStartMs - vodCreatedAtMs) / 1000;
+    if (recordStartMs && vodCreatedAtMs) {
+      var start = (recordStartMs - vodCreatedAtMs) / 1000;
       if (isFinite(start) && start > -600 && (!total || start < total)) {
         return Math.max(0, start);
       }
     }
 
-    if (!trackDurationSec || !total) return 0;
-    var tail = total - trackDurationSec;
+    if (!durationSec || !total) return 0;
+    var tail = total - durationSec;
     return tail > 1 ? tail : 0;
+  }
+
+  function getRecStartInVod() {
+    return getRecStartForTrack(findTrack(currentTrackId));
   }
 
   function applyMode(next) {
@@ -894,6 +1033,26 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (mode === 'record' && !v.muted) v.muted = true;
     if (mode === 'both' && v.muted) v.muted = false;
     if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
+
+    // Несколько дорожек одного стрима: играем ту, которая покрывает текущее
+    // место VOD, и переключаемся на границах автоматически.
+    if (groupTracks.length > 1) {
+      var covering = null;
+      for (var gi = 0; gi < groupTracks.length; gi++) {
+        var groupStart = getRecStartForTrack(groupTracks[gi]);
+        var groupDur = groupTracks[gi].durationSec || 0;
+        if (v.currentTime >= groupStart && v.currentTime < groupStart + groupDur) {
+          covering = groupTracks[gi];
+          break;
+        }
+      }
+      if (covering && covering.id !== currentTrackId) {
+        ensureTrackInList(covering);
+        selectTrack(covering.id); // сам вызовет syncNow после загрузки
+        return;
+      }
+    }
+
     var target = v.currentTime - getRecStartInVod() + offset;
     if (target < 0 || (trackDurationSec && target > trackDurationSec + 1)) {
       // Outside the recorded range — nothing to play here.
@@ -901,14 +1060,22 @@ export function buildTwitchAudioUserscript(origin: string): string {
       return;
     }
     if (progressiveState) {
-      // Файл ещё докачивается: до первого куска играть нечего, а позицию за
-      // границей скачанного держим на паузе — браузер видит усечённый файл
-      // и на попытке играть дальше конца упал бы с ошибкой.
-      if (!progressiveState.playableBytes) return;
-      if (trackDurationSec && progressiveState.total) {
-        var bytesNeeded =
-          ((target + 5) / trackDurationSec) * progressiveState.total + 1048576;
-        if (bytesNeeded > progressiveState.playableBytes) {
+      var st = progressiveState;
+      // Сообщаем загрузчику, где сейчас смотрят: он качает в первую очередь
+      // отсюда, поэтому старт с любого места не ждёт весь файл.
+      if (trackDurationSec && st.total) {
+        st.targetByte = Math.max(
+          0,
+          Math.min(st.total - 1, Math.floor((target / trackDurationSec) * st.total)),
+        );
+      }
+      if (!st.blobHave) return; // первые куски ещё в пути
+      if (!progressiveWindowReady(st, true)) {
+        if (progressiveWindowReady(st, false)) {
+          // Нужная область уже скачана, но плеер держит старый blob — меняем.
+          swapProgressiveBlob(st);
+        } else {
+          // Ещё не скачано: держим на паузе, загрузчик уже переключился сюда.
           if (!audio.paused) audio.pause();
           return;
         }
@@ -1132,6 +1299,18 @@ export function buildTwitchAudioUserscript(origin: string): string {
     });
     selectEl.addEventListener('change', function () {
       var picked = findTrack(selectEl.value);
+      // Ручной выбор дорожки НЕ из группы отключает автопереключение —
+      // пользователь явно закрепил конкретную запись.
+      if (picked) {
+        var inGroup = false;
+        for (var g = 0; g < groupTracks.length; g++) {
+          if (groupTracks[g].id === picked.id) {
+            inGroup = true;
+            break;
+          }
+        }
+        if (!inGroup) groupTracks = [];
+      }
       var channelOffset = picked ? loadChannelOffset(picked.channelLogin) : null;
       if (channelOffset !== null) {
         offset = channelOffset;
@@ -1277,6 +1456,17 @@ export function buildTwitchAudioUserscript(origin: string): string {
   // A direct <audio src> load can fail on the https Twitch page when the
   // server is http (mixed content). Retry once through the blob loader.
   audio.addEventListener('error', function () {
+    // Во время прогрессивной загрузки декодер мог упереться в ещё не
+    // скачанную (нулевую) область — пересобираем blob и продолжаем, но не
+    // чаще раза в 3 секунды, чтобы не зациклиться.
+    if (progressiveState && progressiveState.blobHave) {
+      var now = Date.now();
+      if (now - progressiveState.lastErrorSwapAt > 3000) {
+        progressiveState.lastErrorSwapAt = now;
+        swapProgressiveBlob(progressiveState);
+      }
+      return;
+    }
     if (!currentTrackId || mixedContent) return;
     if (blobTriedForId === currentTrackId) return;
     var track = findTrack(currentTrackId);
@@ -1308,6 +1498,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       boundVideo = null;
       metaVodId = null;
       autoMatchedTrack = null;
+      groupTracks = [];
       mutedSegments = [];
       vodLengthSeconds = 0;
       vodCreatedAtMs = 0;
