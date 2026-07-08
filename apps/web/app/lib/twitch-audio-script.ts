@@ -17,8 +17,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.6
-// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
+// @version      1.7
+// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается, громкость до 300% с компрессором.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
 // @connect      ${hostname}
@@ -36,6 +36,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   var audio = document.createElement('audio');
   audio.preload = 'auto';
+  // Нужен для WebAudio-усиления при прямой https-загрузке: без CORS-режима
+  // MediaElementSource отдаёт тишину. Сервер шлёт Access-Control-Allow-Origin
+  // на аудио-эндпоинте; blob-путь от этого атрибута не зависит.
+  audio.crossOrigin = 'anonymous';
   audio.style.display = 'none';
 
   var tracks = [];
@@ -51,6 +55,91 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var offset = 0;
   var boundVideo = null;
   var lastUrl = '';
+
+  // ---- Усиление громкости и компрессор ----------------------------------
+  // До 100% работает обычная громкость <audio>; выше подключается WebAudio:
+  // source -> [компрессор] -> gain -> выход. Настройки общие для всех VOD.
+  var audioCtx = null;
+  var audioSourceNode = null;
+  var gainNode = null;
+  var compressorNode = null;
+  var boost = 1; // 0..3 => 0..300%
+  var compressorOn = false;
+  try {
+    var fxSaved = JSON.parse(localStorage.getItem('tsr-audio-fx') || 'null');
+    if (fxSaved && typeof fxSaved.boost === 'number') {
+      boost = Math.min(3, Math.max(0, fxSaved.boost));
+    }
+    if (fxSaved && typeof fxSaved.comp === 'boolean') compressorOn = fxSaved.comp;
+  } catch (e) {}
+
+  function saveFx() {
+    try {
+      localStorage.setItem('tsr-audio-fx', JSON.stringify({ boost: boost, comp: compressorOn }));
+    } catch (e) {}
+  }
+
+  function resumeAudioCtx() {
+    if (audioCtx && audioCtx.state === 'suspended') {
+      try {
+        var resumed = audioCtx.resume();
+        if (resumed && resumed.catch) resumed.catch(function () {});
+      } catch (e) {}
+    }
+  }
+
+  function ensureAudioGraph() {
+    if (audioCtx) return true;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+    try {
+      audioCtx = new Ctx();
+      audioSourceNode = audioCtx.createMediaElementSource(audio);
+      gainNode = audioCtx.createGain();
+      compressorNode = audioCtx.createDynamicsCompressor();
+      // Мягкое «радийное» сжатие: тихая речь подтягивается (Chrome добавляет
+      // компенсирующее усиление сам), а пики не режут уши при >100%.
+      compressorNode.threshold.value = -28;
+      compressorNode.knee.value = 30;
+      compressorNode.ratio.value = 6;
+      compressorNode.attack.value = 0.003;
+      compressorNode.release.value = 0.25;
+      rewireAudioGraph();
+      return true;
+    } catch (e) {
+      audioCtx = null;
+      audioSourceNode = null;
+      gainNode = null;
+      compressorNode = null;
+      return false;
+    }
+  }
+
+  function rewireAudioGraph() {
+    if (!audioCtx) return;
+    try { audioSourceNode.disconnect(); } catch (e) {}
+    try { compressorNode.disconnect(); } catch (e) {}
+    try { gainNode.disconnect(); } catch (e) {}
+    if (compressorOn) {
+      audioSourceNode.connect(compressorNode);
+      compressorNode.connect(gainNode);
+    } else {
+      audioSourceNode.connect(gainNode);
+    }
+    gainNode.connect(audioCtx.destination);
+  }
+
+  function applyFx() {
+    var needGraph = boost > 1 || compressorOn;
+    if (needGraph && !ensureAudioGraph()) {
+      // WebAudio недоступен — усиление ограничено обычными 100%.
+      audio.volume = Math.min(1, boost);
+      return;
+    }
+    audio.volume = Math.min(1, boost);
+    if (gainNode) gainNode.gain.value = Math.max(1, boost);
+    resumeAudioCtx();
+  }
 
   // An http server cannot be loaded into an <audio> element on the https
   // Twitch page (mixed content), so in that case we pull the file through the
@@ -86,6 +175,22 @@ export function buildTwitchAudioUserscript(origin: string): string {
   var statusEl = null;
   var offsetInput = null;
   var modeButtons = {};
+  var volumeLabelEl = null;
+  var compressorBtnEl = null;
+
+  // Панель полупрозрачна, чтобы не мешать смотреть; под курсором — яркая.
+  var PANEL_OPACITY_IDLE = '0.6';
+  var PANEL_OPACITY_COLLAPSED = '0.45';
+  var panelHovered = false;
+
+  function syncPanelOpacity() {
+    if (!panel) return;
+    panel.style.opacity = panelHovered
+      ? '1'
+      : collapsed
+        ? PANEL_OPACITY_COLLAPSED
+        : PANEL_OPACITY_IDLE;
+  }
 
   function getVodId() {
     var m = location.pathname.match(/^\\/videos\\/(\\d+)/);
@@ -294,8 +399,17 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
     if (autoMatchedTrack) {
       ensureTrackInList(autoMatchedTrack);
+      var channelOffset = loadChannelOffset(autoMatchedTrack.channelLogin);
+      if (channelOffset !== null) {
+        offset = channelOffset;
+        if (offsetInput) offsetInput.value = offset.toFixed(1);
+      }
       selectTrack(autoMatchedTrack.id);
-      setStatus('Дорожка найдена автоматически');
+      setStatus(
+        channelOffset !== null
+          ? 'Дорожка найдена · сдвиг канала ' + channelOffset.toFixed(1) + ' c'
+          : 'Дорожка найдена автоматически',
+      );
       return;
     }
 
@@ -815,10 +929,39 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
   }
 
+  // Подобранный вручную сдвиг запоминается и для канала: систематическая
+  // часть рассинхрона (задержка HLS у Twitch, округление меток) у одного
+  // канала обычно одинакова, так что новый VOD стартует с прошлого сдвига,
+  // а не с нуля.
+  function channelOffsetKey(login) {
+    return 'tsr-audio-choffset-' + (login || '').toLowerCase();
+  }
+
+  function loadChannelOffset(login) {
+    if (!login) return null;
+    try {
+      var raw = localStorage.getItem(channelOffsetKey(login));
+      if (raw === null) return null;
+      var num = parseFloat(raw);
+      return isFinite(num) ? num : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveChannelOffset() {
+    var track = findTrack(currentTrackId);
+    if (!track) return;
+    try {
+      localStorage.setItem(channelOffsetKey(track.channelLogin), String(offset));
+    } catch (e) {}
+  }
+
   function setOffset(value) {
     offset = Math.round(value * 10) / 10;
     if (offsetInput) offsetInput.value = offset.toFixed(1);
     saveState();
+    saveChannelOffset();
     syncNow(true);
   }
 
@@ -845,16 +988,15 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (collapsed) {
       bodyEl.style.display = 'none';
       panel.style.width = 'auto';
-      panel.style.opacity = '0.85';
       headerTitleEl.textContent = '🎧';
       toggleHintEl.textContent = '▲';
     } else {
       bodyEl.style.display = 'block';
       panel.style.width = '290px';
-      panel.style.opacity = '1';
       headerTitleEl.textContent = '🎧 Звук записи (TSR)';
       toggleHintEl.textContent = '▾';
     }
+    syncPanelOpacity();
   }
 
   var headerTitleEl = null;
@@ -942,7 +1084,15 @@ export function buildTwitchAudioUserscript(origin: string): string {
       background: '#18181b', color: '#efeff1', borderRadius: '8px',
       border: '1px solid #2f2f35', font: '12px/1.4 Inter, sans-serif',
       width: '290px', boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
-      transition: 'opacity 0.15s',
+      transition: 'opacity 0.2s',
+    });
+    panel.addEventListener('mouseenter', function () {
+      panelHovered = true;
+      syncPanelOpacity();
+    });
+    panel.addEventListener('mouseleave', function () {
+      panelHovered = false;
+      syncPanelOpacity();
     });
 
     var header = el('div', {
@@ -980,7 +1130,15 @@ export function buildTwitchAudioUserscript(origin: string): string {
       width: '100%', background: '#0e0e10', color: '#efeff1',
       border: '1px solid #2f2f35', borderRadius: '4px', padding: '4px', marginBottom: '8px',
     });
-    selectEl.addEventListener('change', function () { selectTrack(selectEl.value); });
+    selectEl.addEventListener('change', function () {
+      var picked = findTrack(selectEl.value);
+      var channelOffset = picked ? loadChannelOffset(picked.channelLogin) : null;
+      if (channelOffset !== null) {
+        offset = channelOffset;
+        if (offsetInput) offsetInput.value = offset.toFixed(1);
+      }
+      selectTrack(selectEl.value);
+    });
     bodyEl.appendChild(selectEl);
 
     var modeRow = el('div', { display: 'flex', gap: '6px', marginBottom: '8px' });
@@ -1013,15 +1171,34 @@ export function buildTwitchAudioUserscript(origin: string): string {
     bodyEl.appendChild(offsetRow);
 
     var volumeRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
-    volumeRow.appendChild(el('span', { opacity: '0.7' }, 'Громк.'));
-    var volume = el('input', { flex: '1' });
+    volumeLabelEl = el('span', { opacity: '0.7', minWidth: '78px' }, '');
+    volumeRow.appendChild(volumeLabelEl);
+    var volume = el('input', { flex: '1', minWidth: '0' });
     volume.type = 'range';
     volume.min = '0';
-    volume.max = '1';
+    volume.max = '3';
     volume.step = '0.05';
-    volume.value = '1';
-    volume.addEventListener('input', function () { audio.volume = parseFloat(volume.value); });
+    volume.value = String(boost);
+    volume.addEventListener('input', function () {
+      boost = parseFloat(volume.value) || 0;
+      applyFx();
+      saveFx();
+      updateVolumeLabel();
+    });
     volumeRow.appendChild(volume);
+    compressorBtnEl = makeButton('Комп.', function () {
+      compressorOn = !compressorOn;
+      if (compressorOn && !ensureAudioGraph()) {
+        compressorOn = false;
+        setStatus('WebAudio недоступен — компрессор не включить');
+      }
+      rewireAudioGraph();
+      applyFx();
+      saveFx();
+      updateFxButtons();
+    });
+    compressorBtnEl.title = 'Компрессор: приглушает пики и делает тихую речь громче';
+    volumeRow.appendChild(compressorBtnEl);
     bodyEl.appendChild(volumeRow);
 
     statusEl = el('div', { opacity: '0.7', minHeight: '16px' }, '');
@@ -1036,10 +1213,25 @@ export function buildTwitchAudioUserscript(origin: string): string {
     renderOptions();
     updateLegend();
     updateNowPlaying();
+    updateVolumeLabel();
+    updateFxButtons();
+    applyFx();
     applyCollapsed();
     applySavedPosition();
     fetchTracks();
     fetchVodMeta();
+  }
+
+  function updateVolumeLabel() {
+    if (!volumeLabelEl) return;
+    volumeLabelEl.textContent = 'Громк. ' + Math.round(boost * 100) + '%';
+    volumeLabelEl.style.color = boost > 1 ? '#3fd56d' : '';
+    volumeLabelEl.style.opacity = boost > 1 ? '1' : '0.7';
+  }
+
+  function updateFxButtons() {
+    if (!compressorBtnEl) return;
+    compressorBtnEl.style.background = compressorOn ? '#9147ff' : '#2f2f35';
   }
 
   // Big, unambiguous indicator of what is actually coming out of the speakers.
@@ -1077,6 +1269,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
     offsetInput = null;
     legendEl = null;
     modeButtons = {};
+    volumeLabelEl = null;
+    compressorBtnEl = null;
+    panelHovered = false;
   }
 
   // A direct <audio src> load can fail on the https Twitch page when the
@@ -1094,6 +1289,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
   try {
     if (document.body) document.body.appendChild(audio);
   } catch (e) {}
+
+  // Контекст WebAudio засыпает до первого жеста пользователя (политика
+  // автоплея): будим его при старте воспроизведения и на любом клике, иначе
+  // усиление >100% после перезагрузки страницы молчало бы.
+  audio.addEventListener('play', resumeAudioCtx);
+  document.addEventListener('pointerdown', resumeAudioCtx, true);
 
   function tick() {
     // Twitch is a SPA: react to URL changes without page reloads.
