@@ -164,11 +164,12 @@ export class PublicStreamsController {
   async matchAudioTrack(
     @Query("channel") channel?: string,
     @Query("date") date?: string,
+    @Query("length") length?: string,
   ) {
     const login = (channel ?? "").trim().toLowerCase();
 
     if (!login) {
-      return { item: null };
+      return { item: null, items: [] };
     }
 
     const sessions = await this.prisma.streamSession.findMany({
@@ -189,14 +190,15 @@ export class PublicStreamsController {
     const available = sessions.filter((session) => this.hasUsableAudio(session));
 
     if (available.length === 0) {
-      return { item: null };
+      return { item: null, items: [] };
     }
 
     const target = date ? new Date(date) : null;
 
     if (!target || Number.isNaN(target.getTime())) {
       // No date to disambiguate — return the newest track for this channel.
-      return { item: this.mapAudioTrack(available[0]) };
+      const newest = this.mapAudioTrack(available[0]);
+      return { item: newest, items: [newest] };
     }
 
     // A Twitch VOD's createdAt is the broadcast start, which lines up with our
@@ -217,10 +219,37 @@ export class PublicStreamsController {
     const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
 
     if (bestDelta > MATCH_WINDOW_MS) {
-      return { item: null };
+      return { item: null, items: [] };
     }
 
-    return { item: this.mapAudioTrack(best) };
+    // A restarted/interrupted recorder splits one broadcast into several
+    // sessions. Return every session overlapping the VOD's time window so the
+    // userscript can switch between them automatically instead of forcing the
+    // viewer to pick one fragment by hand.
+    const lengthSec = Number.parseInt(length ?? "", 10);
+    const windowStartMs = target.getTime() - 60 * 60 * 1000;
+    const windowEndMs =
+      target.getTime() +
+      (Number.isFinite(lengthSec) && lengthSec > 0 ? lengthSec * 1000 : MATCH_WINDOW_MS) +
+      60 * 60 * 1000;
+
+    const group = available
+      .filter((session) => {
+        const startMs = session.startedAt?.getTime() ?? session.createdAt.getTime();
+        const endMs =
+          session.captureEndedAt?.getTime() ?? session.endedAt?.getTime() ?? startMs + 1;
+        return endMs >= windowStartMs && startMs <= windowEndMs;
+      })
+      .sort((a, b) => {
+        const aStart = a.startedAt?.getTime() ?? a.createdAt.getTime();
+        const bStart = b.startedAt?.getTime() ?? b.createdAt.getTime();
+        return aStart - bStart;
+      });
+
+    return {
+      item: this.mapAudioTrack(best),
+      items: (group.length ? group : [best]).map((session) => this.mapAudioTrack(session)),
+    };
   }
 
   private hasUsableAudio(
