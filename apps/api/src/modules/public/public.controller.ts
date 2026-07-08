@@ -13,7 +13,10 @@ import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
-import { resolveSessionPlaybackState } from "../recording/playback.utils";
+import {
+  buildMediaCacheHeaders,
+  resolveSessionPlaybackState,
+} from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
@@ -308,6 +311,14 @@ export class PublicStreamsController {
 
     const stat = statSync(absolutePath);
     const range = req.headers.range as string | undefined;
+    // A day, per how often the userscript reopens the same VOD's overlay.
+    const cache = buildMediaCacheHeaders(stat, 86_400);
+
+    if (!range && req.headers["if-none-match"] === cache.etag) {
+      res.writeHead(304, cache.headers);
+      res.end();
+      return;
+    }
 
     if (downloadName) {
       res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
@@ -329,6 +340,7 @@ export class PublicStreamsController {
         "Accept-Ranges": "bytes",
         "Content-Length": end - start + 1,
         "Content-Type": "audio/mp4",
+        ...cache.headers,
       });
       createReadStream(absolutePath, { start, end }).pipe(res);
       return;
@@ -338,6 +350,7 @@ export class PublicStreamsController {
       "Content-Length": stat.size,
       "Content-Type": "audio/mp4",
       "Accept-Ranges": "bytes",
+      ...cache.headers,
     });
     createReadStream(absolutePath).pipe(res);
   }
@@ -478,6 +491,15 @@ export class PublicStreamsController {
     const range = req.headers.range as string | undefined;
     const isAudioFile = absolutePath.toLowerCase().endsWith(".m4a");
     const contentType = isAudioFile ? "audio/mp4" : "video/mp4";
+    // Audio overlays get reloaded on every VOD visit — cache them for a day;
+    // video ranges are bulkier, an hour matches the Telegram-backed path.
+    const cache = buildMediaCacheHeaders(stat, isAudioFile ? 86_400 : 3_600);
+
+    if (!range && req.headers["if-none-match"] === cache.etag) {
+      res.writeHead(304, cache.headers);
+      res.end();
+      return;
+    }
 
     if (req.query?.download === "1") {
       const full = await this.prisma.streamSession.findUnique({
@@ -502,6 +524,7 @@ export class PublicStreamsController {
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
         "Content-Type": contentType,
+        ...cache.headers,
       });
       createReadStream(absolutePath, { start, end }).pipe(res);
       return;
@@ -511,6 +534,7 @@ export class PublicStreamsController {
       "Content-Length": stat.size,
       "Content-Type": contentType,
       "Accept-Ranges": "bytes",
+      ...cache.headers,
     });
     createReadStream(absolutePath).pipe(res);
   }
