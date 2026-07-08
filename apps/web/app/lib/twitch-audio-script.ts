@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.5
+// @version      1.6
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch: оригинал, запись или оба сразу. Сам находит дорожку, подсвечивает покрытие и заглушённые участки, панель перетаскивается.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -54,7 +54,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   // An http server cannot be loaded into an <audio> element on the https
   // Twitch page (mixed content), so in that case we pull the file through the
-  // privileged GM_xmlhttpRequest and play it from a blob instead.
+  // privileged GM_xmlhttpRequest and play it from a blob instead. The file is
+  // downloaded in Range chunks (playback starts after the first megabytes —
+  // .m4a is written with faststart, so a prefix is already playable) and the
+  // finished blob is kept in IndexedDB for a day, so refreshing the page or
+  // reopening the VOD does not download it again.
   var mixedContent = location.protocol === 'https:' && SERVER.slice(0, 7).toLowerCase() === 'http://';
   var audioObjectUrl = null;
   var blobLoadingForId = null;
@@ -417,45 +421,244 @@ export function buildTwitchAudioUserscript(origin: string): string {
     }
   }
 
-  // Pull the audio file through GM_xmlhttpRequest (privileged — bypasses the
-  // mixed-content block) and play it from a blob URL.
+  // ---- Кэш скачанного аудио в IndexedDB --------------------------------
+  // Полностью скачанные дорожки хранятся сутки: обновление страницы или
+  // возврат к тому же VOD берут файл из кэша вместо повторной закачки.
+  var CACHE_DB = 'tsr-audio-cache';
+  var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  var CACHE_MAX_TRACKS = 3;
+
+  function openCacheDb(cb) {
+    var request;
+    try {
+      request = indexedDB.open(CACHE_DB, 1);
+    } catch (e) {
+      cb(null);
+      return;
+    }
+    request.onupgradeneeded = function () {
+      var db = request.result;
+      if (!db.objectStoreNames.contains('files')) db.createObjectStore('files');
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+    };
+    request.onsuccess = function () { cb(request.result); };
+    request.onerror = function () { cb(null); };
+  }
+
+  function cacheGetAudio(trackId, cb) {
+    openCacheDb(function (db) {
+      if (!db) { cb(null); return; }
+      try {
+        var tx = db.transaction(['files', 'meta'], 'readonly');
+        var metaReq = tx.objectStore('meta').get(trackId);
+        var fileReq = tx.objectStore('files').get(trackId);
+        tx.oncomplete = function () {
+          db.close();
+          var meta = metaReq.result;
+          var blob = fileReq.result;
+          var fresh = meta && Date.now() - meta.savedAt < CACHE_TTL_MS;
+          cb(blob && fresh ? blob : null);
+        };
+        tx.onerror = function () { db.close(); cb(null); };
+        tx.onabort = function () { db.close(); cb(null); };
+      } catch (e) {
+        try { db.close(); } catch (e2) {}
+        cb(null);
+      }
+    });
+  }
+
+  function cachePutAudio(trackId, blob) {
+    openCacheDb(function (db) {
+      if (!db) return;
+      try {
+        var tx = db.transaction(['files', 'meta'], 'readwrite');
+        var files = tx.objectStore('files');
+        var meta = tx.objectStore('meta');
+        files.put(blob, trackId);
+        meta.put({ savedAt: Date.now() }, trackId);
+        // Выкидываем протухшие записи и всё сверх лимита (старые — первыми).
+        var metaRows = meta.getAll();
+        var metaKeys = meta.getAllKeys();
+        metaKeys.onsuccess = function () {
+          var rows = metaRows.result || [];
+          var keys = metaKeys.result || [];
+          var entries = [];
+          for (var i = 0; i < keys.length; i++) {
+            entries.push({ key: keys[i], savedAt: (rows[i] && rows[i].savedAt) || 0 });
+          }
+          entries.sort(function (a, b) { return b.savedAt - a.savedAt; });
+          for (var j = 0; j < entries.length; j++) {
+            var expired = Date.now() - entries[j].savedAt >= CACHE_TTL_MS;
+            if ((j >= CACHE_MAX_TRACKS || expired) && entries[j].key !== trackId) {
+              files.delete(entries[j].key);
+              meta.delete(entries[j].key);
+            }
+          }
+        };
+        tx.oncomplete = function () { db.close(); };
+        tx.onerror = function () { db.close(); };
+        tx.onabort = function () { db.close(); };
+      } catch (e) {
+        try { db.close(); } catch (e2) {}
+      }
+    });
+  }
+
+  // ---- Прогрессивная загрузка по частям (Range) --------------------------
+  // Сервер отдаёт диапазоны, а .m4a записан с faststart (метаданные в начале
+  // файла), поэтому скачанный префикс уже можно играть: звук включается после
+  // первого куска, остальное докачивается в фоне. Подмена blob по мере
+  // роста происходит редко (каждый раз объём утраивается), позицию после
+  // подмены восстанавливает syncNow.
+  var PROGRESSIVE_CHUNK_BYTES = 8 * 1024 * 1024;
+  var progressiveState = null;
+
+  function abortProgressive() {
+    progressiveState = null;
+  }
+
+  function applyAudioBlob(blob) {
+    clearAudioObjectUrl();
+    audioObjectUrl = URL.createObjectURL(blob);
+    audio.src = audioObjectUrl;
+    audio.load();
+  }
+
+  // Загрузка с кэшем: сперва IndexedDB, иначе — скачивание по частям.
   function loadAudioBlob(track) {
     if (blobLoadingForId === track.id) return;
     blobLoadingForId = track.id;
     blobTriedForId = track.id;
+    setStatus('Проверяю кэш аудио...');
+    cacheGetAudio(track.id, function (cached) {
+      if (currentTrackId !== track.id) {
+        blobLoadingForId = null;
+        return;
+      }
+      if (cached) {
+        try {
+          applyAudioBlob(cached);
+          blobLoadingForId = null;
+          setStatus('Аудио взято из кэша');
+          syncNow(true);
+          return;
+        } catch (e) {}
+      }
+      startProgressiveDownload(track);
+    });
+  }
+
+  function startProgressiveDownload(track) {
+    var state = {
+      trackId: track.id,
+      chunks: [],
+      loaded: 0,
+      total: 0,
+      // Сколько байт уже отдано в <audio> (граница проигрываемой части).
+      playableBytes: 0,
+      nextSwapAt: PROGRESSIVE_CHUNK_BYTES,
+      retries: 0,
+    };
+    progressiveState = state;
     setStatus('Загружаю аудио...');
+    fetchNextChunk(track, state);
+  }
+
+  function finishProgressive(track, state) {
+    if (progressiveState === state) progressiveState = null;
+    blobLoadingForId = null;
+    var blob = new Blob(state.chunks, { type: 'audio/mp4' });
+    if (currentTrackId === track.id) {
+      try {
+        applyAudioBlob(blob);
+        setStatus('Аудио загружено');
+        syncNow(true);
+      } catch (e) {
+        setStatus('Не удалось загрузить аудио');
+        return;
+      }
+    }
+    cachePutAudio(track.id, blob);
+  }
+
+  function retryChunk(track, state) {
+    state.retries += 1;
+    if (state.retries > 3) {
+      if (progressiveState === state) progressiveState = null;
+      blobLoadingForId = null;
+      setStatus('Сервер недоступен — аудио не загружено');
+      return;
+    }
+    setTimeout(function () { fetchNextChunk(track, state); }, 1000 * state.retries);
+  }
+
+  function fetchNextChunk(track, state) {
+    if (progressiveState !== state || currentTrackId !== track.id) return;
+    var start = state.loaded;
     GM_xmlhttpRequest({
       method: 'GET',
       url: SERVER + track.audioUrl,
       responseType: 'arraybuffer',
-      onprogress: function (e) {
-        if (e && e.lengthComputable && e.total) {
-          setStatus('Загружаю аудио ' + Math.round((e.loaded / e.total) * 100) + '%...');
-        }
-      },
+      headers: { Range: 'bytes=' + start + '-' + (start + PROGRESSIVE_CHUNK_BYTES - 1) },
       onload: function (res) {
-        blobLoadingForId = null;
-        if (currentTrackId !== track.id) return;
-        try {
-          clearAudioObjectUrl();
-          var blob = new Blob([res.response], { type: 'audio/mp4' });
-          audioObjectUrl = URL.createObjectURL(blob);
-          audio.src = audioObjectUrl;
-          audio.load();
-          setStatus('Аудио загружено');
-          syncNow(true);
-        } catch (e) {
-          setStatus('Не удалось загрузить аудио');
+        if (progressiveState !== state || currentTrackId !== track.id) return;
+        if ((res.status !== 206 && res.status !== 200) || !res.response) {
+          retryChunk(track, state);
+          return;
         }
+        state.retries = 0;
+        state.chunks.push(res.response);
+        state.loaded += res.response.byteLength;
+
+        // Сервер не понял Range и прислал файл целиком — он уже полон.
+        if (res.status === 200) {
+          state.total = state.loaded;
+          finishProgressive(track, state);
+          return;
+        }
+
+        if (!state.total) {
+          var match = /bytes\\s+\\d+-\\d+\\/(\\d+)/i.exec(res.responseHeaders || '');
+          if (match) state.total = parseInt(match[1], 10) || 0;
+        }
+
+        var isLastChunk =
+          (state.total && state.loaded >= state.total) ||
+          res.response.byteLength < PROGRESSIVE_CHUNK_BYTES;
+        if (isLastChunk) {
+          finishProgressive(track, state);
+          return;
+        }
+
+        if (state.loaded >= state.nextSwapAt) {
+          state.playableBytes = state.loaded;
+          try {
+            applyAudioBlob(new Blob(state.chunks, { type: 'audio/mp4' }));
+            syncNow(true);
+          } catch (e) {}
+          state.nextSwapAt = state.loaded * 3;
+        }
+
+        if (state.total) {
+          var pct = Math.min(99, Math.round((state.loaded / state.total) * 100));
+          setStatus(
+            'Загружаю аудио ' + pct + '%' +
+            (state.playableBytes ? ' — уже можно слушать' : '...'),
+          );
+        }
+
+        fetchNextChunk(track, state);
       },
       onerror: function () {
-        blobLoadingForId = null;
-        setStatus('Сервер недоступен — аудио не загружено');
+        if (progressiveState !== state || currentTrackId !== track.id) return;
+        retryChunk(track, state);
       },
     });
   }
 
   function loadAudioSource(track) {
+    abortProgressive();
     clearAudioObjectUrl();
     if (mixedContent) {
       loadAudioBlob(track);
@@ -493,6 +696,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
       trackRecordEndMs = 0;
       audio.pause();
       audio.removeAttribute('src');
+      abortProgressive();
+      blobLoadingForId = null;
       clearAudioObjectUrl();
       var vv = getVideo();
       if (vv) vv.muted = false;
@@ -580,6 +785,20 @@ export function buildTwitchAudioUserscript(origin: string): string {
       // Outside the recorded range — nothing to play here.
       if (!audio.paused) audio.pause();
       return;
+    }
+    if (progressiveState) {
+      // Файл ещё докачивается: до первого куска играть нечего, а позицию за
+      // границей скачанного держим на паузе — браузер видит усечённый файл
+      // и на попытке играть дальше конца упал бы с ошибкой.
+      if (!progressiveState.playableBytes) return;
+      if (trackDurationSec && progressiveState.total) {
+        var bytesNeeded =
+          ((target + 5) / trackDurationSec) * progressiveState.total + 1048576;
+        if (bytesNeeded > progressiveState.playableBytes) {
+          if (!audio.paused) audio.pause();
+          return;
+        }
+      }
     }
     if ((force || Math.abs(audio.currentTime - target) > MAX_DRIFT) && isFinite(target) && target >= 0) {
       audio.currentTime = target;
@@ -891,6 +1110,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
       mutedSegments = [];
       vodLengthSeconds = 0;
       vodCreatedAtMs = 0;
+      abortProgressive();
+      blobLoadingForId = null;
       clearAudioObjectUrl();
       removePanel();
     }
@@ -910,7 +1131,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
     if (mode !== 'twitch' && currentTrackId && !audio.error) {
       var v = getVideo();
-      if (v && !v.paused) {
+      // Пока идёт докачка, строку статуса занимает прогресс загрузки.
+      if (v && !v.paused && !progressiveState) {
         setStatus('Синхронизировано · сдвиг ' + offset.toFixed(1) + ' c');
       }
     } else if (audio.error) {

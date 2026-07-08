@@ -71,6 +71,10 @@ type StreamSource = {
   messageId: string;
   totalSize: number;
   contentType: string;
+  // How long the browser may keep fetched ranges (Cache-Control max-age).
+  // Audio tracks get a full day — the Twitch overlay reloads them on every
+  // VOD visit; video defaults to an hour.
+  cacheSeconds?: number;
 };
 
 // Live throughput for an archive being streamed from Telegram, surfaced in the
@@ -210,6 +214,7 @@ export class TelegramStreamService {
         messageId: session.telegramAudioMessageId,
         totalSize,
         contentType: "audio/mp4",
+        cacheSeconds: 86_400,
       },
       req,
       res,
@@ -284,7 +289,7 @@ export class TelegramStreamService {
       "Accept-Ranges": "bytes",
       // Let the browser keep fetched ranges (the mp4 index in particular) so
       // repeated seeks don't re-download them through Telegram.
-      "Cache-Control": "private, max-age=3600",
+      "Cache-Control": `private, max-age=${source.cacheSeconds ?? 3600}`,
       ...(statusCode === 206
         ? { "Content-Range": `bytes ${start}-${end}/${totalSize}` }
         : {}),

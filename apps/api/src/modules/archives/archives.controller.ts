@@ -2,6 +2,7 @@ import { Controller, Delete, Get, Param, Query, Req, Res } from "@nestjs/common"
 import { createReadStream, type Stats } from "node:fs";
 import { RequirePermissions } from "../auth/auth.decorators";
 import { PrismaService } from "../prisma/prisma.service";
+import { buildMediaCacheHeaders } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
@@ -175,6 +176,15 @@ export class ArchivesController {
     const range = req.headers.range as string | undefined;
     const isAudioFile = absolutePath.toLowerCase().endsWith(".m4a");
     const contentType = isAudioFile ? "audio/mp4" : "video/mp4";
+    // Audio overlays get reloaded on every VOD visit — cache them for a day;
+    // video ranges are bulkier, an hour matches the Telegram-backed path.
+    const cache = buildMediaCacheHeaders(stat, isAudioFile ? 86_400 : 3_600);
+
+    if (!range && req.headers["if-none-match"] === cache.etag) {
+      res.writeHead(304, cache.headers);
+      res.end();
+      return;
+    }
 
     if (req.query?.download === "1") {
       const session = await this.prisma.streamSession.findUnique({
@@ -197,6 +207,7 @@ export class ArchivesController {
         "Accept-Ranges": "bytes",
         "Content-Length": chunkSize,
         "Content-Type": contentType,
+        ...cache.headers,
       });
 
       createReadStream(absolutePath, { start, end }).pipe(res);
@@ -207,6 +218,7 @@ export class ArchivesController {
       "Content-Length": stat.size,
       "Content-Type": contentType,
       "Accept-Ranges": "bytes",
+      ...cache.headers,
     });
 
     createReadStream(absolutePath).pipe(res);
