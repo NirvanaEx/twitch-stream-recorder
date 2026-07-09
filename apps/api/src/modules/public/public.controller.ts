@@ -40,6 +40,75 @@ function isTelegramPlayable(
 const DEFAULT_PAGE_SIZE = 12;
 const MAX_PAGE_SIZE = 48;
 
+// How far a session's start may sit from the VOD's createdAt and still be
+// considered the same broadcast.
+const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Which of the channel's sessions belong to the VOD that started at `date`?
+ * A Twitch VOD's createdAt is the broadcast start, which lines up with our
+ * session.startedAt (the go-live time): the closest start wins, but only when
+ * it is near enough to be the same broadcast. A restarted/interrupted
+ * recorder splits one broadcast into several sessions, so alongside the best
+ * match every session overlapping the VOD's time window is returned — the
+ * userscript switches between them automatically. Shared by the audio-track
+ * and chat-replay matchers.
+ */
+function matchSessionsToVod<T extends StreamSession>(
+  available: T[],
+  date?: string,
+  length?: string,
+): { best: T | null; group: T[] } {
+  if (available.length === 0) {
+    return { best: null, group: [] };
+  }
+
+  const target = date ? new Date(date) : null;
+
+  if (!target || Number.isNaN(target.getTime())) {
+    // No date to disambiguate — the newest session wins.
+    return { best: available[0], group: [available[0]] };
+  }
+
+  let best = available[0];
+  let bestDelta = Number.POSITIVE_INFINITY;
+
+  for (const session of available) {
+    if (!session.startedAt) continue;
+    const delta = Math.abs(session.startedAt.getTime() - target.getTime());
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = session;
+    }
+  }
+
+  if (bestDelta > MATCH_WINDOW_MS) {
+    return { best: null, group: [] };
+  }
+
+  const lengthSec = Number.parseInt(length ?? "", 10);
+  const windowStartMs = target.getTime() - 60 * 60 * 1000;
+  const windowEndMs =
+    target.getTime() +
+    (Number.isFinite(lengthSec) && lengthSec > 0 ? lengthSec * 1000 : MATCH_WINDOW_MS) +
+    60 * 60 * 1000;
+
+  const group = available
+    .filter((session) => {
+      const startMs = session.startedAt?.getTime() ?? session.createdAt.getTime();
+      const endMs =
+        session.captureEndedAt?.getTime() ?? session.endedAt?.getTime() ?? startMs + 1;
+      return endMs >= windowStartMs && startMs <= windowEndMs;
+    })
+    .sort((a, b) => {
+      const aStart = a.startedAt?.getTime() ?? a.createdAt.getTime();
+      const bStart = b.startedAt?.getTime() ?? b.createdAt.getTime();
+      return aStart - bStart;
+    });
+
+  return { best, group: group.length ? group : [best] };
+}
+
 // emotesJson holds JSON.stringify() of the raw IRC tag; a single corrupt row
 // must not 500 the whole chat-replay response.
 function parseStoredJsonString(value: string): string | null {
@@ -199,67 +268,80 @@ export class PublicStreamsController {
     });
 
     const available = sessions.filter((session) => this.hasUsableAudio(session));
+    const { best, group } = matchSessionsToVod(available, date, length);
 
-    if (available.length === 0) {
+    if (!best) {
       return { item: null, items: [] };
     }
-
-    const target = date ? new Date(date) : null;
-
-    if (!target || Number.isNaN(target.getTime())) {
-      // No date to disambiguate — return the newest track for this channel.
-      const newest = this.mapAudioTrack(available[0]);
-      return { item: newest, items: [newest] };
-    }
-
-    // A Twitch VOD's createdAt is the broadcast start, which lines up with our
-    // session.startedAt (the go-live time). Pick the nearest start, but only
-    // when it is close enough to be the same broadcast.
-    let best = available[0];
-    let bestDelta = Number.POSITIVE_INFINITY;
-
-    for (const session of available) {
-      if (!session.startedAt) continue;
-      const delta = Math.abs(session.startedAt.getTime() - target.getTime());
-      if (delta < bestDelta) {
-        bestDelta = delta;
-        best = session;
-      }
-    }
-
-    const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
-
-    if (bestDelta > MATCH_WINDOW_MS) {
-      return { item: null, items: [] };
-    }
-
-    // A restarted/interrupted recorder splits one broadcast into several
-    // sessions. Return every session overlapping the VOD's time window so the
-    // userscript can switch between them automatically instead of forcing the
-    // viewer to pick one fragment by hand.
-    const lengthSec = Number.parseInt(length ?? "", 10);
-    const windowStartMs = target.getTime() - 60 * 60 * 1000;
-    const windowEndMs =
-      target.getTime() +
-      (Number.isFinite(lengthSec) && lengthSec > 0 ? lengthSec * 1000 : MATCH_WINDOW_MS) +
-      60 * 60 * 1000;
-
-    const group = available
-      .filter((session) => {
-        const startMs = session.startedAt?.getTime() ?? session.createdAt.getTime();
-        const endMs =
-          session.captureEndedAt?.getTime() ?? session.endedAt?.getTime() ?? startMs + 1;
-        return endMs >= windowStartMs && startMs <= windowEndMs;
-      })
-      .sort((a, b) => {
-        const aStart = a.startedAt?.getTime() ?? a.createdAt.getTime();
-        const bStart = b.startedAt?.getTime() ?? b.createdAt.getTime();
-        return aStart - bStart;
-      });
 
     return {
       item: this.mapAudioTrack(best),
-      items: (group.length ? group : [best]).map((session) => this.mapAudioTrack(session)),
+      items: group.map((session) => this.mapAudioTrack(session)),
+    };
+  }
+
+  /**
+   * Same matching as "audio-tracks/match", but for the recorded chat — and
+   * NOT gated on audio being available. That lets the userscript replay the
+   * chat while the viewer listens to the VOD's original sound, and keeps the
+   * chat working after the audio copy was deleted. CORS is open (twitch.tv).
+   */
+  @Get("chat-replay/match")
+  @Header("Access-Control-Allow-Origin", "*")
+  async matchChatReplay(
+    @Query("channel") channel?: string,
+    @Query("date") date?: string,
+    @Query("length") length?: string,
+  ) {
+    const login = (channel ?? "").trim().toLowerCase();
+
+    if (!login) {
+      return { item: null, items: [] };
+    }
+
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        channel: { twitchLogin: login },
+        // Set when a chat capture actually started for the session; sessions
+        // recorded with chat disabled never match.
+        chatAvailable: true,
+      },
+      include: {
+        channel: true,
+        telegramParts: { select: { durationSec: true } },
+      },
+      orderBy: [{ startedAt: "desc" }],
+      take: 50,
+    });
+
+    const { best, group } = matchSessionsToVod(sessions, date, length);
+
+    if (!best) {
+      return { item: null, items: [] };
+    }
+
+    return {
+      item: this.mapChatSession(best),
+      items: group.map((session) => this.mapChatSession(session)),
+    };
+  }
+
+  /**
+   * The anchor fields the userscript needs to place chat messages on the VOD
+   * timeline — the same ones the audio tracks carry, minus the audio itself.
+   */
+  private mapChatSession(session: Parameters<PublicStreamsController["mapAudioTrack"]>[0]) {
+    const track = this.mapAudioTrack(session);
+    return {
+      id: track.id,
+      title: track.title,
+      channelLogin: track.channelLogin,
+      channelDisplayName: track.channelDisplayName,
+      startedAt: track.startedAt,
+      recordingStartedAt: track.recordingStartedAt,
+      recordingEndedAt: track.recordingEndedAt,
+      durationSec: track.durationSec,
+      chatUrl: `/api/public/streams/${track.id}/chat-replay`,
     };
   }
 
