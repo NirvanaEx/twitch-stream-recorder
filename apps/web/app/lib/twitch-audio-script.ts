@@ -17,8 +17,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      1.9
-// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch, и заменяет чат VOD на записанный: видны удалённые и самые первые сообщения, сдвиг чата подстраивается отдельно. Громкость до 300% с компрессором.
+// @version      2.0
+// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch, и заменяет чат VOD на записанный: видны удалённые и самые первые сообщения, сдвиг чата подстраивается отдельно. Чат работает и без аудиодорожки — с оригинальным звуком. Громкость до 300% с компрессором.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
 // @connect      ${hostname}
@@ -62,6 +62,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
   // или лагов стрима.
   var chatMode = 'twitch'; // twitch | record
   var chatOffset = 0;
+  // Сессии с чатом этого эфира — отдельный матч, НЕ привязанный к аудио:
+  // чат работает и с оригинальным звуком Twitch, и когда аудио уже удалено.
+  var chatSessions = [];
+  var chatMatchPending = false;
+  var chatSelectionResolved = false;
+  var vodChannelLogin = '';
   var chatMessages = []; // merged from all sessions of the broadcast, sorted
   var chatEmoteMap = {}; // 7tv name -> url (из снапшота записи)
   var chatDeletedCount = 0;
@@ -382,15 +388,46 @@ export function buildTwitchAudioUserscript(origin: string): string {
         // сообщений чата пересчитываются на точные абсолютные метки.
         computeChatVodTimes();
         if (login) {
+          vodChannelLogin = String(login).toLowerCase();
           matchTrack(login, date);
+          fetchChatSessions(login, date);
         } else {
           matchPending = false;
           resolveSelection();
+          resolveChatSelection();
         }
       },
       onerror: function () {
         matchPending = false;
         resolveSelection();
+        resolveChatSelection();
+      },
+    });
+  }
+
+  // Отдельный от аудио поиск сессий с чатом: канал и дата эфира те же, но на
+  // сервере не требуется живая аудиодорожка.
+  function fetchChatSessions(login, date) {
+    chatMatchPending = true;
+    var url =
+      SERVER + '/api/public/streams/chat-replay/match?channel=' + encodeURIComponent(login) +
+      (date ? '&date=' + encodeURIComponent(date) : '') +
+      (vodLengthSeconds ? '&length=' + Math.round(vodLengthSeconds) : '');
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: url,
+      onload: function (res) {
+        try {
+          chatSessions = (JSON.parse(res.responseText).items) || [];
+        } catch (e) {
+          chatSessions = [];
+        }
+        chatMatchPending = false;
+        resolveChatSelection();
+      },
+      onerror: function () {
+        chatMatchPending = false;
+        resolveChatSelection();
       },
     });
   }
@@ -440,10 +477,8 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (saved && saved.trackId && findTrack(saved.trackId)) {
       offset = typeof saved.offset === 'number' ? saved.offset : 0;
       if (offsetInput) offsetInput.value = offset.toFixed(1);
-      if (typeof saved.chatOffset === 'number') chatOffset = saved.chatOffset;
       selectTrack(saved.trackId);
       applyMode(saved.mode === 'record' || saved.mode === 'both' ? saved.mode : 'twitch');
-      applyChatMode(saved.chatMode === 'record' ? 'record' : 'twitch');
       return;
     }
 
@@ -458,13 +493,6 @@ export function buildTwitchAudioUserscript(origin: string): string {
         if (offsetInput) offsetInput.value = offset.toFixed(1);
       }
       selectTrack(autoMatchedTrack.id);
-      // Чат: включённый на прошлых VOD этого канала режим и его сдвиг
-      // подхватываются автоматически.
-      var chatPrefs = loadChannelChatPrefs(autoMatchedTrack.channelLogin);
-      if (chatPrefs && typeof chatPrefs.offset === 'number') {
-        chatOffset = chatPrefs.offset;
-      }
-      applyChatMode(chatPrefs && chatPrefs.mode === 'record' ? 'record' : 'twitch');
       var groupNote = groupTracks.length > 1 ? ' · дорожек: ' + groupTracks.length : '';
       setStatus(
         (channelOffset !== null
@@ -1197,13 +1225,40 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   function saveChannelChatPrefs() {
     var track = findTrack(currentTrackId) || autoMatchedTrack;
-    if (!track) return;
+    var login = vodChannelLogin || (track && track.channelLogin) || '';
+    if (!login) return;
     try {
       localStorage.setItem(
-        channelChatKey(track.channelLogin),
+        channelChatKey(login),
         JSON.stringify({ mode: chatMode, offset: chatOffset }),
       );
     } catch (e) {}
+  }
+
+  // Включение чата на этом VOD: явный выбор на этом VOD (в т.ч. выключение)
+  // важнее общей настройки канала. Вызывается, когда завершился поиск сессий
+  // чата — независимо от того, нашлась ли аудиодорожка.
+  function resolveChatSelection() {
+    if (chatSelectionResolved) return;
+    chatSelectionResolved = true;
+    var saved = loadState();
+    var prefs = loadChannelChatPrefs(vodChannelLogin);
+    if (saved && typeof saved.chatOffset === 'number') {
+      chatOffset = saved.chatOffset;
+    } else if (prefs && typeof prefs.offset === 'number') {
+      chatOffset = prefs.offset;
+    }
+    var wanted = saved && saved.chatMode ? saved.chatMode : prefs && prefs.mode;
+    applyChatMode(wanted === 'record' ? 'record' : 'twitch');
+  }
+
+  // Сессия-источник сообщения: сперва среди сессий чата, затем среди
+  // аудиодорожек (ручной выбор без совпадения по каналу/дате).
+  function findChatSession(id) {
+    for (var i = 0; i < chatSessions.length; i++) {
+      if (chatSessions[i].id === id) return chatSessions[i];
+    }
+    return findTrack(id);
   }
 
   function applyChatMode(next) {
@@ -1236,6 +1291,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
 
   function resetChatState() {
     chatLoadToken += 1; // ответы незавершённых запросов будут отброшены
+    chatSessions = [];
+    chatMatchPending = false;
+    chatSelectionResolved = false;
+    vodChannelLogin = '';
     chatMessages = [];
     chatEmoteMap = {};
     chatDeletedCount = 0;
@@ -1248,14 +1307,16 @@ export function buildTwitchAudioUserscript(origin: string): string {
   }
 
   // Чат собирается со всех сессий этого эфира (рекордер мог перезапускаться).
-  // Пока группа не пришла, грузим чат выбранной дорожки; при изменении набора
-  // сессий ключ меняется и чат перечитывается уже полным.
+  // Основной источник — отдельный чат-матч; аудиодорожки остаются запасным
+  // путём (например, дорожка выбрана вручную, а GQL не дал канал/дату).
+  // При изменении набора сессий ключ меняется и чат перечитывается.
   function ensureChatLoaded() {
     if (chatMode !== 'record') return;
-    if (chatLoading) return;
+    if (chatLoading || chatMatchPending) return;
     if (chatRetryAt && Date.now() < chatRetryAt) return;
 
-    var list = groupTracks.length ? groupTracks : [];
+    var list = chatSessions.length ? chatSessions : [];
+    if (!list.length) list = groupTracks.length ? groupTracks : [];
     if (!list.length && currentTrackId && findTrack(currentTrackId)) {
       list = [findTrack(currentTrackId)];
     }
@@ -1366,7 +1427,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
       if (vodCreatedAtMs && m.tsMs) {
         m.vodTime = (m.tsMs - vodCreatedAtMs) / 1000;
       } else {
-        m.vodTime = getRecStartForTrack(findTrack(m.sessionId)) + m.relativeTimeSec;
+        m.vodTime = getRecStartForTrack(findChatSession(m.sessionId)) + m.relativeTimeSec;
       }
     }
     chatMessages.sort(function (a, b) { return a.vodTime - b.vodTime; });
@@ -1603,7 +1664,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   function updateChatHeaderInfo() {
     if (!chatHeaderInfoEl) return;
     var text;
-    if (chatLoading) {
+    if (chatLoading || chatMatchPending) {
       text = 'загружаю…';
     } else if (chatMessages.length) {
       text = chatMessages.length + ' сообщ.' +
@@ -1611,7 +1672,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     } else if (chatLoadedKey) {
       text = 'сообщений нет';
     } else {
-      text = 'жду дорожку…';
+      text = 'чат этого эфира не найден';
     }
     if (chatHeaderInfoEl.textContent !== text) chatHeaderInfoEl.textContent = text;
   }
