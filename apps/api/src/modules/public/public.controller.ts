@@ -40,6 +40,17 @@ function isTelegramPlayable(
 const DEFAULT_PAGE_SIZE = 12;
 const MAX_PAGE_SIZE = 48;
 
+// emotesJson holds JSON.stringify() of the raw IRC tag; a single corrupt row
+// must not 500 the whole chat-replay response.
+function parseStoredJsonString(value: string): string | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 @AllowAnonymous()
 @Controller("public/streams")
 export class PublicStreamsController {
@@ -465,6 +476,57 @@ export class PublicStreamsController {
         authorDisplayName: message.authorDisplayName,
         authorColor: message.authorColor,
         textRaw: message.textRaw,
+        relativeTimeSec: message.relativeTimeSec,
+        messageTimestamp: message.messageTimestamp.toISOString(),
+        isDeleted: message.isDeleted,
+      })),
+      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+    };
+  }
+
+  /**
+   * Chat replay for the Tampermonkey userscript: the recorded chat (including
+   * deleted messages) overlaid on the Twitch VOD's own chat column. Unlike
+   * ":id/chat" it is NOT gated on video readiness — the viewer watches the
+   * VOD on Twitch, so only the captured messages have to exist. CORS is open
+   * because the script calls this from twitch.tv.
+   */
+  @Get(":id/chat-replay")
+  @Header("Access-Control-Allow-Origin", "*")
+  async getChatReplay(@Param("id") id: string) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!session) {
+      throw new NotFoundException("Запись не найдена.");
+    }
+
+    const [messages, snapshot] = await Promise.all([
+      this.prisma.chatMessage.findMany({
+        where: { streamSessionId: id },
+        orderBy: { relativeTimeSec: "asc" },
+        take: 50000,
+      }),
+      this.prisma.emoteSnapshot.findUnique({
+        where: { streamSessionId: id },
+      }),
+    ]);
+
+    return {
+      messages: messages.map((message) => ({
+        id: message.id,
+        // Lets the userscript dedupe when one broadcast spans several
+        // sessions whose capture windows overlap.
+        providerMessageId: message.providerMessageId,
+        authorLogin: message.authorLogin,
+        authorDisplayName: message.authorDisplayName,
+        authorColor: message.authorColor,
+        textRaw: message.textRaw,
+        // Raw Twitch IRC "emotes" tag ("id:start-end,.../..."), code-point
+        // indexed — the userscript renders these from the Twitch CDN.
+        emotes: message.emotesJson ? parseStoredJsonString(message.emotesJson) : null,
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
