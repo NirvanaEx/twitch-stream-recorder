@@ -554,11 +554,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (!legendEl) return;
     var lines = [];
     if (groupTracks.length > 1) {
-      lines.push('🎧 Дорожек этого стрима: ' + groupTracks.length + ' — переключаются сами');
+      lines.push(
+        '🎧 Частей записи: ' + groupTracks.length +
+        ' — переключаются сами; на полоске яркая — текущая',
+      );
     }
     if (currentTrackId && trackDurationSec) {
       var recStart = getRecStartInVod();
-      lines.push('🟢 Запись на шкале: ' + fmtTime(recStart) + ' — ' + fmtTime(recStart + trackDurationSec));
+      lines.push(
+        (groupTracks.length > 1 ? '🟢 Текущая часть на шкале: ' : '🟢 Запись на шкале: ') +
+        fmtTime(recStart) + ' — ' + fmtTime(recStart + trackDurationSec),
+      );
     }
     if (mutedSegments && mutedSegments.length) {
       lines.push('🔴 В режиме «Twitch» полоска сверху — заглушённые места: ' + mutedSegments.length);
@@ -591,8 +597,15 @@ export function buildTwitchAudioPayload(origin: string): string {
       var list = groupTracks.length ? groupTracks : [findTrack(currentTrackId)];
       for (var t = 0; t < list.length; t++) {
         if (!list[t] || !(list[t].durationSec > 0)) continue;
-        bands.push({ start: getRecStartForTrack(list[t]), duration: list[t].durationSec });
+        bands.push({
+          start: getRecStartForTrack(list[t]),
+          duration: list[t].durationSec,
+          isCurrent: list[t].id === currentTrackId,
+        });
       }
+      // Слева направо: смежные части различаются чередованием оттенков и
+      // швом на стыке, для этого нужен стабильный порядок.
+      bands.sort(function (a, b) { return a.start - b.start; });
     }
 
     var key = [
@@ -601,7 +614,8 @@ export function buildTwitchAudioPayload(origin: string): string {
       mutedSegments.length,
       bands
         .map(function (band) {
-          return Math.round(band.start) + ':' + Math.round(band.duration);
+          return Math.round(band.start) + ':' + Math.round(band.duration) +
+            (band.isCurrent ? '*' : '');
         })
         .join(','),
     ].join('|');
@@ -630,7 +644,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     function addBand(startSec, durationSec, color) {
       var leftPct = (startSec / total) * 100;
       var widthPct = (durationSec / total) * 100;
-      if (!isFinite(leftPct) || !isFinite(widthPct)) return;
+      if (!isFinite(leftPct) || !isFinite(widthPct)) return null;
       leftPct = Math.max(0, leftPct);
       var node = document.createElement('div');
       node.style.position = 'absolute';
@@ -641,11 +655,22 @@ export function buildTwitchAudioPayload(origin: string): string {
       node.style.background = color;
       node.style.borderRadius = '2px';
       overlay.appendChild(node);
+      return node;
     }
 
     if (showRecord) {
       for (var b = 0; b < bands.length; b++) {
-        addBand(bands[b].start, bands[b].duration, 'rgba(63,213,109,0.95)');
+        // Части одного эфира различимы: оттенки зелёного чередуются, играющая
+        // сейчас часть — самая яркая, на стыке смежных — тёмный шов.
+        var bandColor = bands[b].isCurrent
+          ? 'rgba(150,255,180,1)'
+          : b % 2
+            ? 'rgba(38,150,86,0.95)'
+            : 'rgba(63,213,109,0.95)';
+        var bandNode = addBand(bands[b].start, bands[b].duration, bandColor);
+        if (bandNode && bands.length > 1 && b < bands.length - 1) {
+          bandNode.style.boxShadow = 'inset -1px 0 0 rgba(14,14,16,0.9)';
+        }
       }
     } else {
       for (var m = 0; m < mutedSegments.length; m++) {
