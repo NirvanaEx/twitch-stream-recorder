@@ -61,6 +61,11 @@ export function buildTwitchAudioPayload(origin: string): string {
   var offset = 0;
   var boundVideo = null;
   var lastUrl = '';
+  // Снимок сохранённого состояния VOD, сделанный ДО первых saveState():
+  // selectTrack/applyChatMode пишут состояние ещё до того, как восстановление
+  // аудио и чата прочитало свои поля, и без снимка затирали их (сдвиги и
+  // режим чата «не переживали» обновление страницы).
+  var savedStateSnapshot = null;
 
   // ---- Чат записи (замена чата VOD) --------------------------------------
   // Записанный чат содержит и удалённые сообщения, и самые первые (VOD-чат
@@ -114,6 +119,9 @@ export function buildTwitchAudioPayload(origin: string): string {
       if (typeof savedView.readable === 'boolean') chatReadableColors = savedView.readable;
       if (typeof savedView.showDeleted === 'boolean') chatShowDeleted = savedView.showDeleted;
       if (typeof savedView.highlight === 'string') chatHighlightWords = savedView.highlight;
+      if (savedView.historyLimit >= 1 && savedView.historyLimit <= 30) {
+        chatHistoryLimit = savedView.historyLimit;
+      }
     }
   } catch (e) {}
   var chatSettingsEl = null;
@@ -128,6 +136,24 @@ export function buildTwitchAudioPayload(origin: string): string {
   var chatSearchQuery = '';
   var chatSearchDirty = false;
   var chatSearchCount = 0;
+  // История прошлых стримов канала: подгружается по кнопке и участвует в
+  // поиске и в истории пользователя. К шкале VOD не привязана.
+  var chatHistoryMessages = [];
+  var chatHistorySessions = 0;
+  var chatHistoryLoading = false;
+  var chatHistoryLimit = 10;
+  var chatHistoryStatusEl = null;
+  // Окно истории пользователя (по клику на ник, как в 7tv).
+  var userModalEl = null;
+  var userModalListEl = null;
+  var userModalInfoEl = null;
+  var userModalSearchEl = null;
+  var userModalLogin = '';
+  var userModalName = '';
+  var userModalColor = null;
+  var userModalQuery = '';
+  var userModalPages = 1;
+  var USER_HISTORY_PAGE = 100;
   var CHAT_MAX_VISIBLE = 150;
   // Кандидаты на контейнер чата VOD (Twitch периодически меняет разметку).
   var CHAT_HOST_SELECTORS = [
@@ -541,12 +567,15 @@ export function buildTwitchAudioPayload(origin: string): string {
   function resolveSelection() {
     if (currentTrackId) return;
 
-    var saved = loadState();
+    var saved = savedStateSnapshot;
     if (saved && saved.trackId && findTrack(saved.trackId)) {
       offset = typeof saved.offset === 'number' ? saved.offset : 0;
       if (offsetInput) offsetInput.value = offset.toFixed(1);
       selectTrack(saved.trackId);
       applyMode(saved.mode === 'record' || saved.mode === 'both' ? saved.mode : 'twitch');
+      // Сдвиг восстановлен из сохранённого — автоподгону нечего перемерять
+      // на каждом обновлении страницы (сброс сдвигов снова его включит).
+      autoCalState = { key: autoCalKey(), attempts: AUTO_CAL_MAX_TRIES };
       return;
     }
 
@@ -618,9 +647,30 @@ export function buildTwitchAudioPayload(origin: string): string {
   // Тонкая полоска НАД сикбаром Twitch (сам сикбар не трогаем): в режиме
   // «Twitch» красным показаны заглушённые места оригинала, в режимах с
   // записью зелёным — покрытие наших дорожек (всех сегментов группы).
+  function getCoverageBands() {
+    var bands = [];
+    if (!currentTrackId) return bands;
+    var list = groupTracks.length ? groupTracks : [findTrack(currentTrackId)];
+    for (var t = 0; t < list.length; t++) {
+      if (!list[t] || !(list[t].durationSec > 0)) continue;
+      bands.push({
+        start: getRecStartForTrack(list[t]),
+        duration: list[t].durationSec,
+        isCurrent: list[t].id === currentTrackId,
+      });
+    }
+    // Слева направо: смежные части различаются чередованием оттенков и
+    // швом на стыке, для этого нужен стабильный порядок.
+    bands.sort(function (a, b) { return a.start - b.start; });
+    return bands;
+  }
+
   function renderTimelineOverlay() {
     var bar = document.querySelector('[data-a-target="player-seekbar"]');
-    if (!bar) return;
+    if (!bar) {
+      removeSeekbarReplacement();
+      return;
+    }
 
     var total =
       boundVideo && isFinite(boundVideo.duration) && boundVideo.duration > 0
@@ -628,22 +678,18 @@ export function buildTwitchAudioPayload(origin: string): string {
         : vodLengthSeconds;
     if (!total) return;
 
-    var showRecord = mode !== 'twitch' && Boolean(currentTrackId);
-    var bands = [];
-    if (showRecord) {
-      var list = groupTracks.length ? groupTracks : [findTrack(currentTrackId)];
-      for (var t = 0; t < list.length; t++) {
-        if (!list[t] || !(list[t].durationSec > 0)) continue;
-        bands.push({
-          start: getRecStartForTrack(list[t]),
-          duration: list[t].durationSec,
-          isCurrent: list[t].id === currentTrackId,
-        });
-      }
-      // Слева направо: смежные части различаются чередованием оттенков и
-      // швом на стыке, для этого нужен стабильный порядок.
-      bands.sort(function (a, b) { return a.start - b.start; });
+    // В режиме «Запись» родную полоску Twitch подменяет наш сикбар (прогресс,
+    // буфер, части записи, красные заглушки). В «Оба» видны оба UI: тонкая
+    // полоска сверху и родной сикбар. В «Twitch» — только заглушки.
+    var fullReplace = mode === 'record' && Boolean(currentTrackId);
+    if (fullReplace) {
+      updateSeekbarReplacement(bar, total);
+    } else {
+      removeSeekbarReplacement();
     }
+
+    var showRecord = mode === 'both' && Boolean(currentTrackId);
+    var bands = showRecord ? getCoverageBands() : [];
 
     var key = [
       Math.round(total),
@@ -709,13 +755,283 @@ export function buildTwitchAudioPayload(origin: string): string {
           bandNode.style.boxShadow = 'inset -1px 0 0 rgba(14,14,16,0.9)';
         }
       }
-    } else {
+    } else if (mode === 'twitch') {
       for (var m = 0; m < mutedSegments.length; m++) {
         addBand(mutedSegments[m].offset, mutedSegments[m].duration, 'rgba(229,72,77,0.95)');
       }
     }
 
     overlay.setAttribute('data-key', key);
+  }
+
+  // ---- Свой сикбар в режиме «Запись» --------------------------------------
+  // Полностью накрывает родную полоску Twitch: прогресс (зелёный), буфер
+  // Twitch (светлый), покрытие частей записи, красные заглушённые места,
+  // перемотка кликом и перетаскиванием.
+  var seekbarEls = null;
+
+  function removeSeekbarReplacement() {
+    if (seekbarEls && seekbarEls.root && seekbarEls.root.parentNode) {
+      seekbarEls.root.parentNode.removeChild(seekbarEls.root);
+    }
+    seekbarEls = null;
+  }
+
+  function updateSeekbarReplacement(bar, total) {
+    var v = boundVideo || getVideo();
+    if (!v) return;
+
+    if (!seekbarEls || !seekbarEls.root.isConnected || seekbarEls.root.parentNode !== bar) {
+      removeSeekbarReplacement();
+      if (getComputedStyle(bar).position === 'static') bar.style.position = 'relative';
+
+      var root = document.createElement('div');
+      root.className = 'tsr-seekbar';
+      root.style.position = 'absolute';
+      root.style.left = '0';
+      root.style.right = '0';
+      root.style.top = '-4px';
+      root.style.height = '13px';
+      root.style.zIndex = '25';
+      root.style.cursor = 'pointer';
+      root.style.background = '#0e0e10'; // прячем родную полоску под собой
+      root.style.borderRadius = '4px';
+
+      function layer() {
+        var node = document.createElement('div');
+        node.style.position = 'absolute';
+        node.style.left = '0';
+        node.style.right = '0';
+        node.style.top = '4px';
+        node.style.bottom = '4px';
+        node.style.borderRadius = '2px';
+        node.style.pointerEvents = 'none';
+        root.appendChild(node);
+        return node;
+      }
+
+      var base = layer();
+      base.style.background = 'rgba(255,255,255,0.14)';
+      var bufferedWrap = layer();
+      var coverWrap = layer();
+      var progress = layer();
+      progress.style.right = 'auto';
+      progress.style.width = '0%';
+      progress.style.background = 'linear-gradient(90deg,#2ea55f,#3fd56d)';
+      var head = document.createElement('div');
+      head.style.position = 'absolute';
+      head.style.top = '50%';
+      head.style.width = '9px';
+      head.style.height = '9px';
+      head.style.borderRadius = '50%';
+      head.style.background = '#fff';
+      head.style.transform = 'translate(-50%, -50%)';
+      head.style.boxShadow = '0 0 4px rgba(0,0,0,0.8)';
+      head.style.pointerEvents = 'none';
+      root.appendChild(head);
+
+      var seekDragging = false;
+      function seekFromEvent(e) {
+        var rect = root.getBoundingClientRect();
+        var pct = (e.clientX - rect.left) / Math.max(1, rect.width);
+        pct = Math.min(1, Math.max(0, pct));
+        var vv = boundVideo || getVideo();
+        if (vv && isFinite(vv.duration) && vv.duration > 0) {
+          vv.currentTime = pct * vv.duration;
+        }
+      }
+      root.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        seekDragging = true;
+        seekFromEvent(e);
+        try { root.setPointerCapture(e.pointerId); } catch (err) {}
+      });
+      root.addEventListener('pointermove', function (e) {
+        if (seekDragging) seekFromEvent(e);
+      });
+      root.addEventListener('pointerup', function (e) {
+        seekDragging = false;
+        try { root.releasePointerCapture(e.pointerId); } catch (err) {}
+      });
+      root.addEventListener('click', function (e) { e.stopPropagation(); });
+
+      bar.appendChild(root);
+      seekbarEls = {
+        root: root, bufferedWrap: bufferedWrap, coverWrap: coverWrap,
+        progress: progress, head: head, coverKey: '',
+      };
+    }
+
+    // Прогресс и голова — каждый тик.
+    var pct = Math.min(100, Math.max(0, (v.currentTime / total) * 100));
+    seekbarEls.progress.style.width = pct + '%';
+    seekbarEls.head.style.left = pct + '%';
+
+    // Буфер Twitch: сколько плеер предзагрузил вперёд.
+    var bw = seekbarEls.bufferedWrap;
+    bw.innerHTML = '';
+    try {
+      for (var r = 0; r < v.buffered.length; r++) {
+        var segStart = (v.buffered.start(r) / total) * 100;
+        var segEnd = (v.buffered.end(r) / total) * 100;
+        if (!isFinite(segStart) || !isFinite(segEnd) || segEnd <= segStart) continue;
+        var seg = document.createElement('div');
+        seg.style.position = 'absolute';
+        seg.style.top = '0';
+        seg.style.bottom = '0';
+        seg.style.left = segStart + '%';
+        seg.style.width = (segEnd - segStart) + '%';
+        seg.style.background = 'rgba(255,255,255,0.30)';
+        seg.style.borderRadius = '2px';
+        bw.appendChild(seg);
+      }
+    } catch (e) {}
+
+    // Покрытие записи и заглушки — только при изменении структуры.
+    var bands = getCoverageBands();
+    var coverKey = Math.round(total) + '|' +
+      bands.map(function (band) {
+        return Math.round(band.start) + ':' + Math.round(band.duration) +
+          (band.isCurrent ? '*' : '');
+      }).join(',') + '|' + mutedSegments.length;
+    if (seekbarEls.coverKey !== coverKey) {
+      seekbarEls.coverKey = coverKey;
+      var cw = seekbarEls.coverWrap;
+      cw.innerHTML = '';
+      function coverBand(startSec, durationSec, color) {
+        var left = Math.max(0, (startSec / total) * 100);
+        var width = Math.max(0.15, Math.min(100 - left, (durationSec / total) * 100));
+        if (!isFinite(left) || !isFinite(width)) return;
+        var node = document.createElement('div');
+        node.style.position = 'absolute';
+        node.style.top = '0';
+        node.style.bottom = '0';
+        node.style.left = left + '%';
+        node.style.width = width + '%';
+        node.style.background = color;
+        node.style.borderRadius = '2px';
+        cw.appendChild(node);
+      }
+      for (var b2 = 0; b2 < bands.length; b2++) {
+        coverBand(
+          bands[b2].start,
+          bands[b2].duration,
+          bands[b2].isCurrent ? 'rgba(63,213,109,0.40)' : 'rgba(63,213,109,0.22)',
+        );
+      }
+      for (var m2 = 0; m2 < mutedSegments.length; m2++) {
+        coverBand(mutedSegments[m2].offset, mutedSegments[m2].duration, 'rgba(229,72,77,0.85)');
+      }
+    }
+  }
+
+  // ---- Своя громкость в панели плеера -------------------------------------
+  // В режиме «Запись» родной регулятор Twitch управляет заглушённым звуком —
+  // прячем его и ставим свой (громкость записи до 300% + компрессор). В
+  // режиме «Оба» видны оба регулятора.
+  var volumeSliderEl = null; // ползунок в нашей панели
+  var playerVolWrap = null;
+  var playerVolSlider = null;
+  var playerCompBtn = null;
+
+  function toggleCompressor() {
+    compressorOn = !compressorOn;
+    if (compressorOn && !ensureAudioGraph()) {
+      compressorOn = false;
+      setStatus('WebAudio недоступен — компрессор не включить');
+    }
+    rewireAudioGraph();
+    applyFx();
+    saveFx();
+    updateFxButtons();
+  }
+
+  function syncVolumeUi() {
+    updateVolumeLabel();
+    if (volumeSliderEl && document.activeElement !== volumeSliderEl) {
+      volumeSliderEl.value = String(boost);
+    }
+    if (playerVolSlider && document.activeElement !== playerVolSlider) {
+      playerVolSlider.value = String(boost);
+    }
+  }
+
+  function removePlayerVolume() {
+    if (playerVolWrap && playerVolWrap.parentNode) {
+      playerVolWrap.parentNode.removeChild(playerVolWrap);
+    }
+    playerVolWrap = null;
+    playerVolSlider = null;
+    playerCompBtn = null;
+    var nativeSlider = document.querySelector('[data-a-target="player-volume-slider"]');
+    if (nativeSlider && nativeSlider.style.display === 'none') nativeSlider.style.display = '';
+  }
+
+  function renderPlayerControls() {
+    var wantChip = mode !== 'twitch' && Boolean(currentTrackId);
+    if (!wantChip) {
+      removePlayerVolume();
+      return;
+    }
+
+    var nativeSlider = document.querySelector('[data-a-target="player-volume-slider"]');
+    if (nativeSlider) {
+      // Twitch перерисовывает контролы — прячем каждый тик заново.
+      nativeSlider.style.display = mode === 'record' ? 'none' : '';
+    }
+
+    var host = document.querySelector('.player-controls__left-control-group') ||
+      (nativeSlider ? nativeSlider.parentElement : null);
+    if (!host) return;
+
+    if (!playerVolWrap || !playerVolWrap.isConnected || playerVolWrap.parentNode !== host) {
+      if (playerVolWrap && playerVolWrap.parentNode) {
+        playerVolWrap.parentNode.removeChild(playerVolWrap);
+      }
+      playerVolWrap = el('div', {
+        display: 'inline-flex', alignItems: 'center', gap: '6px',
+        marginLeft: '8px', padding: '0 10px', height: '30px', alignSelf: 'center',
+        background: 'rgba(20,20,24,0.75)', borderRadius: '15px',
+      });
+      playerVolWrap.title = 'Звук записи (TSR)';
+      playerVolWrap.appendChild(el('span', { fontSize: '12px' }, '🎙'));
+      playerVolSlider = document.createElement('input');
+      playerVolSlider.type = 'range';
+      playerVolSlider.min = '0';
+      playerVolSlider.max = '3';
+      playerVolSlider.step = '0.05';
+      playerVolSlider.value = String(boost);
+      playerVolSlider.style.width = '72px';
+      playerVolSlider.style.accentColor = '#3fd56d';
+      playerVolSlider.style.cursor = 'pointer';
+      playerVolSlider.title = 'Громкость записи (до 300%)';
+      playerVolSlider.addEventListener('input', function () {
+        boost = parseFloat(playerVolSlider.value) || 0;
+        applyFx();
+        saveFx();
+        syncVolumeUi();
+      });
+      // Клики по нашему регулятору не должны уходить плееру (пауза и т.п.).
+      playerVolWrap.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+      playerVolWrap.addEventListener('click', function (e) { e.stopPropagation(); });
+      playerVolWrap.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+      playerVolWrap.appendChild(playerVolSlider);
+      playerCompBtn = makeButton('К', toggleCompressor);
+      playerCompBtn.title = 'Компрессор записи: тихая речь громче, пики мягче';
+      playerCompBtn.style.padding = '2px 7px';
+      playerCompBtn.style.borderRadius = '10px';
+      playerVolWrap.appendChild(playerCompBtn);
+      host.appendChild(playerVolWrap);
+    }
+
+    if (playerVolSlider && document.activeElement !== playerVolSlider) {
+      playerVolSlider.value = String(boost);
+    }
+    if (playerCompBtn) {
+      playerCompBtn.style.background = compressorOn ? '#9147ff' : '#2f2f35';
+    }
   }
 
   function clearAudioObjectUrl() {
@@ -1788,6 +2104,24 @@ export function buildTwitchAudioPayload(origin: string): string {
     autoCalBtnEl.style.background = autoCalEnabled ? '#9147ff' : '#2f2f35';
   }
 
+  // Полный сброс сдвигов: звука, чата и сохранённого сдвига канала.
+  // Автоподгон после сброса снова имеет право замерить.
+  function resetAllOffsets() {
+    var track = findTrack(currentTrackId) || autoMatchedTrack;
+    var login = (track && track.channelLogin) || vodChannelLogin || '';
+    setOffset(0);
+    setChatOffset(0);
+    try {
+      if (login) localStorage.removeItem(channelOffsetKey(login));
+    } catch (e) {}
+    autoCalState = { key: null, attempts: 0 };
+    autoCalStable = 0;
+    setSyncInfo('');
+    setStatus(autoCalEnabled && currentTrackId
+      ? 'Сдвиги сброшены — автоподгон замерит заново.'
+      : 'Сдвиги сброшены.');
+  }
+
   // ---- Чат записи: загрузка, синхронизация и оверлей ---------------------
 
   function channelChatKey(login) {
@@ -1821,7 +2155,7 @@ export function buildTwitchAudioPayload(origin: string): string {
   function resolveChatSelection() {
     if (chatSelectionResolved) return;
     chatSelectionResolved = true;
-    var saved = loadState();
+    var saved = savedStateSnapshot;
     var prefs = loadChannelChatPrefs(vodChannelLogin);
     if (saved && typeof saved.chatOffset === 'number') {
       chatOffset = saved.chatOffset;
@@ -1885,6 +2219,7 @@ export function buildTwitchAudioPayload(origin: string): string {
         fontPx: chatFontPx, emoteScale: chatEmoteScale, showTime: chatShowTime,
         showBadges: chatShowBadges, zebra: chatZebra, readable: chatReadableColors,
         showDeleted: chatShowDeleted, highlight: chatHighlightWords,
+        historyLimit: chatHistoryLimit,
       }));
     } catch (e) {}
   }
@@ -1958,6 +2293,230 @@ export function buildTwitchAudioPayload(origin: string): string {
     return false;
   }
 
+  function chatHistoryStatus(text) {
+    if (chatHistoryStatusEl) chatHistoryStatusEl.textContent = text || '';
+  }
+
+  // Подгрузка чата прошлых стримов канала: попадает в общий поиск и в
+  // историю пользователей, но НЕ в живое окно (оно только про этот VOD).
+  function loadChatHistory() {
+    if (chatHistoryLoading) return;
+    var track = findTrack(currentTrackId) || autoMatchedTrack;
+    var login = vodChannelLogin || (track && track.channelLogin) || '';
+    if (!login) {
+      chatHistoryStatus('канал не определён');
+      return;
+    }
+    chatHistoryLoading = true;
+    chatHistoryStatus('ищу стримы…');
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: SERVER + '/api/public/streams/chat-replay/history?channel=' +
+        encodeURIComponent(login) + '&limit=' + chatHistoryLimit,
+      timeout: 15000,
+      onload: function (res) {
+        var items = [];
+        try {
+          items = JSON.parse(res.responseText).items || [];
+        } catch (e) {}
+        // Сессии текущего эфира уже в живом чате — не дублируем их.
+        var liveIds = {};
+        for (var i = 0; i < chatSessions.length; i++) liveIds[chatSessions[i].id] = true;
+        for (var g = 0; g < groupTracks.length; g++) liveIds[groupTracks[g].id] = true;
+        if (currentTrackId) liveIds[currentTrackId] = true;
+        var wanted = [];
+        for (var k = 0; k < items.length; k++) {
+          if (!liveIds[items[k].id]) wanted.push(items[k]);
+        }
+        if (!wanted.length) {
+          chatHistoryLoading = false;
+          chatHistoryStatus('прошлых стримов с чатом нет');
+          return;
+        }
+        fetchHistorySessions(wanted);
+      },
+      onerror: function () {
+        chatHistoryLoading = false;
+        chatHistoryStatus('сервер недоступен');
+      },
+      ontimeout: function () {
+        chatHistoryLoading = false;
+        chatHistoryStatus('сервер не ответил');
+      },
+    });
+  }
+
+  function fetchHistorySessions(sessions) {
+    var merged = [];
+    var done = 0;
+    chatHistoryStatus('загружаю 0/' + sessions.length + '…');
+
+    function step() {
+      done += 1;
+      chatHistoryStatus('загружаю ' + done + '/' + sessions.length + '…');
+      if (done < sessions.length) return;
+      merged.sort(function (a, b) { return a.tsMs - b.tsMs; });
+      chatHistoryMessages = merged;
+      chatHistorySessions = sessions.length;
+      chatHistoryLoading = false;
+      chatHistoryStatus('загружено: ' + sessions.length + ' стримов · ' + merged.length + ' сообщ.');
+      chatSearchDirty = true;
+      if (chatSearchQuery) renderChatSearch();
+      if (userModalLogin) renderUserHistory(false);
+    }
+
+    sessions.forEach(function (info) {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: SERVER + '/api/public/streams/' + info.id + '/chat-replay',
+        timeout: 20000,
+        onload: function (res) {
+          try {
+            var msgs = (JSON.parse(res.responseText).messages) || [];
+            for (var m = 0; m < msgs.length; m++) {
+              var raw = msgs[m].textRaw || '';
+              var isAction = raw.indexOf('ACTION ') === 0;
+              if (isAction) {
+                raw = raw.slice(8);
+                if (raw.charAt(raw.length - 1) === '') raw = raw.slice(0, -1);
+              }
+              merged.push({
+                historic: true,
+                sessionTitle: info.title || '',
+                tsMs: msgs[m].messageTimestamp
+                  ? (new Date(msgs[m].messageTimestamp).getTime() || 0)
+                  : 0,
+                relativeTimeSec: msgs[m].relativeTimeSec || 0,
+                authorLogin: msgs[m].authorLogin || '',
+                authorDisplayName: msgs[m].authorDisplayName || null,
+                authorColor: msgs[m].authorColor || null,
+                textRaw: raw,
+                emotes: msgs[m].emotes || null,
+                badges: msgs[m].badges || null,
+                isAction: isAction,
+                isDeleted: Boolean(msgs[m].isDeleted),
+                vodTime: 0,
+              });
+            }
+          } catch (e) {}
+          step();
+        },
+        onerror: step,
+        ontimeout: step,
+      });
+    });
+  }
+
+  // ---- История пользователя (как в 7tv): клик по нику ---------------------
+  // Все сообщения пользователя из этого эфира и подгруженных прошлых стримов,
+  // с поиском и постраничной подгрузкой по 100 сообщений.
+  function openUserHistory(login, name, color) {
+    if (!chatOverlay || !login) return;
+    closeUserHistory();
+    userModalLogin = String(login).toLowerCase();
+    userModalName = name || login;
+    userModalColor = color || '#adadb8';
+    userModalQuery = '';
+    userModalPages = 1;
+
+    userModalEl = el('div', {
+      position: 'absolute', top: '0', left: '0', right: '0', bottom: '0',
+      zIndex: '30', background: '#18181b', display: 'flex', flexDirection: 'column',
+    });
+
+    var head = el('div', {
+      padding: '8px 10px', borderBottom: '1px solid #2f2f35', display: 'flex',
+      alignItems: 'center', gap: '8px', fontSize: '12px', flexShrink: '0',
+    });
+    var nick = el('span', { fontWeight: '700' }, userModalName);
+    nick.style.color = readableColor(userModalColor) || '#adadb8';
+    head.appendChild(nick);
+    userModalInfoEl = el('span', { opacity: '0.6', flex: '1' }, '');
+    head.appendChild(userModalInfoEl);
+    var closeBtn = makeButton('✕', closeUserHistory);
+    closeBtn.title = 'Закрыть историю';
+    head.appendChild(closeBtn);
+    userModalEl.appendChild(head);
+
+    var controls = el('div', {
+      padding: '6px 10px', borderBottom: '1px solid #2f2f35', display: 'flex',
+      gap: '6px', alignItems: 'center', fontSize: '12px', flexShrink: '0',
+    });
+    userModalSearchEl = el('input', {
+      flex: '1', minWidth: '0', background: '#0e0e10', color: '#efeff1',
+      border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 6px',
+    });
+    userModalSearchEl.placeholder = 'поиск по сообщениям пользователя';
+    userModalSearchEl.addEventListener('input', function () {
+      userModalQuery = userModalSearchEl.value.trim().toLowerCase();
+      userModalPages = 1;
+      renderUserHistory(false);
+    });
+    controls.appendChild(userModalSearchEl);
+    var histBtn = makeButton('+ прошлые стримы', loadChatHistory);
+    histBtn.title = 'Подгрузить чат прошлых стримов канала (сколько — в настройках чата)';
+    controls.appendChild(histBtn);
+    userModalEl.appendChild(controls);
+
+    userModalListEl = el('div', { flex: '1', overflowY: 'auto', padding: '4px 0' });
+    userModalEl.appendChild(userModalListEl);
+
+    chatOverlay.appendChild(userModalEl);
+    renderUserHistory(false);
+    try { userModalSearchEl.focus(); } catch (e) {}
+  }
+
+  function closeUserHistory() {
+    if (userModalEl && userModalEl.parentNode) userModalEl.parentNode.removeChild(userModalEl);
+    userModalEl = null;
+    userModalListEl = null;
+    userModalInfoEl = null;
+    userModalSearchEl = null;
+    userModalLogin = '';
+  }
+
+  function renderUserHistory(keepTop) {
+    if (!userModalListEl || !userModalLogin) return;
+    var pool = chatMessages.concat(chatHistoryMessages);
+    var hits = [];
+    for (var i = 0; i < pool.length; i++) {
+      var m = pool[i];
+      if ((m.authorLogin || '').toLowerCase() !== userModalLogin) continue;
+      if (userModalQuery && m.textRaw.toLowerCase().indexOf(userModalQuery) === -1) continue;
+      hits.push(m);
+    }
+    hits.sort(function (a, b) { return (a.tsMs || 0) - (b.tsMs || 0); });
+
+    var show = Math.min(hits.length, USER_HISTORY_PAGE * userModalPages);
+    var from = hits.length - show;
+    userModalListEl.innerHTML = '';
+    if (from > 0) {
+      var more = makeButton(
+        'Показать ещё ' + Math.min(USER_HISTORY_PAGE, from) + ' (старше)',
+        function () {
+          userModalPages += 1;
+          renderUserHistory(true);
+        },
+      );
+      more.style.display = 'block';
+      more.style.margin = '6px auto';
+      userModalListEl.appendChild(more);
+    }
+    for (var h = from; h < hits.length; h++) {
+      userModalListEl.appendChild(buildChatRow(hits[h], h));
+    }
+    if (!hits.length) {
+      userModalListEl.appendChild(
+        el('div', { padding: '12px', opacity: '0.6' }, 'Сообщений не найдено.'),
+      );
+    }
+    if (userModalInfoEl) {
+      userModalInfoEl.textContent = 'сообщений: ' + hits.length +
+        (chatHistorySessions ? ' · с историей ' + chatHistorySessions + ' стримов' : '');
+    }
+    userModalListEl.scrollTop = keepTop ? 0 : userModalListEl.scrollHeight;
+  }
+
   function resetChatState() {
     chatLoadToken += 1; // ответы незавершённых запросов будут отброшены
     chatSessions = [];
@@ -1975,6 +2534,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatSearchQuery = '';
     chatSearchDirty = false;
     chatSearchCount = 0;
+    chatHistoryMessages = [];
+    chatHistorySessions = 0;
+    chatHistoryLoading = false;
     removeChatOverlay();
   }
 
@@ -2281,6 +2843,35 @@ export function buildTwitchAudioPayload(origin: string): string {
     searchRow.appendChild(searchClear);
     chatSettingsEl.appendChild(searchRow);
 
+    // Подгрузка чата прошлых стримов канала — для поиска по всей истории.
+    var histRow = el('div', {
+      display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap',
+    });
+    histRow.appendChild(el('span', { opacity: '0.7', whiteSpace: 'nowrap' }, 'История'));
+    var histInput = el('input', {
+      width: '44px', background: '#0e0e10', color: '#efeff1',
+      border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 4px', textAlign: 'center',
+    });
+    histInput.type = 'number';
+    histInput.min = '1';
+    histInput.max = '30';
+    histInput.value = String(chatHistoryLimit);
+    histInput.title = 'Сколько прошлых стримов подгрузить (1–30)';
+    histInput.addEventListener('change', function () {
+      var parsed = parseInt(histInput.value, 10);
+      chatHistoryLimit = Math.min(30, Math.max(1, isFinite(parsed) ? parsed : 10));
+      histInput.value = String(chatHistoryLimit);
+      saveChatView();
+    });
+    histRow.appendChild(histInput);
+    var histLoadBtn = makeButton('Загрузить прошлые', loadChatHistory);
+    histLoadBtn.title = 'Чат прошлых стримов попадёт в поиск и в историю пользователей';
+    histRow.appendChild(histLoadBtn);
+    chatHistoryStatusEl = el('span', { opacity: '0.6' },
+      chatHistorySessions ? 'загружено: ' + chatHistorySessions + ' стримов' : '');
+    histRow.appendChild(chatHistoryStatusEl);
+    chatSettingsEl.appendChild(histRow);
+
     head.appendChild(chatSettingsEl);
     chatOverlay.appendChild(head);
 
@@ -2345,7 +2936,12 @@ export function buildTwitchAudioPayload(origin: string): string {
     st.textContent =
       '.tsr-chat-row:hover{background:rgba(255,255,255,0.06);}' +
       '.tsr-chat-ts{cursor:pointer;}' +
-      '.tsr-chat-ts:hover{opacity:1 !important;color:#bf94ff;}';
+      '.tsr-chat-ts:hover{opacity:1 !important;color:#bf94ff;}' +
+      '.tsr-chat-nick{cursor:pointer;}' +
+      '.tsr-chat-nick:hover{text-decoration:underline;}' +
+      '.tsr-btn{transition:background 0.12s,transform 0.05s;}' +
+      '.tsr-btn:hover{filter:brightness(1.25);}' +
+      '.tsr-btn:active{transform:scale(0.96);}';
     (document.head || document.documentElement).appendChild(st);
   }
 
@@ -2361,6 +2957,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatHeadOffsetEl = null;
     chatHighlightInputEl = null;
     chatSearchInputEl = null;
+    chatHistoryStatusEl = null;
+    closeUserHistory();
     chatPinned = true;
   }
 
@@ -2467,7 +3065,9 @@ export function buildTwitchAudioPayload(origin: string): string {
       lineHeight: '1.5',
     });
     row.className = 'tsr-chat-row';
-    row.title = 'Место на VOD: ' + fmtTime(Math.max(0, m.vodTime)) +
+    row.title = (m.historic
+      ? 'Прошлый стрим' + (m.sessionTitle ? ': ' + m.sessionTitle : '')
+      : 'Место на VOD: ' + fmtTime(Math.max(0, m.vodTime))) +
       (m.isDeleted ? ' · сообщение удалено модератором' : '');
     // Приоритет фона: удалённое > подсветка слов > чередование.
     if (chatZebra && typeof idx === 'number' && idx % 2 === 1) {
@@ -2482,23 +3082,36 @@ export function buildTwitchAudioPayload(origin: string): string {
       row.style.borderLeft = '2px solid rgba(229,72,77,0.85)';
     }
     if (chatShowTime) {
+      // У сообщений прошлых стримов вместо позиции на VOD — дата эфира.
+      var timeLabel = m.historic
+        ? new Date(m.tsMs).toLocaleDateString() + ' ' +
+          new Date(m.tsMs).toLocaleTimeString().slice(0, 5)
+        : fmtTime(Math.max(0, m.vodTime));
       var ts = el('span', {
         display: 'inline-block', minWidth: '3em', marginRight: '0.4em',
         fontSize: '0.8em', opacity: '0.5', fontVariantNumeric: 'tabular-nums',
-      }, fmtTime(Math.max(0, m.vodTime)));
-      ts.className = 'tsr-chat-ts';
-      ts.title = 'Перемотать VOD к этому сообщению';
-      ts.addEventListener('click', function (ev) {
-        ev.stopPropagation();
-        var vv = getVideo();
-        if (vv) vv.currentTime = Math.max(0, m.vodTime - 1);
-      });
+      }, timeLabel);
+      if (!m.historic) {
+        ts.className = 'tsr-chat-ts';
+        ts.title = 'Перемотать VOD к этому сообщению';
+        ts.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          var vv = getVideo();
+          if (vv) vv.currentTime = Math.max(0, m.vodTime - 1);
+        });
+      }
       row.appendChild(ts);
     }
     if (chatShowBadges) appendChatBadges(row, m.badges);
     var nameColor = readableColor(m.authorColor) || '#adadb8';
     var author = el('span', { fontWeight: '700' }, m.authorDisplayName || m.authorLogin);
     author.style.color = nameColor;
+    author.className = 'tsr-chat-nick';
+    author.title = 'История сообщений пользователя';
+    author.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      openUserHistory(m.authorLogin, m.authorDisplayName, m.authorColor);
+    });
     row.appendChild(author);
     row.appendChild(document.createTextNode(m.isAction ? ' ' : ': '));
     if (m.isAction) {
@@ -2594,18 +3207,20 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (!chatListEl || !chatSearchDirty) return;
     chatSearchDirty = false;
     var q = chatSearchQuery.toLowerCase();
+    // Ищем и в этом эфире, и в подгруженной истории прошлых стримов.
+    var pool = chatHistoryMessages.concat(chatMessages);
     var hits = [];
-    for (var i = 0; i < chatMessages.length; i++) {
-      var m = chatMessages[i];
+    for (var i = 0; i < pool.length; i++) {
+      var m = pool[i];
       if (!chatShowDeleted && m.isDeleted) continue;
       var hay = ((m.authorDisplayName || '') + ' ' + m.authorLogin + ' ' + m.textRaw).toLowerCase();
       if (hay.indexOf(q) === -1) continue;
-      hits.push(i);
+      hits.push(m);
     }
     chatSearchCount = hits.length;
     chatListEl.innerHTML = '';
     for (var h = Math.max(0, hits.length - 200); h < hits.length; h++) {
-      chatListEl.appendChild(buildChatRow(chatMessages[hits[h]], h));
+      chatListEl.appendChild(buildChatRow(hits[h], h));
     }
     chatForceRebuild = true; // выход из поиска пересоберёт живое окно
     chatListEl.scrollTop = chatListEl.scrollHeight;
@@ -2663,9 +3278,10 @@ export function buildTwitchAudioPayload(origin: string): string {
 
   function makeButton(label, onClick) {
     var button = el('button', {
-      background: '#2f2f35', color: '#fff', border: 'none', borderRadius: '4px',
-      padding: '4px 8px', cursor: 'pointer', fontSize: '12px',
+      background: '#2f2f35', color: '#fff', border: 'none', borderRadius: '6px',
+      padding: '4px 9px', cursor: 'pointer', fontSize: '12px',
     }, label);
+    button.className = 'tsr-btn';
     button.addEventListener('click', onClick);
     return button;
   }
@@ -2710,14 +3326,22 @@ export function buildTwitchAudioPayload(origin: string): string {
     try {
       pos = JSON.parse(localStorage.getItem('tsr-audio-pos') || 'null');
     } catch (e) {}
-    if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
-      var maxLeft = Math.max(0, window.innerWidth - 60);
-      var maxTop = Math.max(0, window.innerHeight - 40);
-      panel.style.left = Math.min(Math.max(0, pos.left), maxLeft) + 'px';
-      panel.style.top = Math.min(Math.max(0, pos.top), maxTop) + 'px';
-      panel.style.right = 'auto';
-      panel.style.bottom = 'auto';
-    }
+    if (!pos) return;
+    // Позиция хранится в долях окна: при смене размера окна и в полноэкранном
+    // режиме панель остаётся на «том же» месте экрана, а не уезжает за край.
+    var leftPct = typeof pos.leftPct === 'number'
+      ? pos.leftPct
+      : typeof pos.left === 'number' ? pos.left / Math.max(1, window.innerWidth) : null;
+    var topPct = typeof pos.topPct === 'number'
+      ? pos.topPct
+      : typeof pos.top === 'number' ? pos.top / Math.max(1, window.innerHeight) : null;
+    if (leftPct === null || topPct === null) return;
+    var maxLeft = Math.max(0, window.innerWidth - 60);
+    var maxTop = Math.max(0, window.innerHeight - 40);
+    panel.style.left = Math.min(Math.max(0, leftPct * window.innerWidth), maxLeft) + 'px';
+    panel.style.top = Math.min(Math.max(0, topPct * window.innerHeight), maxTop) + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
   }
 
   // Let the user drag the panel by its header. A real drag suppresses the
@@ -2770,7 +3394,10 @@ export function buildTwitchAudioPayload(origin: string): string {
         try {
           localStorage.setItem(
             'tsr-audio-pos',
-            JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }),
+            JSON.stringify({
+              leftPct: rect.left / Math.max(1, window.innerWidth),
+              topPct: rect.top / Math.max(1, window.innerHeight),
+            }),
           );
         } catch (err) {}
       }
@@ -2780,13 +3407,16 @@ export function buildTwitchAudioPayload(origin: string): string {
   var suppressClick = false;
 
   function createPanel() {
+    ensureChatStyle();
     // Bottom-LEFT, away from the VOD chat which sits on the right.
     panel = el('div', {
       position: 'fixed', left: '16px', bottom: '16px', zIndex: '99999',
-      background: '#18181b', color: '#efeff1', borderRadius: '8px',
-      border: '1px solid #2f2f35', font: '12px/1.4 Inter, sans-serif',
-      width: '290px', boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+      background: 'rgba(20,20,24,0.94)', color: '#efeff1', borderRadius: '12px',
+      border: '1px solid rgba(255,255,255,0.09)',
+      font: '12px/1.45 Roobert, Inter, sans-serif',
+      width: '290px', boxShadow: '0 10px 32px rgba(0,0,0,0.55)',
       transition: 'opacity 0.2s',
+      backdropFilter: 'blur(10px)', webkitBackdropFilter: 'blur(10px)',
     });
     panel.addEventListener('mouseenter', function () {
       panelHovered = true;
@@ -2798,9 +3428,10 @@ export function buildTwitchAudioPayload(origin: string): string {
     });
 
     var header = el('div', {
-      padding: '8px 10px', cursor: 'move', display: 'flex',
+      padding: '9px 12px', cursor: 'move', display: 'flex',
       justifyContent: 'space-between', alignItems: 'center', fontWeight: '600', gap: '10px',
       userSelect: 'none', touchAction: 'none',
+      borderBottom: '1px solid rgba(255,255,255,0.07)',
     });
     headerTitleEl = el('span', null, '🎧 Звук записи (TSR)');
     header.appendChild(headerTitleEl);
@@ -2820,17 +3451,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     enableDrag(header);
     panel.appendChild(header);
 
-    bodyEl = el('div', { padding: '0 10px 10px 10px' });
+    bodyEl = el('div', { padding: '8px 12px 12px' });
 
     nowPlayingEl = el('div', {
-      fontWeight: '600', padding: '6px 8px', borderRadius: '4px',
+      fontWeight: '600', padding: '7px 8px', borderRadius: '8px',
       marginBottom: '8px', background: '#2f2f35', textAlign: 'center',
     }, '');
     bodyEl.appendChild(nowPlayingEl);
 
     selectEl = el('select', {
-      width: '100%', background: '#0e0e10', color: '#efeff1',
-      border: '1px solid #2f2f35', borderRadius: '4px', padding: '4px', marginBottom: '8px',
+      width: '100%', background: '#0e0e12', color: '#efeff1',
+      border: '1px solid #2f2f35', borderRadius: '6px', padding: '5px', marginBottom: '8px',
     });
     selectEl.addEventListener('change', function () {
       var picked = findTrack(selectEl.value);
@@ -2898,6 +3529,9 @@ export function buildTwitchAudioPayload(origin: string): string {
       CALIBRATION_SEC + '–' + CALIBRATION_MAX_SEC +
       ' секунд слышны оба) и поправит сдвиг. Выкл — только вручную.';
     syncRow.appendChild(autoCalBtnEl);
+    var resetBtn = makeButton('⟲', resetAllOffsets);
+    resetBtn.title = 'Сбросить все сдвиги (звук и чат), включая сохранённый сдвиг канала';
+    syncRow.appendChild(resetBtn);
     updateAutoCalButton();
     bodyEl.appendChild(syncRow);
 
@@ -2953,20 +3587,11 @@ export function buildTwitchAudioPayload(origin: string): string {
       boost = parseFloat(volume.value) || 0;
       applyFx();
       saveFx();
-      updateVolumeLabel();
+      syncVolumeUi();
     });
+    volumeSliderEl = volume;
     volumeRow.appendChild(volume);
-    compressorBtnEl = makeButton('Комп.', function () {
-      compressorOn = !compressorOn;
-      if (compressorOn && !ensureAudioGraph()) {
-        compressorOn = false;
-        setStatus('WebAudio недоступен — компрессор не включить');
-      }
-      rewireAudioGraph();
-      applyFx();
-      saveFx();
-      updateFxButtons();
-    });
+    compressorBtnEl = makeButton('Комп.', toggleCompressor);
     compressorBtnEl.title = 'Компрессор: приглушает пики и делает тихую речь громче';
     volumeRow.appendChild(compressorBtnEl);
     bodyEl.appendChild(volumeRow);
@@ -3001,8 +3626,12 @@ export function buildTwitchAudioPayload(origin: string): string {
   }
 
   function updateFxButtons() {
-    if (!compressorBtnEl) return;
-    compressorBtnEl.style.background = compressorOn ? '#9147ff' : '#2f2f35';
+    if (compressorBtnEl) {
+      compressorBtnEl.style.background = compressorOn ? '#9147ff' : '#2f2f35';
+    }
+    if (playerCompBtn) {
+      playerCompBtn.style.background = compressorOn ? '#9147ff' : '#2f2f35';
+    }
   }
 
   // Big, unambiguous indicator of what is actually coming out of the speakers.
@@ -3043,6 +3672,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     modeButtons = {};
     volumeLabelEl = null;
     compressorBtnEl = null;
+    volumeSliderEl = null;
     chatModeButtons = {};
     chatOffsetRow = null;
     chatOffsetInput = null;
@@ -3085,10 +3715,26 @@ export function buildTwitchAudioPayload(origin: string): string {
   audio.addEventListener('play', resumeAudioCtx);
   document.addEventListener('pointerdown', resumeAudioCtx, true);
 
+  // В полноэкранном режиме браузер показывает только потомков
+  // fullscreen-элемента: переносим панель внутрь него и обратно, позиция в
+  // долях окна пересчитывается под новый размер.
+  document.addEventListener('fullscreenchange', function () {
+    var root = document.fullscreenElement || document.body;
+    if (panel && root && panel.parentNode !== root) {
+      try { root.appendChild(panel); } catch (e) {}
+    }
+    applySavedPosition();
+  });
+  window.addEventListener('resize', function () {
+    applySavedPosition();
+  });
+
   function tick() {
     // Twitch is a SPA: react to URL changes without page reloads.
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      // Снимок сохранённого состояния нового VOD — до любых saveState().
+      savedStateSnapshot = getVodId() ? loadState() : null;
       audio.pause();
       currentTrackId = null;
       trackDurationSec = 0;
@@ -3113,6 +3759,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (!getVodId()) {
       if (panel) removePanel();
       if (chatOverlay) removeChatOverlay();
+      removeSeekbarReplacement();
+      removePlayerVolume();
       if (!audio.paused) audio.pause();
       return;
     }
@@ -3123,6 +3771,7 @@ export function buildTwitchAudioPayload(origin: string): string {
 
     syncNow(false);
     renderTimelineOverlay();
+    renderPlayerControls();
     updateChatReplay();
 
     if (calibrating) {

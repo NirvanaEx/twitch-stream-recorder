@@ -261,6 +261,50 @@ export class PublicStreamsController {
   }
 
   /**
+   * Последние сессии канала с записанным чатом — для подгрузки истории в
+   * юзерскрипте (поиск по прошлым стримам, история сообщений пользователя).
+   * CORS открыт по той же причине, что и у match-эндпоинтов.
+   */
+  @Get("chat-replay/history")
+  @Header("Access-Control-Allow-Origin", "*")
+  async chatHistorySessions(
+    @Query("channel") channel?: string,
+    @Query("limit") limit?: string,
+  ) {
+    const login = (channel ?? "").trim().toLowerCase();
+    if (!login) {
+      return { items: [] };
+    }
+
+    const take = Math.min(30, Math.max(1, Number.parseInt(limit ?? "10", 10) || 10));
+
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        channel: { twitchLogin: login },
+        chatAvailable: true,
+      },
+      select: {
+        id: true,
+        title: true,
+        startedAt: true,
+        durationSec: true,
+      },
+      orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
+      take,
+    });
+
+    return {
+      items: sessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        startedAt: session.startedAt?.toISOString() ?? null,
+        durationSec: session.durationSec,
+        chatUrl: `/api/public/streams/${session.id}/chat-replay`,
+      })),
+    };
+  }
+
+  /**
    * The anchor fields the userscript needs to place chat messages on the VOD
    * timeline — the same ones the audio tracks carry, minus the audio itself.
    */
