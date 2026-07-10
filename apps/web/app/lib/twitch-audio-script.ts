@@ -770,9 +770,32 @@ export function buildTwitchAudioPayload(origin: string): string {
   // перемотка кликом и перетаскиванием.
   var seekbarEls = null;
 
+  // Видимая фиолетовая полоска Twitch (.seekbar-bar) — СОСЕД интерактивной
+  // зоны, а не её потомок: прячем родные элементы явно и каждый тик заново
+  // (React их перерисовывает), а при выходе из режима возвращаем.
+  function setTwitchSeekbarHidden(bar, hidden) {
+    var scopes = [bar, bar.parentElement];
+    for (var s = 0; s < scopes.length; s++) {
+      var scope = scopes[s];
+      if (!scope) continue;
+      for (var i = 0; i < scope.children.length; i++) {
+        var child = scope.children[i];
+        if (child === bar) continue;
+        var cls = String(child.className || '');
+        if (cls.indexOf('tsr-') !== -1) continue; // наши элементы не трогаем
+        child.style.visibility = hidden ? 'hidden' : '';
+      }
+    }
+  }
+
   function removeSeekbarReplacement() {
-    if (seekbarEls && seekbarEls.root && seekbarEls.root.parentNode) {
-      seekbarEls.root.parentNode.removeChild(seekbarEls.root);
+    if (seekbarEls) {
+      if (seekbarEls.bar) {
+        try { setTwitchSeekbarHidden(seekbarEls.bar, false); } catch (e) {}
+      }
+      if (seekbarEls.root && seekbarEls.root.parentNode) {
+        seekbarEls.root.parentNode.removeChild(seekbarEls.root);
+      }
     }
     seekbarEls = null;
   }
@@ -790,11 +813,11 @@ export function buildTwitchAudioPayload(origin: string): string {
       root.style.position = 'absolute';
       root.style.left = '0';
       root.style.right = '0';
-      root.style.top = '-4px';
-      root.style.height = '13px';
+      root.style.top = '-2px';
+      root.style.bottom = '-2px';
       root.style.zIndex = '25';
       root.style.cursor = 'pointer';
-      root.style.background = '#0e0e10'; // прячем родную полоску под собой
+      root.style.background = 'rgba(14,14,16,0.9)';
       root.style.borderRadius = '4px';
 
       function layer() {
@@ -802,9 +825,10 @@ export function buildTwitchAudioPayload(origin: string): string {
         node.style.position = 'absolute';
         node.style.left = '0';
         node.style.right = '0';
-        node.style.top = '4px';
-        node.style.bottom = '4px';
-        node.style.borderRadius = '2px';
+        node.style.top = '50%';
+        node.style.height = '7px';
+        node.style.marginTop = '-3.5px';
+        node.style.borderRadius = '3px';
         node.style.pointerEvents = 'none';
         root.appendChild(node);
         return node;
@@ -859,10 +883,13 @@ export function buildTwitchAudioPayload(origin: string): string {
 
       bar.appendChild(root);
       seekbarEls = {
-        root: root, bufferedWrap: bufferedWrap, coverWrap: coverWrap,
+        root: root, bar: bar, bufferedWrap: bufferedWrap, coverWrap: coverWrap,
         progress: progress, head: head, coverKey: '',
       };
     }
+
+    // Родные элементы полоски прячем каждый тик — React их пересоздаёт.
+    setTwitchSeekbarHidden(bar, true);
 
     // Прогресс и голова — каждый тик.
     var pct = Math.min(100, Math.max(0, (v.currentTime / total) * 100));
@@ -1494,7 +1521,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       syncNow(true);
     }
     for (var key in modeButtons) {
-      modeButtons[key].style.background = key === mode ? '#9147ff' : '#2f2f35';
+      modeButtons[key].style.background = key === mode ? '#9147ff' : 'transparent';
     }
     saveState();
     updateNowPlaying();
@@ -2189,7 +2216,7 @@ export function buildTwitchAudioPayload(origin: string): string {
 
   function updateChatUi() {
     for (var key in chatModeButtons) {
-      chatModeButtons[key].style.background = key === chatMode ? '#9147ff' : '#2f2f35';
+      chatModeButtons[key].style.background = key === chatMode ? '#9147ff' : 'transparent';
     }
     if (chatOffsetRow) chatOffsetRow.style.display = chatMode === 'record' ? 'flex' : 'none';
     if (chatOffsetInput) chatOffsetInput.value = String(chatOffset);
@@ -3286,6 +3313,13 @@ export function buildTwitchAudioPayload(origin: string): string {
     return button;
   }
 
+  function sectionLabel(text) {
+    return el('div', {
+      fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase',
+      opacity: '0.45', margin: '10px 2px 4px', fontWeight: '700',
+    }, text);
+  }
+
   function makeCheck(label, checked, onChange) {
     var wrap = el('label', {
       display: 'inline-flex', gap: '4px', alignItems: 'center', cursor: 'pointer',
@@ -3310,7 +3344,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       toggleHintEl.textContent = '▲';
     } else {
       bodyEl.style.display = 'block';
-      panel.style.width = '290px';
+      panel.style.width = '300px';
       headerTitleEl.textContent = '🎧 Звук записи (TSR)';
       toggleHintEl.textContent = '▾';
     }
@@ -3414,7 +3448,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       background: 'rgba(20,20,24,0.94)', color: '#efeff1', borderRadius: '12px',
       border: '1px solid rgba(255,255,255,0.09)',
       font: '12px/1.45 Roobert, Inter, sans-serif',
-      width: '290px', boxShadow: '0 10px 32px rgba(0,0,0,0.55)',
+      width: '300px', boxShadow: '0 10px 32px rgba(0,0,0,0.55)',
       transition: 'opacity 0.2s',
       backdropFilter: 'blur(10px)', webkitBackdropFilter: 'blur(10px)',
     });
@@ -3486,12 +3520,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     });
     bodyEl.appendChild(selectEl);
 
-    var modeRow = el('div', { display: 'flex', gap: '6px', marginBottom: '8px' });
+    bodyEl.appendChild(sectionLabel('Звук'));
+    var modeRow = el('div', {
+      display: 'flex', gap: '3px', marginBottom: '8px',
+      background: '#26262c', borderRadius: '10px', padding: '3px',
+    });
     var modes = [['twitch', 'Twitch'], ['record', 'Запись'], ['both', 'Оба']];
     for (var i = 0; i < modes.length; i++) {
       (function (key, label) {
         var button = makeButton(label, function () { applyMode(key); });
         button.style.flex = '1';
+        button.style.borderRadius = '8px';
         modeButtons[key] = button;
         modeRow.appendChild(button);
       })(modes[i][0], modes[i][1]);
@@ -3542,13 +3581,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     // Чат: оригинальный VOD-чат Twitch или записанный (с удалёнными и самыми
     // первыми сообщениями). У чата свой сдвиг — рассинхрон чата и звука
     // бывает разным.
-    var chatRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
-    chatRow.appendChild(el('span', { opacity: '0.7', minWidth: '32px' }, 'Чат'));
+    bodyEl.appendChild(sectionLabel('Чат'));
+    var chatRow = el('div', {
+      display: 'flex', gap: '3px', marginBottom: '8px',
+      background: '#26262c', borderRadius: '10px', padding: '3px',
+    });
     var chatModes = [['twitch', 'Twitch'], ['record', 'Запись']];
     for (var c = 0; c < chatModes.length; c++) {
       (function (key, label) {
         var button = makeButton(label, function () { applyChatMode(key); });
         button.style.flex = '1';
+        button.style.borderRadius = '8px';
         chatModeButtons[key] = button;
         chatRow.appendChild(button);
       })(chatModes[c][0], chatModes[c][1]);
@@ -3574,6 +3617,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatOffsetRow.appendChild(makeButton('+5', function () { setChatOffset(chatOffset + 5); }));
     bodyEl.appendChild(chatOffsetRow);
 
+    bodyEl.appendChild(sectionLabel('Громкость записи'));
     var volumeRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
     volumeLabelEl = el('span', { opacity: '0.7', minWidth: '78px' }, '');
     volumeRow.appendChild(volumeLabelEl);
