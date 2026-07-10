@@ -9,7 +9,7 @@ export type VodMatchSession = {
 // A VOD timestamp can be imperfect (publishedAt is used as a fallback), but
 // anything farther away is much more likely to be another broadcast.
 const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
-const SAME_BROADCAST_TOLERANCE_MS = 5 * 60 * 1000;
+export const SAME_BROADCAST_TOLERANCE_MS = 5 * 60 * 1000;
 const MEDIA_WINDOW_PADDING_MS = 30 * 60 * 1000;
 
 /**
@@ -41,6 +41,53 @@ export function getSessionMediaWindow(session: VodMatchSession) {
  * media order. `best` is the earliest fragment of the best-matching broadcast
  * so the userscript initially loads the piece most likely to cover VOD time 0.
  */
+export type BroadcastPart = { partIndex: number; partCount: number };
+
+/**
+ * Label restart fragments of one broadcast as "part N of M". Recorder
+ * restarts (deploys, crashes) split a stream into several sessions that all
+ * share the channel and the Twitch go-live time — indistinguishable in every
+ * list UI until numbered. Parts are ordered by their real media coverage,
+ * not by row creation. Lone sessions get no annotation.
+ */
+export function annotateBroadcastParts<T extends VodMatchSession & { id: string }>(
+  sessions: T[],
+  keyOf: (session: T) => string,
+): Map<string, BroadcastPart> {
+  const clusters = new Map<string, { anchorMs: number; members: T[] }[]>();
+
+  for (const session of sessions) {
+    if (!session.startedAt) continue;
+    const startedMs = session.startedAt.getTime();
+    const groups = clusters.get(keyOf(session)) ?? [];
+    const cluster = groups.find(
+      (candidate) => Math.abs(candidate.anchorMs - startedMs) <= SAME_BROADCAST_TOLERANCE_MS,
+    );
+    if (cluster) {
+      cluster.members.push(session);
+    } else {
+      groups.push({ anchorMs: startedMs, members: [session] });
+    }
+    clusters.set(keyOf(session), groups);
+  }
+
+  const parts = new Map<string, BroadcastPart>();
+
+  for (const groups of clusters.values()) {
+    for (const cluster of groups) {
+      if (cluster.members.length < 2) continue;
+      const ordered = cluster.members
+        .map((session) => ({ session, media: getSessionMediaWindow(session) }))
+        .sort((a, b) => a.media.startMs - b.media.startMs);
+      ordered.forEach(({ session }, index) => {
+        parts.set(session.id, { partIndex: index + 1, partCount: ordered.length });
+      });
+    }
+  }
+
+  return parts;
+}
+
 export function matchSessionsToVod<T extends VodMatchSession>(
   available: T[],
   date?: string,

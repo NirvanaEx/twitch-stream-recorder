@@ -11,6 +11,7 @@ import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
+import { SAME_BROADCAST_TOLERANCE_MS } from "../public/vod-session-match";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TwitchService } from "../twitch/twitch.service";
 import { ChatService } from "../chat/chat.service";
@@ -67,6 +68,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     await this.markStaleRecordingsAsStopped();
     await this.checkRecordingDependencies();
     void this.recoverInterruptedRemuxes();
+    void this.backfillRestartFragmentAnchors();
     await this.syncAllChannels();
 
     this.monitorTimer = setInterval(() => {
@@ -966,6 +968,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         `${logPrefix} found a leftover .ts from an interrupted remux; recovering the recording.`,
       );
 
+      // The last write to the .ts IS the real capture end. Grab it before the
+      // remux touches anything: the userscript anchors the track on the VOD
+      // timeline as captureEndedAt - durationSec, and without it a recovered
+      // restart fragment lands on the wrong part of the stream.
+      const captureEndedAt = statSync(tsPath).mtime;
+
       try {
         await this.runFfmpegRemux(tsPath, outputPath, session.audioOnly);
 
@@ -997,6 +1005,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             replayStatus: "ready",
             errorMessage: null,
             fileSizeBytes: String(fileSizeBytes),
+            // endedAt was stamped with the service boot time by
+            // markStaleRecordingsAsStopped — the .ts mtime is the truth.
+            endedAt: captureEndedAt,
+            ...(session.captureEndedAt ? {} : { captureEndedAt }),
             ...(audio
               ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
               : {}),
@@ -1175,6 +1187,79 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         }
       });
     });
+  }
+
+  /**
+   * Repair restart fragments recovered before captureEndedAt was recorded.
+   *
+   * Sessions interrupted by a deploy and recovered from the leftover .ts used
+   * to end up with captureEndedAt = null, so the userscript anchored them by
+   * createdAt — which --hls-live-restart makes wrong by the playlist rewind,
+   * desyncing the overlay on multi-part broadcasts. For those rows endedAt
+   * (stamped at the boot that followed the kill) is within seconds of the
+   * real capture end, so it is a sound anchor. Only fragments that share a
+   * broadcast with a sibling are touched: that is where the anchor drives
+   * automatic part switching; lone sessions keep their behaviour.
+   */
+  private async backfillRestartFragmentAnchors() {
+    const candidates = await this.prisma.streamSession.findMany({
+      where: {
+        status: "completed",
+        captureEndedAt: null,
+        endedAt: { not: null },
+        durationSec: { not: null, gt: 0 },
+        startedAt: { not: null },
+      },
+      select: {
+        id: true,
+        channelId: true,
+        startedAt: true,
+        endedAt: true,
+        durationSec: true,
+        createdAt: true,
+      },
+    });
+
+    for (const session of candidates) {
+      const startedMs = session.startedAt!.getTime();
+      const endedMs = session.endedAt!.getTime();
+      const expectedEndMs = session.createdAt.getTime() + session.durationSec! * 1000;
+
+      // endedAt is only trustworthy when the service restarted right after
+      // the capture died. A recovery that happened much later (host down for
+      // hours) would plant the fragment far past its real position — better
+      // to leave the old createdAt anchor then.
+      const plausible =
+        endedMs > session.createdAt.getTime() &&
+        endedMs - expectedEndMs <= 30 * 60 * 1000 &&
+        // The implied media start may precede createdAt (playlist rewind) but
+        // never the broadcast itself.
+        endedMs - session.durationSec! * 1000 >= startedMs - 30 * 60 * 1000;
+
+      if (!plausible) continue;
+
+      const siblings = await this.prisma.streamSession.count({
+        where: {
+          id: { not: session.id },
+          channelId: session.channelId,
+          status: "completed",
+          startedAt: {
+            gte: new Date(startedMs - SAME_BROADCAST_TOLERANCE_MS),
+            lte: new Date(startedMs + SAME_BROADCAST_TOLERANCE_MS),
+          },
+        },
+      });
+
+      if (siblings === 0) continue;
+
+      await this.prisma.streamSession.update({
+        where: { id: session.id },
+        data: { captureEndedAt: session.endedAt },
+      });
+      this.logger.log(
+        `[${session.id}] restored the capture-end anchor of a recovered restart fragment from endedAt.`,
+      );
+    }
   }
 
   private async markStaleRecordingsAsStopped() {

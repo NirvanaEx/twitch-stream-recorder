@@ -22,7 +22,11 @@ import {
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
-import { matchSessionsToVod } from "./vod-session-match";
+import {
+  annotateBroadcastParts,
+  matchSessionsToVod,
+  type BroadcastPart,
+} from "./vod-session-match";
 
 // A session whose local file is gone is still watchable when its parts were
 // uploaded to Telegram; the public video endpoint streams them back. An
@@ -150,9 +154,9 @@ export class PublicStreamsController {
       take: 60,
     });
 
-    const items = sessions
-      .filter((session) => this.hasUsableAudio(session))
-      .map((session) => this.mapAudioTrack(session));
+    const available = sessions.filter((session) => this.hasUsableAudio(session));
+    const parts = annotateBroadcastParts(available, (session) => session.channelId);
+    const items = available.map((session) => this.mapAudioTrack(session, parts.get(session.id)));
 
     return { items };
   }
@@ -200,9 +204,11 @@ export class PublicStreamsController {
       return { item: null, items: [] };
     }
 
+    const parts = annotateBroadcastParts(available, (session) => session.channelId);
+
     return {
-      item: this.mapAudioTrack(best),
-      items: group.map((session) => this.mapAudioTrack(session)),
+      item: this.mapAudioTrack(best, parts.get(best.id)),
+      items: group.map((session) => this.mapAudioTrack(session, parts.get(session.id))),
     };
   }
 
@@ -246,9 +252,11 @@ export class PublicStreamsController {
       return { item: null, items: [] };
     }
 
+    const parts = annotateBroadcastParts(sessions, (session) => session.channelId);
+
     return {
-      item: this.mapChatSession(best),
-      items: group.map((session) => this.mapChatSession(session)),
+      item: this.mapChatSession(best, parts.get(best.id)),
+      items: group.map((session) => this.mapChatSession(session, parts.get(session.id))),
     };
   }
 
@@ -256,8 +264,11 @@ export class PublicStreamsController {
    * The anchor fields the userscript needs to place chat messages on the VOD
    * timeline — the same ones the audio tracks carry, minus the audio itself.
    */
-  private mapChatSession(session: Parameters<PublicStreamsController["mapAudioTrack"]>[0]) {
-    const track = this.mapAudioTrack(session);
+  private mapChatSession(
+    session: Parameters<PublicStreamsController["mapAudioTrack"]>[0],
+    part?: BroadcastPart,
+  ) {
+    const track = this.mapAudioTrack(session, part);
     return {
       id: track.id,
       title: track.title,
@@ -267,6 +278,8 @@ export class PublicStreamsController {
       recordingStartedAt: track.recordingStartedAt,
       recordingEndedAt: track.recordingEndedAt,
       durationSec: track.durationSec,
+      partIndex: track.partIndex,
+      partCount: track.partCount,
       chatUrl: `/api/public/streams/${track.id}/chat-replay`,
     };
   }
@@ -286,6 +299,7 @@ export class PublicStreamsController {
       telegramParts: { durationSec: number | null }[];
       audioOnly: boolean;
     },
+    part?: BroadcastPart,
   ) {
     // Prefer the probed media length; fall back to the parts sum, then to the
     // stream span (which overstates it when the recorder joined late).
@@ -320,6 +334,11 @@ export class PublicStreamsController {
       durationSec:
         session.durationSec ?? (partsDuration > 0 ? partsDuration : timestampsDuration),
       audioOnly: session.audioOnly,
+      // "Part N of M" when the broadcast was split by recorder restarts —
+      // otherwise the fragments are identical in every list (same go-live
+      // date, same title).
+      partIndex: part?.partIndex ?? null,
+      partCount: part?.partCount ?? null,
       audioUrl: `/api/public/streams/${session.id}/audio`,
     };
   }

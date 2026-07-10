@@ -15,6 +15,8 @@ type AudioTrack = {
   startedAt: string | null;
   durationSec: number | null;
   audioOnly: boolean;
+  partIndex: number | null;
+  partCount: number | null;
   audioUrl: string;
 };
 
@@ -311,6 +313,14 @@ export default function TwitchAudioPage() {
                         {track.startedAt
                           ? new Date(track.startedAt).toLocaleString()
                           : "—"}
+                        {track.partIndex && track.partCount ? (
+                          <span style={{ opacity: 0.7 }}>
+                            {" · "}
+                            {t.twitchAudio.partLabel
+                              .replace("{n}", String(track.partIndex))
+                              .replace("{m}", String(track.partCount))}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="col-meta">
                         {track.audioOnly ? "🎧 " : ""}
