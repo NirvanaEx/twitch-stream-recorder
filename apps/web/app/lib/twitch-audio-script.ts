@@ -1297,6 +1297,33 @@ export function buildTwitchAudioPayload(origin: string): string {
   var syncButtonEl = null;
   var SYNC_BUTTON_LABEL = 'Подогнать сдвиг автоматически';
 
+  // Авторежим: после старта дорожки скрипт сам замеряет расхождение и правит
+  // сдвиг. Кнопка «Авто» выключает. Настройка общая для всех VOD.
+  var AUTO_CAL_MAX_TRIES = 3; // сорванные (перемотка/пауза) замеры повторяем
+  var AUTO_CAL_STABLE_TICKS = 4; // ~3 c стабильного воспроизведения до старта
+  var autoCalEnabled = true;
+  try {
+    autoCalEnabled = localStorage.getItem('tsr-audio-autocal') !== '0';
+  } catch (e) {}
+  var autoCalBtnEl = null;
+  var syncInfoEl = null;
+  var autoCalState = { key: null, attempts: 0 };
+  var autoCalStable = 0;
+
+  function autoCalKey() {
+    return (getVodId() || 'none') + ':' + (currentTrackId || '');
+  }
+
+  function setSyncInfo(text) {
+    if (!syncInfoEl) return;
+    syncInfoEl.textContent = text || '';
+    syncInfoEl.style.display = text ? '' : 'none';
+  }
+
+  function fmtLag(sec) {
+    return (sec >= 0 ? '+' : '') + sec.toFixed(2);
+  }
+
   function setSyncButtonLabel(text) {
     if (syncButtonEl) syncButtonEl.textContent = text;
   }
@@ -1524,13 +1551,17 @@ export function buildTwitchAudioPayload(origin: string): string {
       var envVideo = envV.slice(skipHops);
       var appliedOffset = offset; // сдвиг, с которым играло окно замера
       abortCalibration();
+      // Замер довели до конца — авторежим эту дорожку больше не трогает.
+      autoCalState = { key: autoCalKey(), attempts: AUTO_CAL_MAX_TRIES };
 
       var result = estimateLag(envAudio, envVideo, hopSec);
       if (!result) {
+        setSyncInfo('Расхождение: не измерено — звук слишком тихий.');
         setStatus('Звук слишком тихий для сравнения — прибавьте громкость Twitch и повторите.');
         return;
       }
       if (result.confidence < 0.25 || result.prominence < 1.5) {
+        setSyncInfo('Расхождение: измерить не удалось (слабое совпадение).');
         setStatus(
           'Не удалось уверенно сопоставить дорожки (совпадение ' +
           Math.round(result.confidence * 100) + '%) — подгоните вручную.',
@@ -1540,11 +1571,19 @@ export function buildTwitchAudioPayload(origin: string): string {
 
       var newOffset = appliedOffset + result.lagSec;
       if (Math.abs(newOffset) > 60) {
+        setSyncInfo('Расхождение: замер неправдоподобен — не применён.');
         setStatus('Получился неправдоподобный сдвиг (' + newOffset.toFixed(1) + ' c) — не применяю.');
         return;
       }
 
+      if (Math.abs(result.lagSec) < 0.05) {
+        setSyncInfo('Расхождение: ' + fmtLag(result.lagSec) + ' c — сдвиг уже точный.');
+        setStatus('Сдвиг уже точный (расхождение ' + fmtLag(result.lagSec) + ' c).');
+        return;
+      }
+
       setOffset(newOffset);
+      setSyncInfo('Расхождение было ' + fmtLag(result.lagSec) + ' c — исправлено.');
       setStatus(
         'Сдвиг подогнан: ' + (newOffset >= 0 ? '+' : '') + newOffset.toFixed(1) +
         ' c (совпадение ' + Math.round(result.confidence * 100) + '%)',
@@ -1575,6 +1614,83 @@ export function buildTwitchAudioPayload(origin: string): string {
         finishCalibration();
       }
     };
+    return true;
+  }
+
+  // Авторежим: как только дорожка стабильно играет, один раз замеряем и
+  // правим сдвиг сами. Сорванный замер (перемотка, пауза) повторяем, но не
+  // бесконечно; завершённый — не повторяем до смены дорожки, части или VOD.
+  function maybeAutoCalibrate() {
+    if (!autoCalEnabled || calibrating) return;
+    if (!currentTrackId || mode === 'twitch') return;
+    var key = autoCalKey();
+    if (autoCalState.key === key && autoCalState.attempts >= AUTO_CAL_MAX_TRIES) return;
+    var v = getVideo();
+    var ready =
+      !!v && !v.paused && !v.ended && v.readyState >= 3 &&
+      !audio.paused && !audio.error && audio.readyState >= 2 &&
+      !document.hidden;
+    if (ready) {
+      // Окно замера не должно попадать в заглушённый Twitch'ем отрезок —
+      // молча ждём, пока зритель не окажется на месте со звуком.
+      var winStart = v.currentTime;
+      var winEnd = winStart + CALIBRATION_SEC + 2;
+      for (var s = 0; s < mutedSegments.length; s++) {
+        if (mutedSegments[s].offset < winEnd &&
+            mutedSegments[s].offset + mutedSegments[s].duration > winStart) {
+          ready = false;
+          break;
+        }
+      }
+    }
+    if (!ready) {
+      autoCalStable = 0;
+      return;
+    }
+    if (autoCalStable < AUTO_CAL_STABLE_TICKS) {
+      autoCalStable++;
+      return;
+    }
+    if (!ensureAudioGraph()) {
+      autoCalState = { key: key, attempts: AUTO_CAL_MAX_TRIES };
+      return;
+    }
+    if (audioCtx.state === 'suspended') {
+      resumeAudioCtx(); // до первого жеста пользователя контекст не проснётся
+      return;
+    }
+    autoCalStable = 0;
+    autoCalState = {
+      key: key,
+      attempts: (autoCalState.key === key ? autoCalState.attempts : 0) + 1,
+    };
+    if (!startOffsetCalibration()) {
+      // Не стартовал по постоянной причине (браузер не отдаёт звук плеера
+      // и т.п.) — повторы бессмысленны, остаётся ручная кнопка.
+      autoCalState.attempts = AUTO_CAL_MAX_TRIES;
+    }
+  }
+
+  function toggleAutoCal() {
+    autoCalEnabled = !autoCalEnabled;
+    try {
+      localStorage.setItem('tsr-audio-autocal', autoCalEnabled ? '1' : '0');
+    } catch (e) {}
+    updateAutoCalButton();
+    if (!autoCalEnabled) {
+      if (calibrating) abortCalibration('Автоподгон выключен.');
+      else setStatus('Автоподгон выключен — осталась ручная кнопка.');
+      return;
+    }
+    autoCalState = { key: null, attempts: 0 };
+    autoCalStable = 0;
+    setStatus('Автоподгон включён: замерю расхождение после запуска дорожки.');
+  }
+
+  function updateAutoCalButton() {
+    if (!autoCalBtnEl) return;
+    autoCalBtnEl.textContent = 'Авто: ' + (autoCalEnabled ? 'вкл' : 'выкл');
+    autoCalBtnEl.style.background = autoCalEnabled ? '#9147ff' : '#2f2f35';
   }
 
   // ---- Чат записи: загрузка, синхронизация и оверлей ---------------------
@@ -2340,14 +2456,24 @@ export function buildTwitchAudioPayload(origin: string): string {
     offsetRow.appendChild(makeButton('+5', function () { setOffset(offset + 5); }));
     bodyEl.appendChild(offsetRow);
 
-    var syncRow = el('div', { display: 'flex', gap: '6px', marginBottom: '8px' });
+    var syncRow = el('div', { display: 'flex', gap: '6px', marginBottom: '4px' });
     syncButtonEl = makeButton(SYNC_BUTTON_LABEL, startOffsetCalibration);
     syncButtonEl.style.flex = '1';
     syncButtonEl.title =
       'Сравнивает звук записи с оригинальной дорожкой VOD (~' + CALIBRATION_SEC +
       ' секунд, слышны оба звука) и выставляет сдвиг сам. Нужно место, где оригинал не заглушён.';
     syncRow.appendChild(syncButtonEl);
+    autoCalBtnEl = makeButton('Авто', toggleAutoCal);
+    autoCalBtnEl.title =
+      'Автозамер: после запуска дорожки скрипт сам сравнит звук с оригиналом (~' +
+      CALIBRATION_SEC + ' секунд слышны оба) и поправит сдвиг. Выкл — только вручную.';
+    syncRow.appendChild(autoCalBtnEl);
+    updateAutoCalButton();
     bodyEl.appendChild(syncRow);
+
+    // Сюда пишем последнее замеренное расхождение: «+1.53 c — исправлено».
+    syncInfoEl = el('div', { opacity: '0.75', marginBottom: '8px', display: 'none' }, '');
+    bodyEl.appendChild(syncInfoEl);
 
     // Чат: оригинальный VOD-чат Twitch или записанный (с удалёнными и самыми
     // первыми сообщениями). У чата свой сдвиг — рассинхрон чата и звука
@@ -2491,6 +2617,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatOffsetRow = null;
     chatOffsetInput = null;
     syncButtonEl = null;
+    autoCalBtnEl = null;
+    syncInfoEl = null;
     panelHovered = false;
   }
 
@@ -2567,7 +2695,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     renderTimelineOverlay();
     updateChatReplay();
 
-    if (mode !== 'twitch' && currentTrackId && !audio.error) {
+    if (calibrating) {
+      // Строку статуса занимает счётчик замера — не затираем его.
+    } else if (mode !== 'twitch' && currentTrackId && !audio.error) {
       var v = getVideo();
       // Пока идёт докачка, строку статуса занимает прогресс загрузки.
       if (v && !v.paused && !progressiveState) {
@@ -2576,6 +2706,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     } else if (audio.error) {
       setStatus('Ошибка загрузки аудио — проверьте доступность сервера.');
     }
+
+    maybeAutoCalibrate();
   }
 
   setInterval(tick, SYNC_MS);
