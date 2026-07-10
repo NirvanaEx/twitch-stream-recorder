@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiGet, apiSend } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
-import { buildTwitchAudioUserscript } from "../../lib/twitch-audio-script";
 import { useLanguage } from "../../providers";
 
 type AudioTrack = {
@@ -34,6 +33,7 @@ export default function TwitchAudioPage() {
   const { t } = useLanguage();
   const { hasPermission } = useAuth();
   const [origin, setOrigin] = useState("");
+  const [script, setScript] = useState("");
   const [tracks, setTracks] = useState<AudioTrack[] | null>(null);
   const [settings, setSettings] = useState<AudioSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,10 +44,18 @@ export default function TwitchAudioPage() {
   const scriptAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const canManage = hasPermission("manage_archives");
 
-  // The script bakes in the address the panel is opened from: that is the
-  // address the user's browser can already reach.
+  // Load the exact same public artifact Tampermonkey installs and later uses
+  // for automatic updates. Keeping one source avoids preview/copy drift.
   useEffect(() => {
     setOrigin(window.location.origin);
+    void fetch("/twitch-audio.user.js", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text = await response.text();
+        if (!text.includes("// ==UserScript==")) throw new Error("Invalid userscript");
+        setScript(text);
+      })
+      .catch(() => setScript(""));
   }, []);
 
   const loadTracks = async () => {
@@ -111,10 +119,7 @@ export default function TwitchAudioPage() {
     }
   }
 
-  const script = useMemo(
-    () => (origin ? buildTwitchAudioUserscript(origin) : ""),
-    [origin],
-  );
+  const installUrl = origin ? `${origin}/twitch-audio.user.js` : "/twitch-audio.user.js";
 
   // Copy via a throwaway textarea. navigator.clipboard only exists in secure
   // contexts (https), and this panel often runs over plain http, so the
@@ -208,9 +213,20 @@ export default function TwitchAudioPage() {
           <p className="page-copy" style={{ fontSize: 12, marginTop: 10 }}>
             {t.twitchAudio.serverNote.replace("{origin}", origin || "…")}
           </p>
+          <p className="page-copy" style={{ fontSize: 12, marginTop: 6 }}>
+            {t.twitchAudio.updateNote}
+          </p>
 
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            <button className="btn primary" type="button" onClick={() => void handleCopy()}>
+            <a className="btn primary" href={installUrl}>
+              {t.twitchAudio.installScript}
+            </a>
+            <button
+              className="btn"
+              type="button"
+              disabled={!script}
+              onClick={() => void handleCopy()}
+            >
               {copied ? t.twitchAudio.copied : t.twitchAudio.copyScript}
             </button>
             <button

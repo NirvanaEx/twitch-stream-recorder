@@ -1,10 +1,26 @@
+// A sortable version generated once when the server bundle is loaded. Every
+// deployment/restart therefore exposes a newer userscript without requiring a
+// developer to remember to bump a hardcoded number.
+const USERSCRIPT_VERSION = (() => {
+  const now = new Date();
+  return [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+    String(now.getUTCHours()).padStart(2, "0"),
+    String(now.getUTCMinutes()).padStart(2, "0"),
+    String(now.getUTCSeconds()).padStart(2, "0"),
+  ].join(".");
+})();
+
 // Generates the Tampermonkey userscript that overlays the recorder's audio
 // track on a Twitch VOD (restores DMCA-muted sections). The server origin is
 // baked in at copy time, so the script works from any machine that can reach
 // the panel's public address.
 
-export function buildTwitchAudioUserscript(origin: string): string {
+export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): string {
   const trimmedOrigin = origin.replace(/\/+$/, "");
+  const resolvedUpdateUrl = updateUrl ?? `${trimmedOrigin}/twitch-audio.user.js`;
   let hostname = trimmedOrigin;
   try {
     hostname = new URL(trimmedOrigin).hostname;
@@ -17,9 +33,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      2.1
+// @version      ${USERSCRIPT_VERSION}
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch, и заменяет чат VOD на записанный: видны удалённые и самые первые сообщения, сдвиг чата подстраивается отдельно. Чат работает и без аудиодорожки — с оригинальным звуком. Громкость до 300% с компрессором.
 // @match        https://www.twitch.tv/*
+// @updateURL    ${resolvedUpdateUrl}
+// @downloadURL  ${resolvedUpdateUrl}
 // @grant        GM_xmlhttpRequest
 // @connect      ${hostname}
 // @connect      gql.twitch.tv
