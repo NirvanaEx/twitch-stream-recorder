@@ -21,6 +21,7 @@ type Dictionary = {
     archive: string;
     telegramStorage: string;
     twitchAudio: string;
+    filesCheck: string;
   };
   storage: {
     title: string;
@@ -58,6 +59,20 @@ type Dictionary = {
     fileKindSource: string;
     fileKindOther: string;
     deleteFile: string;
+    filesPageTitle: string;
+    filesPageSubtitle: string;
+    diskUsedTotal: string;
+    dataFiles: string;
+    dbSize: string;
+    otherUsage: string;
+    verdictMismatch: string;
+    dirsTitle: string;
+    dirCol: string;
+    fileCountCol: string;
+    missingTitle: string;
+    missingEmpty: string;
+    missingUploaded: string;
+    missingLost: string;
   };
   common: {
     appName: string;
@@ -366,6 +381,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       archive: "Архив записей",
       telegramStorage: "Telegram",
       twitchAudio: "Twitch аудио",
+      filesCheck: "Файлы и диск",
     },
     storage: {
       title: "Telegram-хранилище",
@@ -405,6 +421,22 @@ const dictionaries: Record<Locale, Dictionary> = {
       fileKindSource: "исходник записи",
       fileKindOther: "файл",
       deleteFile: "Удалить файл",
+      filesPageTitle: "Проверка файлов и диска",
+      filesPageSubtitle:
+        "Сверка диска с базой записей: куда уходит место, какие файлы лишние и не потерялись ли нужные.",
+      diskUsedTotal: "Занято на диске (всего)",
+      dataFiles: "Файлы хранилища",
+      dbSize: "База данных",
+      otherUsage: "Вне хранилища (система, докер)",
+      verdictMismatch:
+        "Записи занимают всего {data} из {used} занятых на диске. Остальные {other} — не файлы рекордера: система, докер-образы, логи контейнеров. Чистить их нужно на сервере, а не здесь.",
+      dirsTitle: "Папки хранилища",
+      dirCol: "Папка",
+      fileCountCol: "Файлов",
+      missingTitle: "Записи без локальных файлов",
+      missingEmpty: "Все файлы записей на месте.",
+      missingUploaded: "локальная копия удалена после выгрузки в Telegram — норма",
+      missingLost: "файл пропал с диска",
     },
     common: {
       appName: "Twitch Stream Recorder",
@@ -727,6 +759,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       archive: "Archive",
       telegramStorage: "Telegram",
       twitchAudio: "Twitch audio",
+      filesCheck: "Files & disk",
     },
     storage: {
       title: "Telegram storage",
@@ -766,6 +799,22 @@ const dictionaries: Record<Locale, Dictionary> = {
       fileKindSource: "capture source",
       fileKindOther: "file",
       deleteFile: "Delete file",
+      filesPageTitle: "Files & disk audit",
+      filesPageSubtitle:
+        "The disk is checked against the recordings database: where the space goes, which files are orphans and whether any expected files are missing.",
+      diskUsedTotal: "Disk used (total)",
+      dataFiles: "Recorder files",
+      dbSize: "Database",
+      otherUsage: "Outside the recorder (system, docker)",
+      verdictMismatch:
+        "Recordings take only {data} out of {used} used on disk. The remaining {other} is not recorder files: the system, docker images, container logs. Clean those on the server, not here.",
+      dirsTitle: "Storage folders",
+      dirCol: "Folder",
+      fileCountCol: "Files",
+      missingTitle: "Recordings with missing local files",
+      missingEmpty: "All recording files are present.",
+      missingUploaded: "local copy removed after Telegram upload — expected",
+      missingLost: "file is missing from disk",
     },
     common: {
       appName: "Twitch Stream Recorder",
