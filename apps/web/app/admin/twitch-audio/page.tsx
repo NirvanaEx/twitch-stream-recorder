@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiSend } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
+import { buildTwitchAudioUserscript } from "../../lib/twitch-audio-script";
 import { useLanguage } from "../../providers";
 
 type AudioTrack = {
@@ -45,17 +46,24 @@ export default function TwitchAudioPage() {
   const canManage = hasPermission("manage_archives");
 
   // Load the exact same public artifact Tampermonkey installs and later uses
-  // for automatic updates. Keeping one source avoids preview/copy drift.
+  // for automatic updates. Keeping one source avoids preview/copy drift. The
+  // browser-observed origin travels along so a proxy that mangles the Host
+  // header cannot bake a wrong server address into the script.
   useEffect(() => {
-    setOrigin(window.location.origin);
-    void fetch("/twitch-audio.user.js", { cache: "no-store" })
+    const pageOrigin = window.location.origin;
+    setOrigin(pageOrigin);
+    void fetch(`/twitch-audio.user.js?origin=${encodeURIComponent(pageOrigin)}`, {
+      cache: "no-store",
+    })
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const text = await response.text();
         if (!text.includes("// ==UserScript==")) throw new Error("Invalid userscript");
         setScript(text);
       })
-      .catch(() => setScript(""));
+      // The route being unreachable must not kill the copy path — build the
+      // same loader locally as a fallback.
+      .catch(() => setScript(buildTwitchAudioUserscript(pageOrigin)));
   }, []);
 
   const loadTracks = async () => {
@@ -119,7 +127,9 @@ export default function TwitchAudioPage() {
     }
   }
 
-  const installUrl = origin ? `${origin}/twitch-audio.user.js` : "/twitch-audio.user.js";
+  const installUrl = origin
+    ? `${origin}/twitch-audio.user.js?origin=${encodeURIComponent(origin)}`
+    : "/twitch-audio.user.js";
 
   // Copy via a throwaway textarea. navigator.clipboard only exists in secure
   // contexts (https), and this panel often runs over plain http, so the

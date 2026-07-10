@@ -548,7 +548,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       serverNote:
         "Скрипт обращается к серверу по адресу {origin}. Этот адрес должен быть доступен из браузера, в котором вы смотрите Twitch — если смотрите не из домашней сети, откройте (пробросьте) порт наружу.",
       updateNote:
-        "После этой установки Tampermonkey будет автоматически проверять и загружать новые версии с этого сервера. Частота проверки зависит от настроек расширения.",
+        "Устанавливается лёгкий скрипт-загрузчик: при каждом открытии Twitch он сам подтягивает свежую версию скрипта с этого сервера — обновлять вручную ничего не нужно. Если раньше вы вставляли скрипт в Tampermonkey вручную, удалите тот старый скрипт, иначе панель может остаться старой версии.",
       showScript: "Показать скрипт",
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
@@ -885,7 +885,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       serverNote:
         "The script talks to the server at {origin}. That address must be reachable from the browser where you watch Twitch — forward the port if you are outside your home network.",
       updateNote:
-        "After this installation, Tampermonkey automatically checks and downloads new versions from this server. The check interval depends on the extension settings.",
+        "A lightweight loader script is installed: every time Twitch is opened it pulls the latest script version from this server — no manual updates ever. If you previously pasted the script into Tampermonkey by hand, delete that old script, otherwise the panel may keep running the outdated version.",
       showScript: "Show script",
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",
