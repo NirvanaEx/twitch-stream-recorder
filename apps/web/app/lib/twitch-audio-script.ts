@@ -91,16 +91,43 @@ export function buildTwitchAudioPayload(origin: string): string {
   var chatModeButtons = {};
   var chatOffsetRow = null;
   var chatOffsetInput = null;
-  // Вид чата (настройка общая для всех VOD): размер текста в px.
+  // Вид чата (настройки общие для всех VOD): размер текста, масштаб эмоутов,
+  // время/бейджи/чередование, читаемые ники, удалённые, подсветка слов.
   var chatFontPx = 13;
+  var chatEmoteScale = 1.5; // высота эмоутов в em (7tv и Twitch)
+  var chatShowTime = true;
+  var chatShowBadges = true;
+  var chatZebra = false;
+  var chatReadableColors = true;
+  var chatShowDeleted = true;
+  var chatHighlightWords = '';
   try {
     var savedChatSize = parseInt(localStorage.getItem('tsr-chat-size') || '', 10);
     if (savedChatSize >= 11 && savedChatSize <= 20) chatFontPx = savedChatSize;
+    var savedView = JSON.parse(localStorage.getItem('tsr-chat-view') || 'null');
+    if (savedView) {
+      if (savedView.fontPx >= 11 && savedView.fontPx <= 20) chatFontPx = savedView.fontPx;
+      if (savedView.emoteScale >= 1 && savedView.emoteScale <= 3) chatEmoteScale = savedView.emoteScale;
+      if (typeof savedView.showTime === 'boolean') chatShowTime = savedView.showTime;
+      if (typeof savedView.showBadges === 'boolean') chatShowBadges = savedView.showBadges;
+      if (typeof savedView.zebra === 'boolean') chatZebra = savedView.zebra;
+      if (typeof savedView.readable === 'boolean') chatReadableColors = savedView.readable;
+      if (typeof savedView.showDeleted === 'boolean') chatShowDeleted = savedView.showDeleted;
+      if (typeof savedView.highlight === 'string') chatHighlightWords = savedView.highlight;
+    }
   } catch (e) {}
   var chatSettingsEl = null;
   var chatSettingsOpen = false;
   var chatSizeLabelEl = null;
+  var chatEmoteLabelEl = null;
   var chatHeadOffsetEl = null;
+  var chatHighlightInputEl = null;
+  var chatSearchInputEl = null;
+  // Поиск по чату: пока строка не пуста, вместо живого окна показываются
+  // совпадения. Не сохраняется между VOD.
+  var chatSearchQuery = '';
+  var chatSearchDirty = false;
+  var chatSearchCount = 0;
   var CHAT_MAX_VISIBLE = 150;
   // Кандидаты на контейнер чата VOD (Twitch периодически меняет разметку).
   var CHAT_HOST_SELECTORS = [
@@ -1846,20 +1873,89 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatForceRebuild = true;
     // Применяем сразу, не дожидаясь тика: окно сообщений перестраивается от
     // текущего места мгновенно, а сдвиг видно в шапке чата.
-    var v = getVideo();
-    if (chatMode === 'record' && v && chatListEl) renderChatWindow(v);
+    repaintChat();
     updateChatHeaderInfo();
     saveState();
     saveChannelChatPrefs();
   }
 
+  function saveChatView() {
+    try {
+      localStorage.setItem('tsr-chat-view', JSON.stringify({
+        fontPx: chatFontPx, emoteScale: chatEmoteScale, showTime: chatShowTime,
+        showBadges: chatShowBadges, zebra: chatZebra, readable: chatReadableColors,
+        showDeleted: chatShowDeleted, highlight: chatHighlightWords,
+      }));
+    } catch (e) {}
+  }
+
   function setChatFont(px) {
     chatFontPx = Math.min(20, Math.max(11, Math.round(px)));
-    try {
-      localStorage.setItem('tsr-chat-size', String(chatFontPx));
-    } catch (e) {}
+    saveChatView();
     if (chatOverlay) chatOverlay.style.fontSize = chatFontPx + 'px';
     if (chatSizeLabelEl) chatSizeLabelEl.textContent = String(chatFontPx);
+  }
+
+  function setChatEmoteScale(value) {
+    chatEmoteScale = Math.min(3, Math.max(1, Math.round(value * 4) / 4));
+    if (chatEmoteLabelEl) chatEmoteLabelEl.textContent = '×' + chatEmoteScale;
+    applyChatViewChange();
+  }
+
+  // Мгновенная перерисовка чата в текущем режиме (живое окно или поиск).
+  function repaintChat() {
+    if (chatMode !== 'record' || !chatListEl) return;
+    if (chatSearchQuery) {
+      chatSearchDirty = true;
+      renderChatSearch();
+      return;
+    }
+    var v = getVideo();
+    if (v) renderChatWindow(v);
+  }
+
+  function applyChatViewChange() {
+    saveChatView();
+    chatForceRebuild = true;
+    repaintChat();
+  }
+
+  function applyChatSearch(value) {
+    chatSearchQuery = (value || '').trim();
+    chatSearchDirty = true;
+    if (!chatSearchQuery) {
+      chatSearchCount = 0;
+      chatForceRebuild = true; // возврат к живому окну
+    }
+    repaintChat();
+    updateChatHeaderInfo();
+  }
+
+  // «Читаемые ники»: слишком тёмный цвет автора подтягиваем к светлому,
+  // сохраняя оттенок — как одноимённая настройка Twitch.
+  function readableColor(hex) {
+    if (!chatReadableColors || !hex || hex.charAt(0) !== '#' || hex.length !== 7) return hex;
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return hex;
+    var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b; // 0..255
+    if (lum >= 90) return hex;
+    var k = ((90 - lum) / 255) * 1.8;
+    r = Math.min(255, Math.round(r + (255 - r) * k));
+    g = Math.min(255, Math.round(g + (255 - g) * k));
+    b = Math.min(255, Math.round(b + (255 - b) * k));
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
+  }
+
+  function chatMessageMatchesHighlight(m) {
+    var words = chatHighlightWords.toLowerCase().split(',');
+    var hay = (m.textRaw + ' ' + (m.authorDisplayName || '') + ' ' + m.authorLogin).toLowerCase();
+    for (var i = 0; i < words.length; i++) {
+      var word = words[i].trim();
+      if (word && hay.indexOf(word) !== -1) return true;
+    }
+    return false;
   }
 
   function resetChatState() {
@@ -1876,6 +1972,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatRetryAt = 0;
     chatRenderedTo = 0;
     chatForceRebuild = false;
+    chatSearchQuery = '';
+    chatSearchDirty = false;
+    chatSearchCount = 0;
     removeChatOverlay();
   }
 
@@ -2076,20 +2175,24 @@ export function buildTwitchAudioPayload(origin: string): string {
     headRow.appendChild(chatHeaderInfoEl);
     var gearBtn = makeButton('⚙️', function () {
       chatSettingsOpen = !chatSettingsOpen;
-      if (chatSettingsEl) chatSettingsEl.style.display = chatSettingsOpen ? 'flex' : 'none';
+      if (chatSettingsEl) chatSettingsEl.style.display = chatSettingsOpen ? 'block' : 'none';
       gearBtn.style.background = chatSettingsOpen ? '#9147ff' : 'transparent';
     });
-    gearBtn.title = 'Настройки чата: размер текста и сдвиг';
+    gearBtn.title = 'Настройки чата: размеры, сдвиг, подсветка, поиск';
     gearBtn.style.background = chatSettingsOpen ? '#9147ff' : 'transparent';
     gearBtn.style.padding = '2px 6px';
     headRow.appendChild(gearBtn);
     head.appendChild(headRow);
 
-    // Настройки прямо в шапке чата: размер текста и сдвиг — не нужно тянуться
-    // к панели звука, когда подгоняешь чат по ходу просмотра.
+    // Настройки прямо в шапке чата — не нужно тянуться к панели звука,
+    // когда подгоняешь чат по ходу просмотра.
     chatSettingsEl = el('div', {
-      padding: '2px 10px 8px', display: chatSettingsOpen ? 'flex' : 'none',
-      gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px',
+      padding: '2px 10px 8px', display: chatSettingsOpen ? 'block' : 'none',
+      fontSize: '12px',
+    });
+
+    var sizesRow = el('div', {
+      display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '6px',
     });
     var sizeWrap = el('span', { display: 'inline-flex', gap: '4px', alignItems: 'center' });
     sizeWrap.appendChild(el('span', { opacity: '0.7' }, 'Текст'));
@@ -2097,16 +2200,87 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatSizeLabelEl = el('span', { minWidth: '20px', textAlign: 'center' }, String(chatFontPx));
     sizeWrap.appendChild(chatSizeLabelEl);
     sizeWrap.appendChild(makeButton('+', function () { setChatFont(chatFontPx + 1); }));
-    chatSettingsEl.appendChild(sizeWrap);
-    var offWrap = el('span', { display: 'inline-flex', gap: '4px', alignItems: 'center' });
-    offWrap.appendChild(el('span', { opacity: '0.7' }, 'Сдвиг, c'));
-    offWrap.appendChild(makeButton('−5', function () { setChatOffset(chatOffset - 5); }));
-    offWrap.appendChild(makeButton('−1', function () { setChatOffset(chatOffset - 1); }));
+    sizesRow.appendChild(sizeWrap);
+    var emoteWrap = el('span', { display: 'inline-flex', gap: '4px', alignItems: 'center' });
+    emoteWrap.appendChild(el('span', { opacity: '0.7' }, 'Эмоуты'));
+    emoteWrap.appendChild(makeButton('−', function () { setChatEmoteScale(chatEmoteScale - 0.25); }));
+    chatEmoteLabelEl = el('span', { minWidth: '34px', textAlign: 'center' }, '×' + chatEmoteScale);
+    emoteWrap.appendChild(chatEmoteLabelEl);
+    emoteWrap.appendChild(makeButton('+', function () { setChatEmoteScale(chatEmoteScale + 0.25); }));
+    sizesRow.appendChild(emoteWrap);
+    chatSettingsEl.appendChild(sizesRow);
+
+    var offRow = el('div', {
+      display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '6px',
+    });
+    offRow.appendChild(el('span', { opacity: '0.7' }, 'Сдвиг, c'));
+    offRow.appendChild(makeButton('−5', function () { setChatOffset(chatOffset - 5); }));
+    offRow.appendChild(makeButton('−1', function () { setChatOffset(chatOffset - 1); }));
     chatHeadOffsetEl = el('span', { minWidth: '34px', textAlign: 'center' }, fmtChatOffset());
-    offWrap.appendChild(chatHeadOffsetEl);
-    offWrap.appendChild(makeButton('+1', function () { setChatOffset(chatOffset + 1); }));
-    offWrap.appendChild(makeButton('+5', function () { setChatOffset(chatOffset + 5); }));
-    chatSettingsEl.appendChild(offWrap);
+    offRow.appendChild(chatHeadOffsetEl);
+    offRow.appendChild(makeButton('+1', function () { setChatOffset(chatOffset + 1); }));
+    offRow.appendChild(makeButton('+5', function () { setChatOffset(chatOffset + 5); }));
+    chatSettingsEl.appendChild(offRow);
+
+    var togglesRow = el('div', {
+      display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '6px',
+    });
+    togglesRow.appendChild(makeCheck('Время', chatShowTime, function (on) {
+      chatShowTime = on; applyChatViewChange();
+    }));
+    togglesRow.appendChild(makeCheck('Бейджи', chatShowBadges, function (on) {
+      chatShowBadges = on; applyChatViewChange();
+    }));
+    togglesRow.appendChild(makeCheck('Чередование', chatZebra, function (on) {
+      chatZebra = on; applyChatViewChange();
+    }));
+    togglesRow.appendChild(makeCheck('Читаемые ники', chatReadableColors, function (on) {
+      chatReadableColors = on; applyChatViewChange();
+    }));
+    togglesRow.appendChild(makeCheck('Удалённые', chatShowDeleted, function (on) {
+      chatShowDeleted = on; applyChatViewChange();
+    }));
+    chatSettingsEl.appendChild(togglesRow);
+
+    var hlRow = el('div', {
+      display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '6px',
+    });
+    hlRow.appendChild(el('span', { opacity: '0.7', whiteSpace: 'nowrap' }, 'Выделять'));
+    chatHighlightInputEl = el('input', {
+      flex: '1', minWidth: '0', background: '#0e0e10', color: '#efeff1',
+      border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 6px',
+    });
+    chatHighlightInputEl.placeholder = 'слова через запятую';
+    chatHighlightInputEl.title = 'Сообщения с этими словами (или от этих ников) подсвечиваются фиолетовым';
+    chatHighlightInputEl.value = chatHighlightWords;
+    chatHighlightInputEl.addEventListener('change', function () {
+      chatHighlightWords = chatHighlightInputEl.value.trim();
+      applyChatViewChange();
+    });
+    hlRow.appendChild(chatHighlightInputEl);
+    chatSettingsEl.appendChild(hlRow);
+
+    var searchRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center' });
+    searchRow.appendChild(el('span', { opacity: '0.7', whiteSpace: 'nowrap' }, 'Поиск'));
+    chatSearchInputEl = el('input', {
+      flex: '1', minWidth: '0', background: '#0e0e10', color: '#efeff1',
+      border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 6px',
+    });
+    chatSearchInputEl.placeholder = 'ник или текст';
+    chatSearchInputEl.title = 'Показать все сообщения с совпадением; клик по времени перематывает VOD';
+    chatSearchInputEl.value = chatSearchQuery;
+    chatSearchInputEl.addEventListener('input', function () {
+      applyChatSearch(chatSearchInputEl.value);
+    });
+    searchRow.appendChild(chatSearchInputEl);
+    var searchClear = makeButton('✕', function () {
+      if (chatSearchInputEl) chatSearchInputEl.value = '';
+      applyChatSearch('');
+    });
+    searchClear.title = 'Сбросить поиск и вернуться к живому чату';
+    searchRow.appendChild(searchClear);
+    chatSettingsEl.appendChild(searchRow);
+
     head.appendChild(chatSettingsEl);
     chatOverlay.appendChild(head);
 
@@ -2183,7 +2357,10 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatHeaderInfoEl = null;
     chatSettingsEl = null;
     chatSizeLabelEl = null;
+    chatEmoteLabelEl = null;
     chatHeadOffsetEl = null;
+    chatHighlightInputEl = null;
+    chatSearchInputEl = null;
     chatPinned = true;
   }
 
@@ -2217,7 +2394,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     img.alt = name;
     img.title = name;
     img.loading = 'lazy';
-    img.style.height = '1.55em'; // масштабируется вместе с размером текста
+    // Масштабируется и с размером текста (em), и настройкой «Эмоуты».
+    img.style.height = chatEmoteScale + 'em';
     img.style.verticalAlign = 'middle';
     img.style.margin = '-0.25em 0.08em';
     parent.appendChild(img);
@@ -2239,6 +2417,20 @@ export function buildTwitchAudioPayload(origin: string): string {
           buf = '';
         }
         appendChatEmote(parent, hit, parts[i]);
+      } else if (parts[i] &&
+          (parts[i].indexOf('http://') === 0 || parts[i].indexOf('https://') === 0)) {
+        if (buf) {
+          parent.appendChild(document.createTextNode(buf));
+          buf = '';
+        }
+        var link = document.createElement('a');
+        link.href = parts[i];
+        link.textContent = parts[i];
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.color = '#bf94ff';
+        link.style.textDecoration = 'underline';
+        parent.appendChild(link);
       } else {
         buf += parts[i];
       }
@@ -2269,7 +2461,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     appendChatText(parent, cps.slice(cursor).join(''));
   }
 
-  function buildChatRow(m) {
+  function buildChatRow(m, idx) {
     var row = el('div', {
       padding: '3px 12px', overflowWrap: 'anywhere', wordBreak: 'break-word',
       lineHeight: '1.5',
@@ -2277,30 +2469,41 @@ export function buildTwitchAudioPayload(origin: string): string {
     row.className = 'tsr-chat-row';
     row.title = 'Место на VOD: ' + fmtTime(Math.max(0, m.vodTime)) +
       (m.isDeleted ? ' · сообщение удалено модератором' : '');
+    // Приоритет фона: удалённое > подсветка слов > чередование.
+    if (chatZebra && typeof idx === 'number' && idx % 2 === 1) {
+      row.style.background = 'rgba(255,255,255,0.035)';
+    }
+    if (chatHighlightWords && chatMessageMatchesHighlight(m)) {
+      row.style.background = 'rgba(145,71,255,0.16)';
+      row.style.borderLeft = '2px solid #9147ff';
+    }
     if (m.isDeleted) {
       row.style.background = 'rgba(229,72,77,0.10)';
       row.style.borderLeft = '2px solid rgba(229,72,77,0.85)';
     }
-    var ts = el('span', {
-      display: 'inline-block', minWidth: '3em', marginRight: '0.4em',
-      fontSize: '0.8em', opacity: '0.5', fontVariantNumeric: 'tabular-nums',
-    }, fmtTime(Math.max(0, m.vodTime)));
-    ts.className = 'tsr-chat-ts';
-    ts.title = 'Перемотать VOD к этому сообщению';
-    ts.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      var vv = getVideo();
-      if (vv) vv.currentTime = Math.max(0, m.vodTime - 1);
-    });
-    row.appendChild(ts);
-    appendChatBadges(row, m.badges);
+    if (chatShowTime) {
+      var ts = el('span', {
+        display: 'inline-block', minWidth: '3em', marginRight: '0.4em',
+        fontSize: '0.8em', opacity: '0.5', fontVariantNumeric: 'tabular-nums',
+      }, fmtTime(Math.max(0, m.vodTime)));
+      ts.className = 'tsr-chat-ts';
+      ts.title = 'Перемотать VOD к этому сообщению';
+      ts.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var vv = getVideo();
+        if (vv) vv.currentTime = Math.max(0, m.vodTime - 1);
+      });
+      row.appendChild(ts);
+    }
+    if (chatShowBadges) appendChatBadges(row, m.badges);
+    var nameColor = readableColor(m.authorColor) || '#adadb8';
     var author = el('span', { fontWeight: '700' }, m.authorDisplayName || m.authorLogin);
-    author.style.color = m.authorColor || '#adadb8';
+    author.style.color = nameColor;
     row.appendChild(author);
     row.appendChild(document.createTextNode(m.isAction ? ' ' : ': '));
     if (m.isAction) {
       row.style.fontStyle = 'italic';
-      row.style.color = m.authorColor || '#adadb8';
+      row.style.color = nameColor;
     }
     appendChatBody(row, m);
     if (m.isDeleted) {
@@ -2364,7 +2567,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (rebuild) {
       chatListEl.innerHTML = '';
       for (var i = Math.max(0, count - CHAT_MAX_VISIBLE); i < count; i++) {
-        chatListEl.appendChild(buildChatRow(chatMessages[i]));
+        if (!chatShowDeleted && chatMessages[i].isDeleted) continue;
+        chatListEl.appendChild(buildChatRow(chatMessages[i], i));
       }
       chatRenderedTo = count;
       chatListEl.scrollTop = chatListEl.scrollHeight;
@@ -2374,7 +2578,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     }
 
     for (var j = chatRenderedTo; j < count; j++) {
-      chatListEl.appendChild(buildChatRow(chatMessages[j]));
+      if (!chatShowDeleted && chatMessages[j].isDeleted) continue;
+      chatListEl.appendChild(buildChatRow(chatMessages[j], j));
     }
     chatRenderedTo = count;
     while (chatListEl.childNodes.length > CHAT_MAX_VISIBLE) {
@@ -2383,10 +2588,37 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (chatPinned) chatListEl.scrollTop = chatListEl.scrollHeight;
   }
 
+  // Режим поиска: вместо живого окна показываем все совпадения по нику или
+  // тексту (последние 200). Клик по времени сообщения перематывает VOD.
+  function renderChatSearch() {
+    if (!chatListEl || !chatSearchDirty) return;
+    chatSearchDirty = false;
+    var q = chatSearchQuery.toLowerCase();
+    var hits = [];
+    for (var i = 0; i < chatMessages.length; i++) {
+      var m = chatMessages[i];
+      if (!chatShowDeleted && m.isDeleted) continue;
+      var hay = ((m.authorDisplayName || '') + ' ' + m.authorLogin + ' ' + m.textRaw).toLowerCase();
+      if (hay.indexOf(q) === -1) continue;
+      hits.push(i);
+    }
+    chatSearchCount = hits.length;
+    chatListEl.innerHTML = '';
+    for (var h = Math.max(0, hits.length - 200); h < hits.length; h++) {
+      chatListEl.appendChild(buildChatRow(chatMessages[hits[h]], h));
+    }
+    chatForceRebuild = true; // выход из поиска пересоберёт живое окно
+    chatListEl.scrollTop = chatListEl.scrollHeight;
+    updateChatHeaderInfo();
+  }
+
   function updateChatHeaderInfo() {
     if (!chatHeaderInfoEl) return;
     var text;
-    if (chatLoading || chatMatchPending) {
+    if (chatSearchQuery) {
+      text = 'найдено: ' + chatSearchCount +
+        (chatSearchCount > 200 ? ' · показаны последние 200' : '');
+    } else if (chatLoading || chatMatchPending) {
       text = 'загружаю…';
     } else if (chatMessages.length) {
       text = chatMessages.length + ' сообщ.' +
@@ -2407,6 +2639,10 @@ export function buildTwitchAudioPayload(origin: string): string {
     updateChatHeaderInfo();
     var v = getVideo();
     if (!v) return;
+    if (chatSearchQuery) {
+      renderChatSearch();
+      return; // в поиске живое окно и автоскролл не трогаем
+    }
     renderChatWindow(v);
     // Эмоуты-картинки дозагружаются и меняют высоту списка после автоскролла;
     // пока зритель «прилип» к низу, каждый тик возвращаем его на самый низ.
@@ -2432,6 +2668,21 @@ export function buildTwitchAudioPayload(origin: string): string {
     }, label);
     button.addEventListener('click', onClick);
     return button;
+  }
+
+  function makeCheck(label, checked, onChange) {
+    var wrap = el('label', {
+      display: 'inline-flex', gap: '4px', alignItems: 'center', cursor: 'pointer',
+    });
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = checked;
+    box.style.accentColor = '#9147ff';
+    box.style.margin = '0';
+    box.addEventListener('change', function () { onChange(box.checked); });
+    wrap.appendChild(box);
+    wrap.appendChild(el('span', { opacity: '0.85' }, label));
+    return wrap;
   }
 
   function applyCollapsed() {
