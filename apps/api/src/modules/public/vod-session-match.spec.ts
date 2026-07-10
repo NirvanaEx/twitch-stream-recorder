@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getSessionMediaWindow, matchSessionsToVod, type VodMatchSession } from "./vod-session-match";
+import {
+  annotateBroadcastParts,
+  getSessionMediaWindow,
+  matchSessionsToVod,
+  type VodMatchSession,
+} from "./vod-session-match";
 
 type Fixture = VodMatchSession & { id: string };
 
@@ -60,4 +65,33 @@ test("keeps the caller's newest fallback when Twitch metadata has no date", () =
 
   assert.equal(result.best?.id, "newest");
   assert.deepEqual(result.group.map((item) => item.id), ["newest"]);
+});
+
+test("numbers restart fragments by media order and leaves lone sessions unlabeled", () => {
+  // Listing endpoints return newest-first — part numbers must not follow it.
+  const third = session("third", 300, 60);
+  const second = session("second", 150, 100);
+  const first = session("first", 0, 120);
+  const otherBroadcast = session(
+    "lone",
+    0,
+    60,
+    new Date(vodStart.getTime() + 8 * 60 * 60 * 1000),
+  );
+
+  const parts = annotateBroadcastParts([third, second, first, otherBroadcast], () => "chan");
+
+  assert.deepEqual(parts.get("first"), { partIndex: 1, partCount: 3 });
+  assert.deepEqual(parts.get("second"), { partIndex: 2, partCount: 3 });
+  assert.deepEqual(parts.get("third"), { partIndex: 3, partCount: 3 });
+  assert.equal(parts.get("lone"), undefined);
+});
+
+test("does not group same-time broadcasts from different channels", () => {
+  const a = session("a", 0, 60);
+  const b = session("b", 100, 60);
+
+  const parts = annotateBroadcastParts([a, b], (item) => (item.id === "a" ? "one" : "two"));
+
+  assert.equal(parts.size, 0);
 });

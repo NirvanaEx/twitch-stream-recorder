@@ -212,6 +212,7 @@ type Dictionary = {
     copyFailed: string;
     serverNote: string;
     updateNote: string;
+    partLabel: string;
     showScript: string;
     hideScript: string;
     tracksTitle: string;
@@ -549,6 +550,7 @@ const dictionaries: Record<Locale, Dictionary> = {
         "Скрипт обращается к серверу по адресу {origin}. Этот адрес должен быть доступен из браузера, в котором вы смотрите Twitch — если смотрите не из домашней сети, откройте (пробросьте) порт наружу.",
       updateNote:
         "Устанавливается лёгкий скрипт-загрузчик: при каждом открытии Twitch он сам подтягивает свежую версию скрипта с этого сервера — обновлять вручную ничего не нужно. Если раньше вы вставляли скрипт в Tampermonkey вручную, удалите тот старый скрипт, иначе панель может остаться старой версии.",
+      partLabel: "часть {n}/{m}",
       showScript: "Показать скрипт",
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
@@ -886,6 +888,7 @@ const dictionaries: Record<Locale, Dictionary> = {
         "The script talks to the server at {origin}. That address must be reachable from the browser where you watch Twitch — forward the port if you are outside your home network.",
       updateNote:
         "A lightweight loader script is installed: every time Twitch is opened it pulls the latest script version from this server — no manual updates ever. If you previously pasted the script into Tampermonkey by hand, delete that old script, otherwise the panel may keep running the outdated version.",
+      partLabel: "part {n}/{m}",
       showScript: "Show script",
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",

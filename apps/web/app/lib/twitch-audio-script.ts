@@ -294,8 +294,13 @@ export function buildTwitchAudioPayload(origin: string): string {
     var dateText = date
       ? date.toLocaleDateString() + ' ' + date.toLocaleTimeString().slice(0, 5)
       : '';
+    // Куски одного эфира (рекордер перезапускался) различимы только номером:
+    // дата и название у них одинаковые.
+    var partText = track.partIndex && track.partCount
+      ? ' · ч.' + track.partIndex + '/' + track.partCount
+      : '';
     return (track.channelDisplayName || track.channelLogin) + ' — ' + dateText +
-      fmtDuration(track.durationSec) + (track.title ? ' — ' + track.title : '');
+      fmtDuration(track.durationSec) + partText + (track.title ? ' — ' + track.title : '');
   }
 
   function renderOptions() {
