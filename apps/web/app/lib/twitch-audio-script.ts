@@ -1286,12 +1286,19 @@ export function buildTwitchAudioPayload(origin: string): string {
   }
 
   // ---- Автоподгон сдвига по оригинальной дорожке VOD ---------------------
-  // Пока играют оба звука, скрипт ~15 секунд снимает огибающие громкости
-  // оригинала (captureStream плеера) и записи, взаимной корреляцией находит
+  // Пока играют оба звука, скрипт снимает огибающие громкости оригинала
+  // (captureStream плеера) и записи, взаимной корреляцией находит
   // запаздывание и правит сдвиг сам. Работает только там, где оригинал не
   // заглушён. Точность — десятки миллисекунд.
+  // Найти рассинхрон в X секунд можно, только если окно замера длиннее X
+  // (плюс общий кусок для сравнения): слушаем минимум CALIBRATION_SEC и,
+  // пока уверенного совпадения нет, длим замер до CALIBRATION_MAX_SEC,
+  // расширяя поиск вплоть до ±CALIBRATION_MAX_LAG_SEC.
   var CALIBRATION_SEC = 15;
-  var CALIBRATION_MAX_LAG_SEC = 10;
+  var CALIBRATION_MAX_SEC = 50;
+  var CALIBRATION_STEP_SEC = 5; // как часто пробуем сопоставить снова
+  var CALIBRATION_MAX_LAG_SEC = 30;
+  var CALIBRATION_OVERLAP_SEC = 12; // общий кусок звука, нужный корреляции
   var calibrating = false;
   var calibrationCleanup = null;
   var syncButtonEl = null;
@@ -1350,10 +1357,10 @@ export function buildTwitchAudioPayload(origin: string): string {
     return out;
   }
 
-  // Возвращает { lagSec, confidence }: на сколько секунд события в звуке
-  // записи происходят ПОЗЖЕ тех же событий в оригинале (положительное —
-  // запись отстаёт, сдвиг надо увеличить).
-  function estimateLag(envAudio, envVideo, hopSec) {
+  // Возвращает { lagSec, confidence, prominence }: на сколько секунд события
+  // в звуке записи происходят ПОЗЖЕ тех же событий в оригинале (положительное
+  // — запись отстаёт, сдвиг надо увеличить). Ищет в пределах ±maxLagSec.
+  function estimateLag(envAudio, envVideo, hopSec, maxLagSec) {
     var n = Math.min(envAudio.length, envVideo.length);
     if (n < 40) return null;
 
@@ -1393,7 +1400,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       v[q] -= avgV;
     }
 
-    var maxLag = Math.min(Math.round(CALIBRATION_MAX_LAG_SEC / hopSec), n - 20);
+    var maxLag = Math.min(Math.round(maxLagSec / hopSec), n - 20);
     var corrs = [];
     var best = 0;
     var bestLag = 0;
@@ -1433,6 +1440,14 @@ export function buildTwitchAudioPayload(origin: string): string {
     return { lagSec: bestLag * hopSec, confidence: best, prominence: prominence };
   }
 
+  // Результату верим, только если пик корреляции высокий, острый и НЕ у края
+  // диапазона поиска: пик у края обычно значит, что настоящий рассинхрон ещё
+  // дальше — лучше послушать дольше, чем применить мусор.
+  function calibrationConfident(result, maxLagSec) {
+    return !!result && result.confidence >= 0.25 && result.prominence >= 1.5 &&
+      Math.abs(result.lagSec) <= maxLagSec - 1;
+  }
+
   function startOffsetCalibration() {
     if (calibrating) return;
     var v = getVideo();
@@ -1458,14 +1473,33 @@ export function buildTwitchAudioPayload(origin: string): string {
     }
 
     // В окне калибровки оригинал должен звучать, иначе сравнивать не с чем.
+    // Продлевать замер можно только до ближайшей помехи: заглушённого
+    // отрезка, конца VOD или конца записанной части.
     var winStart = v.currentTime;
     var winEnd = winStart + CALIBRATION_SEC + 2;
+    var listenBudgetSec = CALIBRATION_MAX_SEC;
     for (var s = 0; s < mutedSegments.length; s++) {
       if (mutedSegments[s].offset < winEnd &&
           mutedSegments[s].offset + mutedSegments[s].duration > winStart) {
         setStatus('Здесь оригинал Twitch заглушён — перемотайте на место со звуком.');
         return;
       }
+      if (mutedSegments[s].offset >= winEnd) {
+        listenBudgetSec = Math.min(listenBudgetSec, mutedSegments[s].offset - winStart - 2);
+      }
+    }
+    if (v.duration && isFinite(v.duration)) {
+      listenBudgetSec = Math.min(listenBudgetSec, v.duration - winStart - 2);
+    }
+    if (trackDurationSec) {
+      listenBudgetSec = Math.min(
+        listenBudgetSec,
+        getRecStartInVod() + trackDurationSec - winStart - 2,
+      );
+    }
+    if (listenBudgetSec < CALIBRATION_SEC) {
+      setStatus('Слишком близко к концу записи или заглушённому отрезку — перемотайте назад.');
+      return;
     }
 
     var capture = null;
@@ -1512,7 +1546,12 @@ export function buildTwitchAudioPayload(origin: string): string {
     var HOP = 1024;
     var hopSec = HOP / audioCtx.sampleRate;
     var skipHops = Math.ceil(0.7 / hopSec); // даём сику устаканиться
-    var targetHops = skipHops + Math.ceil(CALIBRATION_SEC / hopSec);
+    var nextTrySec = CALIBRATION_SEC; // когда пробуем сопоставить в следующий раз
+    // До какого рассинхрона этот замер сможет дотянуться при полном бюджете.
+    var searchCapSec = Math.max(
+      2,
+      Math.min(CALIBRATION_MAX_LAG_SEC, listenBudgetSec - CALIBRATION_OVERLAP_SEC),
+    );
     var envV = [];
     var envA = [];
 
@@ -1522,11 +1561,11 @@ export function buildTwitchAudioPayload(origin: string): string {
     v.addEventListener('seeked', onSeeked);
     var watchdog = setTimeout(function () {
       abortCalibration('Автоподгон прерван по таймауту.');
-    }, (CALIBRATION_SEC + 15) * 1000);
+    }, (CALIBRATION_MAX_SEC + 20) * 1000);
 
     calibrating = true;
     setSyncButtonLabel('Слушаю оба звука…');
-    setStatus('Автоподгон: сравниваю с оригиналом… 0/' + CALIBRATION_SEC + ' c');
+    setStatus('Автоподгон: сравниваю с оригиналом… 0 c');
 
     calibrationCleanup = function () {
       calibrating = false;
@@ -1546,25 +1585,23 @@ export function buildTwitchAudioPayload(origin: string): string {
       if (prevMode !== 'both') applyMode(prevMode);
     };
 
-    function finishCalibration() {
-      var envAudio = envA.slice(skipHops);
-      var envVideo = envV.slice(skipHops);
+    function finishCalibration(result, lagRangeSec) {
       var appliedOffset = offset; // сдвиг, с которым играло окно замера
       abortCalibration();
       // Замер довели до конца — авторежим эту дорожку больше не трогает.
       autoCalState = { key: autoCalKey(), attempts: AUTO_CAL_MAX_TRIES };
 
-      var result = estimateLag(envAudio, envVideo, hopSec);
       if (!result) {
         setSyncInfo('Расхождение: не измерено — звук слишком тихий.');
         setStatus('Звук слишком тихий для сравнения — прибавьте громкость Twitch и повторите.');
         return;
       }
-      if (result.confidence < 0.25 || result.prominence < 1.5) {
-        setSyncInfo('Расхождение: измерить не удалось (слабое совпадение).');
+      if (!calibrationConfident(result, lagRangeSec)) {
+        setSyncInfo('Расхождение: не найдено в пределах ±' + Math.round(lagRangeSec) + ' c.');
         setStatus(
-          'Не удалось уверенно сопоставить дорожки (совпадение ' +
-          Math.round(result.confidence * 100) + '%) — подгоните вручную.',
+          'Совпадение не нашлось (лучшее ' + Math.round(result.confidence * 100) +
+          '%). Если рассинхрон больше ±' + Math.round(lagRangeSec) +
+          ' c — выставьте сдвиг примерно вручную и запустите замер ещё раз.',
         );
         return;
       }
@@ -1608,10 +1645,23 @@ export function buildTwitchAudioPayload(origin: string): string {
         envV.push(Math.sqrt(sumV / HOP));
         envA.push(Math.sqrt(sumA / HOP));
       }
-      var doneSec = Math.max(0, Math.round((envV.length - skipHops) * hopSec));
-      setStatus('Автоподгон: сравниваю с оригиналом… ' + Math.min(doneSec, CALIBRATION_SEC) + '/' + CALIBRATION_SEC + ' c');
-      if (envV.length >= targetHops) {
-        finishCalibration();
+      var usableSec = (envV.length - skipHops) * hopSec;
+      setStatus(
+        'Автоподгон: сравниваю с оригиналом… ' + Math.max(0, Math.floor(usableSec)) +
+        ' c · ищу расхождение до ±' + Math.floor(searchCapSec) + ' c',
+      );
+      if (usableSec >= nextTrySec || usableSec >= listenBudgetSec) {
+        nextTrySec = usableSec + CALIBRATION_STEP_SEC;
+        // Диапазон поиска растёт вместе с окном: для рассинхрона X секунд
+        // нужно X + CALIBRATION_OVERLAP_SEC секунд записи.
+        var rangeSec = Math.max(
+          2,
+          Math.min(CALIBRATION_MAX_LAG_SEC, usableSec - CALIBRATION_OVERLAP_SEC),
+        );
+        var result = estimateLag(envA.slice(skipHops), envV.slice(skipHops), hopSec, rangeSec);
+        if (calibrationConfident(result, rangeSec) || usableSec >= listenBudgetSec) {
+          finishCalibration(result, rangeSec);
+        }
       }
     };
     return true;
@@ -1641,6 +1691,14 @@ export function buildTwitchAudioPayload(origin: string): string {
           ready = false;
           break;
         }
+      }
+      // И до конца VOD/части должно оставаться хотя бы минимальное окно.
+      if (ready && v.duration && isFinite(v.duration) && winEnd > v.duration) {
+        ready = false;
+      }
+      if (ready && trackDurationSec &&
+          winEnd > getRecStartInVod() + trackDurationSec) {
+        ready = false;
       }
     }
     if (!ready) {
@@ -2460,13 +2518,15 @@ export function buildTwitchAudioPayload(origin: string): string {
     syncButtonEl = makeButton(SYNC_BUTTON_LABEL, startOffsetCalibration);
     syncButtonEl.style.flex = '1';
     syncButtonEl.title =
-      'Сравнивает звук записи с оригинальной дорожкой VOD (~' + CALIBRATION_SEC +
-      ' секунд, слышны оба звука) и выставляет сдвиг сам. Нужно место, где оригинал не заглушён.';
+      'Сравнивает звук записи с оригинальной дорожкой VOD (' + CALIBRATION_SEC + '–' +
+      CALIBRATION_MAX_SEC + ' секунд, слышны оба звука) и выставляет сдвиг сам: находит ' +
+      'рассинхрон до ±' + CALIBRATION_MAX_LAG_SEC + ' c. Нужно место, где оригинал не заглушён.';
     syncRow.appendChild(syncButtonEl);
     autoCalBtnEl = makeButton('Авто', toggleAutoCal);
     autoCalBtnEl.title =
-      'Автозамер: после запуска дорожки скрипт сам сравнит звук с оригиналом (~' +
-      CALIBRATION_SEC + ' секунд слышны оба) и поправит сдвиг. Выкл — только вручную.';
+      'Автозамер: после запуска дорожки скрипт сам сравнит звук с оригиналом (' +
+      CALIBRATION_SEC + '–' + CALIBRATION_MAX_SEC +
+      ' секунд слышны оба) и поправит сдвиг. Выкл — только вручную.';
     syncRow.appendChild(autoCalBtnEl);
     updateAutoCalButton();
     bodyEl.appendChild(syncRow);
