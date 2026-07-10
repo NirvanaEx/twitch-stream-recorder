@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.spec.ts\"",
     "start": "node dist/main.js",
     "start:dev": "node scripts/dev-runner.mjs"
   },

@@ -17,7 +17,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
   return `// ==UserScript==
 // @name         TSR: звук записи для Twitch VOD
 // @namespace    tsr-twitch-audio
-// @version      2.0
+// @version      2.1
 // @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch, и заменяет чат VOD на записанный: видны удалённые и самые первые сообщения, сдвиг чата подстраивается отдельно. Чат работает и без аудиодорожки — с оригинальным звуком. Громкость до 300% с компрессором.
 // @match        https://www.twitch.tv/*
 // @grant        GM_xmlhttpRequest
@@ -313,6 +313,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     GM_xmlhttpRequest({
       method: 'GET',
       url: SERVER + '/api/public/streams/audio-tracks',
+      timeout: 15000,
       onload: function (res) {
         try {
           tracks = (JSON.parse(res.responseText).items) || [];
@@ -324,6 +325,9 @@ export function buildTwitchAudioUserscript(origin: string): string {
       },
       onerror: function () {
         setStatus('Сервер недоступен: ' + SERVER);
+      },
+      ontimeout: function () {
+        setStatus('Сервер не ответил вовремя: ' + SERVER);
       },
     });
   }
@@ -349,6 +353,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     GM_xmlhttpRequest({
       method: 'POST',
       url: GQL_URL,
+      timeout: 15000,
       headers: { 'Client-ID': GQL_CLIENT_ID, 'Content-Type': 'application/json' },
       data: JSON.stringify({ query: query, variables: { id: vodId } }),
       onload: function (res) {
@@ -402,6 +407,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
         resolveSelection();
         resolveChatSelection();
       },
+      ontimeout: function () {
+        matchPending = false;
+        resolveSelection();
+        resolveChatSelection();
+      },
     });
   }
 
@@ -416,6 +426,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     GM_xmlhttpRequest({
       method: 'GET',
       url: url,
+      timeout: 15000,
       onload: function (res) {
         try {
           chatSessions = (JSON.parse(res.responseText).items) || [];
@@ -426,6 +437,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
         resolveChatSelection();
       },
       onerror: function () {
+        chatMatchPending = false;
+        resolveChatSelection();
+      },
+      ontimeout: function () {
         chatMatchPending = false;
         resolveChatSelection();
       },
@@ -440,6 +455,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     GM_xmlhttpRequest({
       method: 'GET',
       url: url,
+      timeout: 15000,
       onload: function (res) {
         try {
           var payload = JSON.parse(res.responseText);
@@ -455,6 +471,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
         resolveSelection();
       },
       onerror: function () {
+        matchPending = false;
+        resolveSelection();
+      },
+      ontimeout: function () {
         matchPending = false;
         resolveSelection();
       },
@@ -1104,9 +1124,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
     var v = getVideo();
     if (!v || mode === 'twitch' || !currentTrackId) return;
     bindVideo(v);
-    // Twitch's player keeps resetting video.muted on its own events, which is
-    // why the original audio leaks back in record mode — re-assert it here.
-    if (mode === 'record' && !v.muted) v.muted = true;
+    // In "both" mode Twitch must stay audible at all times. In record-only
+    // mode it is muted below only after the matching recording is playable;
+    // gaps between fragments and loading failures fall back to Twitch instead
+    // of producing silence.
     if (mode === 'both' && v.muted) v.muted = false;
     if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
 
@@ -1133,6 +1154,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (target < 0 || (trackDurationSec && target > trackDurationSec + 1)) {
       // Outside the recorded range — nothing to play here.
       if (!audio.paused) audio.pause();
+      if (mode === 'record' && v.muted) v.muted = false;
+      return;
+    }
+    if (audio.error) {
+      if (!audio.paused) audio.pause();
+      if (mode === 'record' && v.muted) v.muted = false;
       return;
     }
     if (progressiveState) {
@@ -1145,7 +1172,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
           Math.min(st.total - 1, Math.floor((target / trackDurationSec) * st.total)),
         );
       }
-      if (!st.blobHave) return; // первые куски ещё в пути
+      if (!st.blobHave) {
+        if (mode === 'record' && v.muted) v.muted = false;
+        return; // первые куски ещё в пути
+      }
       if (!progressiveWindowReady(st, true)) {
         if (progressiveWindowReady(st, false)) {
           // Нужная область уже скачана, но плеер держит старый blob — меняем.
@@ -1153,10 +1183,18 @@ export function buildTwitchAudioUserscript(origin: string): string {
         } else {
           // Ещё не скачано: держим на паузе, загрузчик уже переключился сюда.
           if (!audio.paused) audio.pause();
+          if (mode === 'record' && v.muted) v.muted = false;
           return;
         }
       }
     }
+    if (audio.readyState < 2) {
+      if (mode === 'record' && v.muted) v.muted = false;
+      return;
+    }
+    // Twitch's player resets video.muted on some of its own events, so keep
+    // asserting record-only mode while our replacement audio is available.
+    if (mode === 'record' && !v.muted) v.muted = true;
     if ((force || Math.abs(audio.currentTime - target) > MAX_DRIFT) && isFinite(target) && target >= 0) {
       audio.currentTime = target;
     }
@@ -1356,6 +1394,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
         GM_xmlhttpRequest({
           method: 'GET',
           url: SERVER + '/api/public/streams/' + sessionId + '/chat-replay',
+          timeout: 15000,
           onload: function (res) {
             if (token !== chatLoadToken) return;
             try {
@@ -1366,6 +1405,11 @@ export function buildTwitchAudioUserscript(origin: string): string {
             done();
           },
           onerror: function () {
+            if (token !== chatLoadToken) return;
+            failures += 1;
+            done();
+          },
+          ontimeout: function () {
             if (token !== chatLoadToken) return;
             failures += 1;
             done();
@@ -1397,6 +1441,12 @@ export function buildTwitchAudioUserscript(origin: string): string {
         var dedupeKey = msg.providerMessageId || (buckets[i].sessionId + ':' + msg.id);
         if (seen[dedupeKey]) continue;
         seen[dedupeKey] = true;
+        var rawText = msg.textRaw || '';
+        var isAction = rawText.indexOf('\u0001ACTION ') === 0;
+        if (isAction) {
+          rawText = rawText.slice(8);
+          if (rawText.charAt(rawText.length - 1) === '\u0001') rawText = rawText.slice(0, -1);
+        }
         merged.push({
           sessionId: buckets[i].sessionId,
           tsMs: msg.messageTimestamp ? (new Date(msg.messageTimestamp).getTime() || 0) : 0,
@@ -1404,8 +1454,10 @@ export function buildTwitchAudioUserscript(origin: string): string {
           authorLogin: msg.authorLogin || '',
           authorDisplayName: msg.authorDisplayName || null,
           authorColor: msg.authorColor || null,
-          textRaw: msg.textRaw || '',
+          textRaw: rawText,
           emotes: msg.emotes || null,
+          badges: msg.badges || null,
+          isAction: isAction,
           isDeleted: Boolean(msg.isDeleted),
           vodTime: 0,
         });
@@ -1435,21 +1487,37 @@ export function buildTwitchAudioUserscript(origin: string): string {
   }
 
   function findChatHost() {
+    var best = null;
+    var bestArea = 0;
     for (var i = 0; i < CHAT_HOST_SELECTORS.length; i++) {
-      var host = document.querySelector(CHAT_HOST_SELECTORS[i]);
-      if (host) return host;
+      var nodes = document.querySelectorAll(CHAT_HOST_SELECTORS[i]);
+      for (var n = 0; n < nodes.length; n++) {
+        var host = nodes[n];
+        var rect = host.getBoundingClientRect();
+        var style = getComputedStyle(host);
+        if (
+          rect.width < 160 || rect.height < 120 ||
+          style.display === 'none' || style.visibility === 'hidden'
+        ) continue;
+        var area = rect.width * rect.height;
+        if (area > bestArea) {
+          best = host;
+          bestArea = area;
+        }
+      }
     }
-    return null;
+    return best;
   }
 
   function ensureChatOverlay() {
-    if (chatOverlay && chatOverlay.isConnected) return true;
+    var host = findChatHost();
+    if (chatOverlay && chatOverlay.isConnected && chatOverlay.parentNode === host) return true;
+    if (chatOverlay && chatOverlay.parentNode) chatOverlay.parentNode.removeChild(chatOverlay);
     chatOverlay = null;
     chatListEl = null;
     chatJumpEl = null;
     chatHeaderInfoEl = null;
 
-    var host = findChatHost();
     if (!host) return false; // чат скрыт (fullscreen и т.п.) — попробуем позже
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
 
@@ -1603,10 +1671,19 @@ export function buildTwitchAudioUserscript(origin: string): string {
       row.style.background = 'rgba(229,72,77,0.10)';
       row.style.borderLeft = '2px solid rgba(229,72,77,0.85)';
     }
+    row.appendChild(el('span', {
+      display: 'inline-block', minWidth: '36px', marginRight: '6px',
+      fontSize: '10px', opacity: '0.55', fontVariantNumeric: 'tabular-nums',
+    }, fmtTime(Math.max(0, m.vodTime))));
+    appendChatBadges(row, m.badges);
     var author = el('span', { fontWeight: '700' }, m.authorDisplayName || m.authorLogin);
     author.style.color = m.authorColor || '#adadb8';
     row.appendChild(author);
-    row.appendChild(document.createTextNode(': '));
+    row.appendChild(document.createTextNode(m.isAction ? ' ' : ': '));
+    if (m.isAction) {
+      row.style.fontStyle = 'italic';
+      row.style.color = m.authorColor || '#adadb8';
+    }
     appendChatBody(row, m);
     if (m.isDeleted) {
       row.appendChild(el('span', {
@@ -1614,6 +1691,28 @@ export function buildTwitchAudioUserscript(origin: string): string {
       }, 'удалено'));
     }
     return row;
+  }
+
+  function appendChatBadges(parent, raw) {
+    if (!raw) return;
+    var labels = {
+      broadcaster: 'СТР', moderator: 'MOD', vip: 'VIP', subscriber: 'SUB',
+      staff: 'STAFF', admin: 'ADMIN', global_mod: 'GM', partner: '✓', turbo: 'T',
+    };
+    var entries = String(raw).split(',');
+    for (var i = 0; i < entries.length; i++) {
+      var kind = entries[i].split('/')[0];
+      var label = labels[kind];
+      if (!label) continue;
+      var badge = el('span', {
+        display: 'inline-block', marginRight: '3px', padding: '0 3px',
+        borderRadius: '2px', background: kind === 'moderator' ? '#00ad96' : '#53535f',
+        color: '#fff', fontSize: '8px', fontWeight: '800', lineHeight: '14px',
+        verticalAlign: '1px',
+      }, label);
+      badge.title = kind;
+      parent.appendChild(badge);
+    }
   }
 
   function chatCutoffCount(cutoff) {
@@ -1636,7 +1735,7 @@ export function buildTwitchAudioUserscript(origin: string): string {
     if (!chatForceRebuild && count === chatRenderedTo) return;
 
     var rebuild = chatForceRebuild || count < chatRenderedTo ||
-      count - chatRenderedTo > CHAT_MAX_VISIBLE || chatRenderedTo === 0;
+      count - chatRenderedTo > CHAT_MAX_VISIBLE;
     chatForceRebuild = false;
 
     if (rebuild) {

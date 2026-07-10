@@ -12,13 +12,17 @@ import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
+import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
+  computeSessionChatOffsetSec,
+  parseMediaRange,
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
+import { matchSessionsToVod } from "./vod-session-match";
 
 // A session whose local file is gone is still watchable when its parts were
 // uploaded to Telegram; the public video endpoint streams them back. An
@@ -39,86 +43,6 @@ function isTelegramPlayable(
 
 const DEFAULT_PAGE_SIZE = 12;
 const MAX_PAGE_SIZE = 48;
-
-// How far a session's start may sit from the VOD's createdAt and still be
-// considered the same broadcast.
-const MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
-
-/**
- * Which of the channel's sessions belong to the VOD that started at `date`?
- * A Twitch VOD's createdAt is the broadcast start, which lines up with our
- * session.startedAt (the go-live time): the closest start wins, but only when
- * it is near enough to be the same broadcast. A restarted/interrupted
- * recorder splits one broadcast into several sessions, so alongside the best
- * match every session overlapping the VOD's time window is returned — the
- * userscript switches between them automatically. Shared by the audio-track
- * and chat-replay matchers.
- */
-function matchSessionsToVod<T extends StreamSession>(
-  available: T[],
-  date?: string,
-  length?: string,
-): { best: T | null; group: T[] } {
-  if (available.length === 0) {
-    return { best: null, group: [] };
-  }
-
-  const target = date ? new Date(date) : null;
-
-  if (!target || Number.isNaN(target.getTime())) {
-    // No date to disambiguate — the newest session wins.
-    return { best: available[0], group: [available[0]] };
-  }
-
-  let best = available[0];
-  let bestDelta = Number.POSITIVE_INFINITY;
-
-  for (const session of available) {
-    if (!session.startedAt) continue;
-    const delta = Math.abs(session.startedAt.getTime() - target.getTime());
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = session;
-    }
-  }
-
-  if (bestDelta > MATCH_WINDOW_MS) {
-    return { best: null, group: [] };
-  }
-
-  const lengthSec = Number.parseInt(length ?? "", 10);
-  const windowStartMs = target.getTime() - 60 * 60 * 1000;
-  const windowEndMs =
-    target.getTime() +
-    (Number.isFinite(lengthSec) && lengthSec > 0 ? lengthSec * 1000 : MATCH_WINDOW_MS) +
-    60 * 60 * 1000;
-
-  const group = available
-    .filter((session) => {
-      const startMs = session.startedAt?.getTime() ?? session.createdAt.getTime();
-      const endMs =
-        session.captureEndedAt?.getTime() ?? session.endedAt?.getTime() ?? startMs + 1;
-      return endMs >= windowStartMs && startMs <= windowEndMs;
-    })
-    .sort((a, b) => {
-      const aStart = a.startedAt?.getTime() ?? a.createdAt.getTime();
-      const bStart = b.startedAt?.getTime() ?? b.createdAt.getTime();
-      return aStart - bStart;
-    });
-
-  return { best, group: group.length ? group : [best] };
-}
-
-// emotesJson holds JSON.stringify() of the raw IRC tag; a single corrupt row
-// must not 500 the whole chat-replay response.
-function parseStoredJsonString(value: string): string | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return typeof parsed === "string" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
 
 @AllowAnonymous()
 @Controller("public/streams")
@@ -263,7 +187,9 @@ export class PublicStreamsController {
         channel: true,
         telegramParts: { select: { durationSec: true } },
       },
-      orderBy: [{ startedAt: "desc" }],
+      // All restart fragments share the same Twitch startedAt. createdAt is
+      // therefore required for deterministic ordering and newest fallback.
+      orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
       take: 50,
     });
 
@@ -310,7 +236,7 @@ export class PublicStreamsController {
         channel: true,
         telegramParts: { select: { durationSec: true } },
       },
-      orderBy: [{ startedAt: "desc" }],
+      orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
       take: 50,
     });
 
@@ -447,15 +373,13 @@ export class PublicStreamsController {
     }
 
     if (range) {
-      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
-      const start = Math.max(0, Number(rawStart) || 0);
-      const end = rawEnd ? Math.min(Number(rawEnd), stat.size - 1) : stat.size - 1;
-
-      if (start > end) {
+      const parsedRange = parseMediaRange(range, stat.size);
+      if (!parsedRange) {
         res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
         res.end();
         return;
       }
+      const { start, end } = parsedRange;
 
       res.writeHead(206, {
         "Content-Range": `bytes ${start}-${end}/${stat.size}`,
@@ -479,13 +403,16 @@ export class PublicStreamsController {
 
   @Get(":id")
   async get(@Param("id") id: string) {
-    const session = await this.prisma.streamSession.findUnique({
-      where: { id },
-      include: {
-        channel: true,
-        telegramParts: { orderBy: { partIndex: "asc" } },
-      },
-    });
+    const [session, settings] = await Promise.all([
+      this.prisma.streamSession.findUnique({
+        where: { id },
+        include: {
+          channel: true,
+          telegramParts: { orderBy: { partIndex: "asc" } },
+        },
+      }),
+      this.prisma.appSettings.findUnique({ where: { id: "default" } }),
+    ]);
 
     if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
       throw new NotFoundException("Запись не найдена.");
@@ -516,6 +443,8 @@ export class PublicStreamsController {
         videoUrl: `/api/public/streams/${session.id}/video`,
         videoSource: playback.videoReady ? "local" : "telegram",
         audioOnly: session.audioOnly,
+        chatOffsetSec:
+          computeSessionChatOffsetSec(session) + (settings?.defaultChatOffsetSec ?? 0),
         telegramParts: telegramPlayable
           ? session.telegramParts.map((part) => ({
               partIndex: part.partIndex,
@@ -558,11 +487,13 @@ export class PublicStreamsController {
         authorDisplayName: message.authorDisplayName,
         authorColor: message.authorColor,
         textRaw: message.textRaw,
+        badges: parseStoredJsonString(message.badgesJson),
+        emotes: parseStoredJsonString(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
       })),
-      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+      emotes: parseStoredJson(snapshot?.payloadJson),
     };
   }
 
@@ -609,11 +540,12 @@ export class PublicStreamsController {
         // Raw Twitch IRC "emotes" tag ("id:start-end,.../..."), code-point
         // indexed — the userscript renders these from the Twitch CDN.
         emotes: message.emotesJson ? parseStoredJsonString(message.emotesJson) : null,
+        badges: parseStoredJsonString(message.badgesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
       })),
-      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+      emotes: parseStoredJson(snapshot?.payloadJson),
     };
   }
 
@@ -687,9 +619,13 @@ export class PublicStreamsController {
     }
 
     if (range) {
-      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
-      const start = Number(rawStart);
-      const end = rawEnd ? Number(rawEnd) : stat.size - 1;
+      const parsedRange = parseMediaRange(range, stat.size);
+      if (!parsedRange) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        res.end();
+        return;
+      }
+      const { start, end } = parsedRange;
       const chunkSize = end - start + 1;
 
       res.writeHead(206, {

@@ -34,6 +34,7 @@ type PublicStreamDetail = {
   fileSizeBytes: string | null;
   videoUrl: string;
   videoSource: "local" | "telegram";
+  chatOffsetSec: number;
   telegramParts: PublicTelegramPart[];
 };
 
@@ -439,6 +440,7 @@ export default function PublicWatchPage({
               chatUrl={`public/streams/${id}/chat`}
               videoElement={videoElement}
               isLive={false}
+              defaultOffsetSec={data?.chatOffsetSec ?? 0}
               baseOffsetSec={activePart?.startOffsetSec ?? 0}
             />
           </aside>

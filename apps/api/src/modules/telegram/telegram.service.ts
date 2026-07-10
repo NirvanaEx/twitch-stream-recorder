@@ -11,7 +11,9 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
+import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
+import { computeSessionChatOffsetSec } from "../recording/playback.utils";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TelegramClientService } from "./telegram-client.service";
 import { TelegramStreamService } from "./telegram-stream.service";
@@ -630,6 +632,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
         startedAt: session.startedAt?.toISOString() ?? null,
         endedAt: session.endedAt?.toISOString() ?? null,
+        chatOffsetSec: computeSessionChatOffsetSec(session),
       },
       messages: messages.map((message) => ({
         id: message.id,
@@ -637,11 +640,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         authorDisplayName: message.authorDisplayName,
         authorColor: message.authorColor,
         textRaw: message.textRaw,
+        badges: parseStoredJsonString(message.badgesJson),
+        emotes: parseStoredJsonString(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
       })),
-      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+      emotes: parseStoredJson(snapshot?.payloadJson),
     };
 
     const tempDir = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram");

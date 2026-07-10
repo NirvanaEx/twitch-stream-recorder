@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { Api } from "telegram";
 import { returnBigInt } from "telegram/Helpers";
 import { PrismaService } from "../prisma/prisma.service";
+import { parseMediaRange } from "../recording/playback.utils";
 import { TelegramClientService } from "./telegram-client.service";
 
 // MTProto upload.getFile requires the offset to be 4 KB aligned and the chunk
@@ -267,16 +268,16 @@ export class TelegramStreamService {
     let statusCode = 200;
 
     if (range) {
-      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
-      start = Math.max(0, Number(rawStart) || 0);
-      end = rawEnd ? Math.min(Number(rawEnd), totalSize - 1) : totalSize - 1;
+      const parsedRange = parseMediaRange(range, totalSize);
+      if (!parsedRange) {
+        res.writeHead(416, { "Content-Range": `bytes */${totalSize}` });
+        res.end();
+        releaseSlot();
+        return;
+      }
+      start = parsedRange.start;
+      end = parsedRange.end;
       statusCode = 206;
-    }
-
-    if (start > end) {
-      res.writeHead(416, { "Content-Range": `bytes */${totalSize}` });
-      res.end();
-      return;
     }
 
     if (downloadName) {
