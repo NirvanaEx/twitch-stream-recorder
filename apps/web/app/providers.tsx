@@ -206,10 +206,12 @@ type Dictionary = {
     step2: string;
     step3: string;
     step4: string;
+    installScript: string;
     copyScript: string;
     copied: string;
     copyFailed: string;
     serverNote: string;
+    updateNote: string;
     showScript: string;
     hideScript: string;
     tracksTitle: string;
@@ -534,16 +536,19 @@ const dictionaries: Record<Locale, Dictionary> = {
         "Подмена звука в VOD на Twitch: рекордер сохраняет оригинальную аудиодорожку стрима, а Tampermonkey-скрипт накладывает её на VOD — там, где Twitch заглушил музыку.",
       howTitle: "Как подключить",
       step1: "Установите расширение Tampermonkey (Chrome / Firefox / Edge).",
-      step2: "Скопируйте скрипт кнопкой ниже.",
+      step2: "Нажмите «Установить / обновить скрипт» ниже.",
       step3:
-        "В Tampermonkey нажмите «Создать новый скрипт», замените содержимое вставкой и сохраните (Ctrl+S).",
+        "Tampermonkey откроет страницу установки — подтвердите установку один раз.",
       step4:
         "Откройте любой VOD на twitch.tv — справа внизу появится панель: выберите дорожку и режим «Запись» или «Оба».",
+      installScript: "Установить / обновить скрипт",
       copyScript: "Скопировать скрипт",
       copied: "Скопировано ✓",
       copyFailed: "Не удалось скопировать автоматически — скрипт показан ниже, выделите и скопируйте вручную.",
       serverNote:
         "Скрипт обращается к серверу по адресу {origin}. Этот адрес должен быть доступен из браузера, в котором вы смотрите Twitch — если смотрите не из домашней сети, откройте (пробросьте) порт наружу.",
+      updateNote:
+        "После этой установки Tampermonkey будет автоматически проверять и загружать новые версии с этого сервера. Частота проверки зависит от настроек расширения.",
       showScript: "Показать скрипт",
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
@@ -868,16 +873,19 @@ const dictionaries: Record<Locale, Dictionary> = {
         "Restore VOD sound on Twitch: the recorder keeps the original stream audio, and a Tampermonkey userscript overlays it on the VOD where Twitch muted the music.",
       howTitle: "How to set up",
       step1: "Install the Tampermonkey extension (Chrome / Firefox / Edge).",
-      step2: "Copy the script with the button below.",
+      step2: "Click \"Install / update script\" below.",
       step3:
-        "In Tampermonkey click \"Create a new script\", replace the contents with the clipboard and save (Ctrl+S).",
+        "Tampermonkey opens its installation page — confirm the installation once.",
       step4:
         "Open any VOD on twitch.tv — a panel appears in the bottom-right: pick a track and the \"Recording\" or \"Both\" mode.",
+      installScript: "Install / update script",
       copyScript: "Copy script",
       copied: "Copied ✓",
       copyFailed: "Could not copy automatically — the script is shown below, select and copy it by hand.",
       serverNote:
         "The script talks to the server at {origin}. That address must be reachable from the browser where you watch Twitch — forward the port if you are outside your home network.",
+      updateNote:
+        "After this installation, Tampermonkey automatically checks and downloads new versions from this server. The check interval depends on the extension settings.",
       showScript: "Show script",
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",

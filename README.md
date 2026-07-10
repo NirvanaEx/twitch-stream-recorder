@@ -99,6 +99,19 @@ If you want the official Twitch API mode:
 6. Set `TWITCH_EVENTSUB_SECRET` to any ASCII secret between 10 and 100 characters, for example `openssl rand -hex 32`
 7. Restart `npm run dev`
 
+## Tampermonkey userscript updates
+
+The Twitch VOD audio/chat userscript is served publicly at
+`/twitch-audio.user.js`. Install it once from **Admin → Twitch audio → Install
+/ update script**. Its metadata points `@updateURL` and `@downloadURL` back to
+the same endpoint, and every web deployment exposes a newer sortable version,
+so Tampermonkey can update it automatically according to the extension's
+configured update interval.
+
+The public panel URL used for installation must remain reachable from the
+browser where Twitch is watched. If the hostname or port changes, install the
+script once again from the new address.
+
 Relevant docs:
 
 - Twitch app registration: `https://dev.twitch.tv/docs/authentication/register-app`
