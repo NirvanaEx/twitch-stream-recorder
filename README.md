@@ -101,16 +101,25 @@ If you want the official Twitch API mode:
 
 ## Tampermonkey userscript updates
 
-The Twitch VOD audio/chat userscript is served publicly at
-`/twitch-audio.user.js`. Install it once from **Admin → Twitch audio → Install
-/ update script**. Its metadata points `@updateURL` and `@downloadURL` back to
-the same endpoint, and every web deployment exposes a newer sortable version,
-so Tampermonkey can update it automatically according to the extension's
-configured update interval.
+The script installed into Tampermonkey (served publicly at
+`/twitch-audio.user.js`) is a thin **loader**. On every Twitch page load it
+downloads the actual audio/chat code from `/twitch-audio.payload.js` via
+`GM_xmlhttpRequest` and executes it, keeping the last good copy in GM storage
+as an offline fallback. Deploying the web app is therefore enough for every
+viewer to run the newest code — no Tampermonkey update cycle involved. The
+loader itself still carries `@updateURL`/`@downloadURL` with a per-deployment
+version for the rare case the loader changes.
+
+Install it once from **Admin → Twitch audio → Install / update script**. The
+install link passes the panel's exact origin as a `?origin=` query parameter,
+and nginx forwards `Host` with the port intact (`$http_host`), so the baked
+server address matches what the browser can actually reach.
 
 The public panel URL used for installation must remain reachable from the
 browser where Twitch is watched. If the hostname or port changes, install the
-script once again from the new address.
+script once again from the new address. If the script was ever pasted into
+Tampermonkey by hand (before the install link existed), delete that old copy —
+it has no update metadata and would keep running stale code.
 
 Relevant docs:
 

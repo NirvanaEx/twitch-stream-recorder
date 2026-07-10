@@ -13,38 +13,26 @@ const USERSCRIPT_VERSION = (() => {
   ].join(".");
 })();
 
-// Generates the Tampermonkey userscript that overlays the recorder's audio
-// track on a Twitch VOD (restores DMCA-muted sections). The server origin is
-// baked in at copy time, so the script works from any machine that can reach
-// the panel's public address.
+// The payload: the entire audio/chat feature set, served as
+// /twitch-audio.payload.js WITHOUT Tampermonkey metadata. The installed
+// loader (see buildTwitchAudioUserscript below) downloads and runs it on
+// every Twitch page load, so deploying the web app is enough for every
+// viewer to get the newest code — no Tampermonkey updates involved.
 
-export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): string {
+export function buildTwitchAudioPayload(origin: string): string {
   const trimmedOrigin = origin.replace(/\/+$/, "");
-  const resolvedUpdateUrl = updateUrl ?? `${trimmedOrigin}/twitch-audio.user.js`;
-  let hostname = trimmedOrigin;
-  try {
-    hostname = new URL(trimmedOrigin).hostname;
-  } catch {
-    // Keep the raw value; Tampermonkey will still match it.
-  }
 
   // The script body intentionally avoids template literals and "${" so it can
   // live inside this template literal without escaping.
-  return `// ==UserScript==
-// @name         TSR: звук записи для Twitch VOD
-// @namespace    tsr-twitch-audio
-// @version      ${USERSCRIPT_VERSION}
-// @description  Накладывает звук, записанный twitch-stream-recorder, на VOD Twitch, и заменяет чат VOD на записанный: видны удалённые и самые первые сообщения, сдвиг чата подстраивается отдельно. Чат работает и без аудиодорожки — с оригинальным звуком. Громкость до 300% с компрессором.
-// @match        https://www.twitch.tv/*
-// @updateURL    ${resolvedUpdateUrl}
-// @downloadURL  ${resolvedUpdateUrl}
-// @grant        GM_xmlhttpRequest
-// @connect      ${hostname}
-// @connect      gql.twitch.tv
-// ==/UserScript==
-
+  return `/* tsr-payload */
 (function () {
   'use strict';
+
+  // Страница могла получить код дважды (старый полный скрипт в Tampermonkey
+  // плюс загрузчик) — работает только первый успевший.
+  var GUARD = 'data-tsr-audio-active';
+  if (document.documentElement.hasAttribute(GUARD)) return;
+  document.documentElement.setAttribute(GUARD, '1');
 
   var SERVER = '${trimmedOrigin}';
   var GQL_URL = 'https://gql.twitch.tv/gql';
@@ -2255,6 +2243,98 @@ export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): 
   }
 
   setInterval(tick, SYNC_MS);
+})();
+`;
+}
+
+// The userscript actually installed in Tampermonkey: a thin loader. On every
+// Twitch page load it pulls the fresh payload from the server through the
+// privileged GM_xmlhttpRequest (which ignores mixed content) and eval()s it,
+// keeping the last good copy in GM storage as an offline fallback. The
+// @updateURL still auto-updates the loader itself on the rare occasion it
+// changes. The server origin travels in the ?origin= query parameter so a
+// reverse proxy that rewrites the Host header cannot corrupt the baked
+// address on install or update.
+export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): string {
+  const trimmedOrigin = origin.replace(/\/+$/, "");
+  const encodedOrigin = encodeURIComponent(trimmedOrigin);
+  const resolvedUpdateUrl =
+    updateUrl ?? `${trimmedOrigin}/twitch-audio.user.js?origin=${encodedOrigin}`;
+  let hostname = trimmedOrigin;
+  try {
+    hostname = new URL(trimmedOrigin).hostname;
+  } catch {
+    // Keep the raw value; Tampermonkey will still match it.
+  }
+
+  return `// ==UserScript==
+// @name         TSR: звук записи для Twitch VOD
+// @namespace    tsr-twitch-audio
+// @version      ${USERSCRIPT_VERSION}
+// @description  Загрузчик TSR: при каждом открытии Twitch подтягивает с сервера свежий скрипт звука и чата записи (звук на VOD там, где Twitch его заглушил, чат с удалёнными и самыми первыми сообщениями). Обновлять вручную ничего не нужно.
+// @match        https://www.twitch.tv/*
+// @updateURL    ${resolvedUpdateUrl}
+// @downloadURL  ${resolvedUpdateUrl}
+// @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @connect      ${hostname}
+// @connect      gql.twitch.tv
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  var SERVER = '${trimmedOrigin}';
+  var PAYLOAD_URL = SERVER + '/twitch-audio.payload.js?origin=${encodedOrigin}';
+  var CACHE_KEY = 'tsr-audio-payload';
+  var MARKER = '/* tsr-payload */';
+
+  function looksValid(code) {
+    return typeof code === 'string' && code.slice(0, MARKER.length) === MARKER;
+  }
+
+  // Прямой eval: код нагрузки видит GM_*-функции песочницы через цепочку
+  // областей видимости и пользуется GM_xmlhttpRequest как своим.
+  function run(code, sourceLabel) {
+    try {
+      eval(code);
+      return true;
+    } catch (e) {
+      console.error('[TSR] скрипт (' + sourceLabel + ') не запустился:', e);
+      return false;
+    }
+  }
+
+  function runCached(reason) {
+    var cached = '';
+    try { cached = GM_getValue(CACHE_KEY, ''); } catch (e) {}
+    if (looksValid(cached)) {
+      console.warn('[TSR] ' + reason + ' — запускаю сохранённую копию скрипта');
+      run(cached, 'кэш');
+    } else {
+      console.error(
+        '[TSR] ' + reason + ', сохранённой копии нет — панель не появится. ' +
+        'Проверьте доступность ' + SERVER,
+      );
+    }
+  }
+
+  GM_xmlhttpRequest({
+    method: 'GET',
+    url: PAYLOAD_URL + '&ts=' + Date.now(),
+    timeout: 20000,
+    onload: function (res) {
+      if (res.status === 200 && looksValid(res.responseText)) {
+        try { GM_setValue(CACHE_KEY, res.responseText); } catch (e) {}
+        run(res.responseText, 'сервер');
+      } else {
+        runCached('Сервер вернул неожиданный ответ (' + res.status + ')');
+      }
+    },
+    onerror: function () { runCached('Сервер недоступен'); },
+    ontimeout: function () { runCached('Сервер не ответил вовремя'); },
+  });
 })();
 `;
 }
