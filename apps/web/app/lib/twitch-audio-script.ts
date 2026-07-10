@@ -153,7 +153,11 @@ export function buildTwitchAudioPayload(origin: string): string {
   var userModalColor = null;
   var userModalQuery = '';
   var userModalPages = 1;
+  var userModalSpoilers = false; // показывать сообщения позже текущего места
   var USER_HISTORY_PAGE = 100;
+  // Отступ шапки чата под стрелку Twitch «свернуть» — общий для шапки
+  // оверлея и окна истории пользователя.
+  var chatHeadClearancePx = 10;
   var CHAT_MAX_VISIBLE = 150;
   // Кандидаты на контейнер чата VOD (Twitch периодически меняет разметку).
   var CHAT_HOST_SELECTORS = [
@@ -770,21 +774,15 @@ export function buildTwitchAudioPayload(origin: string): string {
   // перемотка кликом и перетаскиванием.
   var seekbarEls = null;
 
-  // Видимая фиолетовая полоска Twitch (.seekbar-bar) — СОСЕД интерактивной
-  // зоны, а не её потомок: прячем родные элементы явно и каждый тик заново
-  // (React их перерисовывает), а при выходе из режима возвращаем.
+  // Прячем ТОЛЬКО видимую полоску Twitch (.seekbar-bar — сосед интерактивной
+  // зоны). Сама зона взаимодействия и попап превью остаются живыми: наведение
+  // показывает родную миниатюру, клик и скраббинг работают как обычно —
+  // наш сикбар лишь рисуется сверху и мышь не перехватывает.
   function setTwitchSeekbarHidden(bar, hidden) {
-    var scopes = [bar, bar.parentElement];
-    for (var s = 0; s < scopes.length; s++) {
-      var scope = scopes[s];
-      if (!scope) continue;
-      for (var i = 0; i < scope.children.length; i++) {
-        var child = scope.children[i];
-        if (child === bar) continue;
-        var cls = String(child.className || '');
-        if (cls.indexOf('tsr-') !== -1) continue; // наши элементы не трогаем
-        child.style.visibility = hidden ? 'hidden' : '';
-      }
+    var scope = bar.parentElement || bar;
+    var nodes = scope.querySelectorAll('.seekbar-bar');
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].style.visibility = hidden ? 'hidden' : '';
     }
   }
 
@@ -816,8 +814,10 @@ export function buildTwitchAudioPayload(origin: string): string {
       root.style.top = '-2px';
       root.style.bottom = '-2px';
       root.style.zIndex = '25';
-      root.style.cursor = 'pointer';
-      root.style.background = 'rgba(14,14,16,0.9)';
+      // Мышь проходит насквозь к родному сикбару Twitch: клик, скраббинг и
+      // превью-миниатюра при наведении работают как обычно.
+      root.style.pointerEvents = 'none';
+      root.style.background = 'transparent';
       root.style.borderRadius = '4px';
 
       function layer() {
@@ -853,33 +853,6 @@ export function buildTwitchAudioPayload(origin: string): string {
       head.style.boxShadow = '0 0 4px rgba(0,0,0,0.8)';
       head.style.pointerEvents = 'none';
       root.appendChild(head);
-
-      var seekDragging = false;
-      function seekFromEvent(e) {
-        var rect = root.getBoundingClientRect();
-        var pct = (e.clientX - rect.left) / Math.max(1, rect.width);
-        pct = Math.min(1, Math.max(0, pct));
-        var vv = boundVideo || getVideo();
-        if (vv && isFinite(vv.duration) && vv.duration > 0) {
-          vv.currentTime = pct * vv.duration;
-        }
-      }
-      root.addEventListener('pointerdown', function (e) {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        e.stopPropagation();
-        seekDragging = true;
-        seekFromEvent(e);
-        try { root.setPointerCapture(e.pointerId); } catch (err) {}
-      });
-      root.addEventListener('pointermove', function (e) {
-        if (seekDragging) seekFromEvent(e);
-      });
-      root.addEventListener('pointerup', function (e) {
-        seekDragging = false;
-        try { root.releasePointerCapture(e.pointerId); } catch (err) {}
-      });
-      root.addEventListener('click', function (e) { e.stopPropagation(); });
 
       bar.appendChild(root);
       seekbarEls = {
@@ -2445,6 +2418,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     userModalColor = color || '#adadb8';
     userModalQuery = '';
     userModalPages = 1;
+    userModalSpoilers = false; // по умолчанию будущее скрыто — без спойлеров
 
     userModalEl = el('div', {
       position: 'absolute', top: '0', left: '0', right: '0', bottom: '0',
@@ -2455,6 +2429,8 @@ export function buildTwitchAudioPayload(origin: string): string {
       padding: '8px 10px', borderBottom: '1px solid #2f2f35', display: 'flex',
       alignItems: 'center', gap: '8px', fontSize: '12px', flexShrink: '0',
     });
+    // Не даём стрелке Twitch «свернуть чат» перекрыть ник.
+    head.style.paddingLeft = chatHeadClearancePx + 'px';
     var nick = el('span', { fontWeight: '700' }, userModalName);
     nick.style.color = readableColor(userModalColor) || '#adadb8';
     head.appendChild(nick);
@@ -2467,10 +2443,10 @@ export function buildTwitchAudioPayload(origin: string): string {
 
     var controls = el('div', {
       padding: '6px 10px', borderBottom: '1px solid #2f2f35', display: 'flex',
-      gap: '6px', alignItems: 'center', fontSize: '12px', flexShrink: '0',
+      gap: '6px', alignItems: 'center', fontSize: '12px', flexShrink: '0', flexWrap: 'wrap',
     });
     userModalSearchEl = el('input', {
-      flex: '1', minWidth: '0', background: '#0e0e10', color: '#efeff1',
+      flex: '1', minWidth: '120px', background: '#0e0e10', color: '#efeff1',
       border: '1px solid #2f2f35', borderRadius: '4px', padding: '3px 6px',
     });
     userModalSearchEl.placeholder = 'поиск по сообщениям пользователя';
@@ -2480,6 +2456,13 @@ export function buildTwitchAudioPayload(origin: string): string {
       renderUserHistory(false);
     });
     controls.appendChild(userModalSearchEl);
+    var spoilerCheck = makeCheck('будущее', false, function (on) {
+      userModalSpoilers = on;
+      userModalPages = 1;
+      renderUserHistory(false);
+    });
+    spoilerCheck.title = 'Показывать и сообщения позже текущего места VOD (спойлеры!)';
+    controls.appendChild(spoilerCheck);
     var histBtn = makeButton('+ прошлые стримы', loadChatHistory);
     histBtn.title = 'Подгрузить чат прошлых стримов канала (сколько — в настройках чата)';
     controls.appendChild(histBtn);
@@ -2502,14 +2485,44 @@ export function buildTwitchAudioPayload(origin: string): string {
     userModalLogin = '';
   }
 
+  // Подпись группы для разделителей: прошлые стримы — по дате эфира,
+  // сообщения текущего VOD — «Этот эфир».
+  function chatGroupKeyOf(m) {
+    if (!m.historic) return 'Этот эфир';
+    var d = new Date(m.tsMs);
+    return d.toLocaleDateString() + (m.sessionTitle ? ' · ' + m.sessionTitle : '');
+  }
+
+  function chatDaySeparator(text) {
+    var sep = el('div', {
+      display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px',
+      opacity: '0.55', fontSize: '0.78em',
+    });
+    sep.appendChild(el('span', { flex: '1', height: '1px', background: 'rgba(255,255,255,0.25)' }));
+    sep.appendChild(el('span', {
+      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%',
+    }, text));
+    sep.appendChild(el('span', { flex: '1', height: '1px', background: 'rgba(255,255,255,0.25)' }));
+    return sep;
+  }
+
   function renderUserHistory(keepTop) {
     if (!userModalListEl || !userModalLogin) return;
+    // По умолчанию будущее скрыто: видно только сообщения до текущего места
+    // VOD, чтобы история не спойлерила события дальше по стриму.
+    var vv = getVideo();
+    var cutoff = !userModalSpoilers && vv ? vv.currentTime + chatOffset : Infinity;
     var pool = chatMessages.concat(chatHistoryMessages);
     var hits = [];
+    var hiddenFuture = 0;
     for (var i = 0; i < pool.length; i++) {
       var m = pool[i];
       if ((m.authorLogin || '').toLowerCase() !== userModalLogin) continue;
       if (userModalQuery && m.textRaw.toLowerCase().indexOf(userModalQuery) === -1) continue;
+      if (!m.historic && m.vodTime > cutoff) {
+        hiddenFuture += 1;
+        continue;
+      }
       hits.push(m);
     }
     hits.sort(function (a, b) { return (a.tsMs || 0) - (b.tsMs || 0); });
@@ -2529,7 +2542,16 @@ export function buildTwitchAudioPayload(origin: string): string {
       more.style.margin = '6px auto';
       userModalListEl.appendChild(more);
     }
+    var withSeparators = chatHistorySessions > 0;
+    var lastGroup = null;
     for (var h = from; h < hits.length; h++) {
+      if (withSeparators) {
+        var groupKey = chatGroupKeyOf(hits[h]);
+        if (groupKey !== lastGroup) {
+          lastGroup = groupKey;
+          userModalListEl.appendChild(chatDaySeparator(groupKey));
+        }
+      }
       userModalListEl.appendChild(buildChatRow(hits[h], h));
     }
     if (!hits.length) {
@@ -2539,6 +2561,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     }
     if (userModalInfoEl) {
       userModalInfoEl.textContent = 'сообщений: ' + hits.length +
+        (hiddenFuture ? ' · будущих скрыто: ' + hiddenFuture : '') +
         (chatHistorySessions ? ' · с историей ' + chatHistorySessions + ' стримов' : '');
     }
     userModalListEl.scrollTop = keepTop ? 0 : userModalListEl.scrollHeight;
@@ -2934,6 +2957,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     // Стрелка Twitch «свернуть чат» рисуется поверх нашей шапки — сдвигаем
     // заголовок вправо, чтобы стрелка ничего не перекрывала и осталась
     // кликабельной (свёрнутая колонка прячет хост — оверлей уйдёт вместе с ней).
+    chatHeadClearancePx = 10;
     try {
       var collapseBtn = document.querySelector(
         'button[data-a-target="right-column__toggle-collapse-btn"]',
@@ -2943,7 +2967,8 @@ export function buildTwitchAudioPayload(origin: string): string {
         var btnRect = collapseBtn.getBoundingClientRect();
         if (btnRect.bottom > hostRect.top && btnRect.top < hostRect.top + 48 &&
             btnRect.right > hostRect.left && btnRect.left < hostRect.left + 80) {
-          headRow.style.paddingLeft = Math.max(10, btnRect.right - hostRect.left + 8) + 'px';
+          chatHeadClearancePx = Math.max(10, Math.round(btnRect.right - hostRect.left) + 8);
+          headRow.style.paddingLeft = chatHeadClearancePx + 'px';
         }
       }
     } catch (e) {}
@@ -3246,7 +3271,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     }
     chatSearchCount = hits.length;
     chatListEl.innerHTML = '';
+    // С подгруженной историей результаты из разных стримов разделяем датой.
+    var withSeparators = chatHistorySessions > 0;
+    var lastGroup = null;
     for (var h = Math.max(0, hits.length - 200); h < hits.length; h++) {
+      if (withSeparators) {
+        var groupKey = chatGroupKeyOf(hits[h]);
+        if (groupKey !== lastGroup) {
+          lastGroup = groupKey;
+          chatListEl.appendChild(chatDaySeparator(groupKey));
+        }
+      }
       chatListEl.appendChild(buildChatRow(hits[h], h));
     }
     chatForceRebuild = true; // выход из поиска пересоберёт живое окно
