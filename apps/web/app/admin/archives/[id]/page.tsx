@@ -42,6 +42,7 @@ type ArchiveDetailResponse = {
     videoReady: boolean;
     videoSource: "local" | "telegram" | null;
     chatAvailable: boolean;
+    chatOffsetSec: number;
     telegramStatus: string;
     telegramParts: TelegramPart[];
     localFileDeletedAt: string | null;
@@ -571,6 +572,7 @@ export default function ArchiveReplayPage() {
               archiveId={data!.item.id}
               videoElement={videoElement}
               isLive={isLive}
+              defaultOffsetSec={data!.item.chatOffsetSec ?? 0}
               baseOffsetSec={activePart?.startOffsetSec ?? 0}
             />
           </aside>

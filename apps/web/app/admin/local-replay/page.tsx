@@ -42,6 +42,7 @@ type Bundle = {
     channelDisplayName: string;
     startedAt: string | null;
     endedAt: string | null;
+    chatOffsetSec?: number;
   };
   messages: ChatMessage[];
   emotes: EmotePayload | null;
@@ -239,6 +240,7 @@ export default function LocalReplayPage() {
               staticData={staticChatData}
               videoElement={videoElement}
               isLive={false}
+              defaultOffsetSec={bundle?.meta.chatOffsetSec ?? 0}
             />
           </aside>
         ) : null}

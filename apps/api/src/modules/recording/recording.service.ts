@@ -15,7 +15,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TwitchService } from "../twitch/twitch.service";
 import { ChatService } from "../chat/chat.service";
 import { SevenTvService } from "../chat/seventv.service";
-import { resolveSessionPlaybackState } from "./playback.utils";
+import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 
@@ -495,21 +495,28 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getArchiveById(id: string) {
-    const session = await this.prisma.streamSession.findUnique({
-      where: { id },
-      include: {
-        channel: true,
-        telegramParts: {
-          orderBy: { partIndex: "asc" },
+    const [session, settings] = await Promise.all([
+      this.prisma.streamSession.findUnique({
+        where: { id },
+        include: {
+          channel: true,
+          telegramParts: {
+            orderBy: { partIndex: "asc" },
+          },
         },
-      },
-    });
+      }),
+      this.prisma.appSettings.findUnique({ where: { id: "default" } }),
+    ]);
 
     if (!session) {
       throw new NotFoundException(`Archive ${id} was not found.`);
     }
 
-    const item = this.serializeSession(session, session.channel);
+    const serialized = this.serializeSession(session, session.channel);
+    const item = {
+      ...serialized,
+      chatOffsetSec: serialized.chatOffsetSec + (settings?.defaultChatOffsetSec ?? 0),
+    };
 
     return {
       item,
@@ -1196,6 +1203,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   private async captureEmoteSnapshot(sessionId: string, twitchUserId: string | null) {
     try {
+      const settings = await this.prisma.appSettings.findUnique({ where: { id: "default" } });
+      if (settings?.support7tv === false || settings?.recordChat === false) return;
+
       const snapshot = await this.sevenTvService.fetchSnapshot(twitchUserId);
 
       if (!snapshot) {
@@ -1325,6 +1335,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       videoReady: playback.videoReady || telegramPlayable,
       videoSource: playback.videoReady ? "local" : telegramPlayable ? "telegram" : null,
       chatAvailable: session.chatAvailable,
+      chatOffsetSec: computeSessionChatOffsetSec(session),
       stoppedByUser: session.stoppedByUser,
       recordingSource: session.recordingSource,
       errorMessage: session.errorMessage,

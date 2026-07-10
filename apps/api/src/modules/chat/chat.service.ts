@@ -18,6 +18,7 @@ type ActiveCapture = {
   watchdogTimer: NodeJS.Timeout | null;
   connectedAt: number;
   lastActivityAt: number;
+  keepDeletedMessages: boolean;
 };
 
 const TWITCH_IRC_WS_URL = "wss://irc-ws.chat.twitch.tv:443";
@@ -111,6 +112,7 @@ export class ChatService {
       watchdogTimer: null,
       connectedAt: 0,
       lastActivityAt: Date.now(),
+      keepDeletedMessages: settings?.keepDeletedMessages ?? true,
     };
 
     this.captures.set(channelId, capture);
@@ -322,6 +324,10 @@ export class ChatService {
     }
 
     if (parsed.command === "PRIVMSG") {
+      // Receiving a message is itself proof that JOIN succeeded. This also
+      // covers very large rooms where Twitch may omit JOIN/PART membership
+      // events even when the membership capability is requested.
+      this.markJoined(capture);
       capture.privmsgCount += 1;
       if (!capture.loggedFirstMessage) {
         capture.loggedFirstMessage = true;
@@ -334,11 +340,14 @@ export class ChatService {
       // Confirm we actually joined the channel — once per connection,
       // when the JOIN is for our own nick.
       if (!capture.joined && parsed.prefixNick && parsed.prefixNick.startsWith("justinfan")) {
-        capture.joined = true;
-        this.logger.log(
-          `[chat:${capture.channelLogin}] joined #${capture.channelLogin}.`,
-        );
+        this.markJoined(capture);
       }
+    } else if (parsed.command === "ROOMSTATE" || parsed.command === "366") {
+      // We request twitch.tv/commands, so a successful JOIN is followed by
+      // ROOMSTATE. The old code waited only for JOIN without requesting the
+      // membership capability and consequently tore down a healthy socket
+      // every 30 seconds. 366 is accepted as an additional IRC fallback.
+      this.markJoined(capture);
     } else if (parsed.command === "NOTICE") {
       // Twitch sends NOTICE for auth failures, host bans, etc. Surface
       // them — silent NOTICEs are why a capture can run for hours and
@@ -352,6 +361,12 @@ export class ChatService {
     }
   }
 
+  private markJoined(capture: ActiveCapture) {
+    if (capture.joined) return;
+    capture.joined = true;
+    this.logger.log(`[chat:${capture.channelLogin}] joined #${capture.channelLogin}.`);
+  }
+
   private async persistMessage(capture: ActiveCapture, parsed: ParsedIrcLine) {
     const text = parsed.trailing ?? "";
 
@@ -359,9 +374,9 @@ export class ChatService {
       return;
     }
 
-    const messageTimestamp = parsed.tags["tmi-sent-ts"]
-      ? new Date(Number(parsed.tags["tmi-sent-ts"]))
-      : new Date();
+    const sentAtMs = Number(parsed.tags["tmi-sent-ts"]);
+    const messageTimestamp =
+      Number.isFinite(sentAtMs) && sentAtMs > 0 ? new Date(sentAtMs) : new Date();
     const relativeTimeSec = Math.max(
       0,
       Math.floor((messageTimestamp.getTime() - capture.startedAt) / 1000),
@@ -413,13 +428,18 @@ export class ChatService {
     }
 
     try {
-      await this.prisma.chatMessage.updateMany({
-        where: {
-          streamSessionId: capture.sessionId,
-          providerMessageId: messageId,
-        },
-        data: { isDeleted: true, deletedAt: new Date() },
-      });
+      const where = {
+        streamSessionId: capture.sessionId,
+        providerMessageId: messageId,
+      };
+      if (capture.keepDeletedMessages) {
+        await this.prisma.chatMessage.updateMany({
+          where,
+          data: { isDeleted: true, deletedAt: new Date() },
+        });
+      } else {
+        await this.prisma.chatMessage.deleteMany({ where });
+      }
     } catch {
       // Ignore.
     }
@@ -431,21 +451,26 @@ export class ChatService {
     }
 
     try {
-      await this.prisma.chatMessage.updateMany({
-        where: {
-          streamSessionId: capture.sessionId,
-          authorLogin: login.toLowerCase(),
-          isDeleted: false,
-        },
-        data: { isDeleted: true, deletedAt: new Date() },
-      });
+      const where = {
+        streamSessionId: capture.sessionId,
+        authorLogin: login.toLowerCase(),
+        isDeleted: false,
+      };
+      if (capture.keepDeletedMessages) {
+        await this.prisma.chatMessage.updateMany({
+          where,
+          data: { isDeleted: true, deletedAt: new Date() },
+        });
+      } else {
+        await this.prisma.chatMessage.deleteMany({ where });
+      }
     } catch {
       // Ignore.
     }
   }
 }
 
-type ParsedIrcLine = {
+export type ParsedIrcLine = {
   tags: Record<string, string>;
   prefixNick: string | null;
   command: string;
@@ -453,7 +478,27 @@ type ParsedIrcLine = {
   trailing: string | null;
 };
 
-function parseIrcLine(line: string): ParsedIrcLine | null {
+/** Decode IRCv3 tag escaping used by Twitch display names and system tags. */
+export function unescapeIrcTagValue(value: string) {
+  return value.replace(/\\([s:nr\\])/g, (_match, escaped: string) => {
+    switch (escaped) {
+      case "s":
+        return " ";
+      case ":":
+        return ";";
+      case "n":
+        return "\n";
+      case "r":
+        return "\r";
+      case "\\":
+        return "\\";
+      default:
+        return escaped;
+    }
+  });
+}
+
+export function parseIrcLine(line: string): ParsedIrcLine | null {
   let rest = line;
   const tags: Record<string, string> = {};
 
@@ -468,7 +513,7 @@ function parseIrcLine(line: string): ParsedIrcLine | null {
       if (eq === -1) {
         tags[pair] = "";
       } else {
-        tags[pair.slice(0, eq)] = pair.slice(eq + 1);
+        tags[pair.slice(0, eq)] = unescapeIrcTagValue(pair.slice(eq + 1));
       }
     }
   }

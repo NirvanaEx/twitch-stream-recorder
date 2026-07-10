@@ -1,8 +1,13 @@
 import { Controller, Delete, Get, Param, Query, Req, Res } from "@nestjs/common";
 import { createReadStream, type Stats } from "node:fs";
 import { RequirePermissions } from "../auth/auth.decorators";
+import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
-import { buildMediaCacheHeaders } from "../recording/playback.utils";
+import {
+  buildMediaCacheHeaders,
+  computeSessionChatOffsetSec,
+  parseMediaRange,
+} from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
@@ -49,11 +54,13 @@ export class ArchivesController {
         authorDisplayName: message.authorDisplayName,
         authorColor: message.authorColor,
         textRaw: message.textRaw,
+        badges: parseStoredJsonString(message.badgesJson),
+        emotes: parseStoredJsonString(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
       })),
-      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+      emotes: parseStoredJson(snapshot?.payloadJson),
     };
   }
 
@@ -91,6 +98,7 @@ export class ArchivesController {
         channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
         startedAt: session.startedAt?.toISOString() ?? null,
         endedAt: session.endedAt?.toISOString() ?? null,
+        chatOffsetSec: computeSessionChatOffsetSec(session),
       },
       messages: messages.map((message) => ({
         id: message.id,
@@ -98,11 +106,13 @@ export class ArchivesController {
         authorDisplayName: message.authorDisplayName,
         authorColor: message.authorColor,
         textRaw: message.textRaw,
+        badges: parseStoredJsonString(message.badgesJson),
+        emotes: parseStoredJsonString(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
       })),
-      emotes: snapshot ? JSON.parse(snapshot.payloadJson) : null,
+      emotes: parseStoredJson(snapshot?.payloadJson),
     };
 
     const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
@@ -197,9 +207,13 @@ export class ArchivesController {
     }
 
     if (range) {
-      const [rawStart, rawEnd] = range.replace("bytes=", "").split("-");
-      const start = Number(rawStart);
-      const end = rawEnd ? Number(rawEnd) : stat.size - 1;
+      const parsedRange = parseMediaRange(range, stat.size);
+      if (!parsedRange) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        res.end();
+        return;
+      }
+      const { start, end } = parsedRange;
       const chunkSize = end - start + 1;
 
       res.writeHead(206, {

@@ -1727,6 +1727,26 @@ textarea {
   min-height: 0;
 }
 
+.chat-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.chat-heading strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.chat-heading span {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-controls {
   display: flex;
   flex-direction: column;
@@ -1849,6 +1869,12 @@ textarea {
   text-decoration: line-through;
 }
 
+.chat-message.is-action .chat-text,
+.chat-message.is-action .chat-separator {
+  color: inherit;
+  font-style: italic;
+}
+
 .chat-time {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
@@ -1859,6 +1885,28 @@ textarea {
 .chat-author {
   font-weight: 600;
 }
+
+.chat-badges {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 4px;
+  vertical-align: 1px;
+}
+
+.chat-badge {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: #53535f;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 14px;
+}
+
+.chat-badge--moderator { background: #00ad96; }
+.chat-badge--vip { background: #e91916; }
+.chat-badge--broadcaster { background: #e91916; }
 
 .chat-separator {
   color: var(--text-faint);
@@ -1875,6 +1923,11 @@ textarea {
   font-style: italic;
   text-align: center;
   padding: 20px 0;
+}
+
+.chat-empty--error {
+  color: var(--danger);
+  font-style: normal;
 }
 
 /* ---------- Settings page ---------- */
@@ -2386,4 +2439,3 @@ textarea {
   margin-top: 3px;
   accent-color: var(--accent);
 }
-
