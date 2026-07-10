@@ -47,7 +47,8 @@ export class StorageService {
    * записи, остатки удалённых архивов и т.п.), его можно удалять безопасно.
    */
   async scanDisk() {
-    const files = await this.collectFiles();
+    const { refs, sessions } = await this.buildReferenceMap();
+    const files = this.walkDataDir(refs);
 
     const dirTotals = new Map<string, { fileCount: number; totalBytes: number }>();
     let totalBytes = 0;
@@ -69,9 +70,51 @@ export class StorageService {
     const sorted = [...files].sort((a, b) => b.sizeBytes - a.sizeBytes);
     const listed = sorted.slice(0, MAX_LISTED_FILES);
 
+    // Обратная проверка: пути из базы, за которыми нет файла. Отсутствие
+    // локальной копии после выгрузки в Telegram — норма, остальное — потеря.
+    const missing: Array<{
+      sessionId: string;
+      channelLogin: string;
+      title: string | null;
+      status: string;
+      field: FileRef["field"];
+      path: string;
+      expected: boolean;
+    }> = [];
+    for (const session of sessions) {
+      const seen = new Set<string>();
+      const checks: Array<[string | null, FileRef["field"]]> = [
+        [session.recordingPath, "video"],
+        [session.playbackPath, "video"],
+        [session.audioPath, "audio"],
+        [session.chatPath, "chat"],
+      ];
+      for (const [storedPath, field] of checks) {
+        if (!storedPath) continue;
+        const abs = resolve(storedPath);
+        if (seen.has(abs)) continue;
+        seen.add(abs);
+        if (fs.existsSync(abs)) continue;
+        const rel = relative(this.dataRoot, abs);
+        missing.push({
+          sessionId: session.id,
+          channelLogin: session.channel.twitchLogin,
+          title: session.title,
+          status: session.status,
+          field,
+          path: rel.startsWith("..") ? abs : rel.split(sep).join("/"),
+          expected: field === "video" && Boolean(session.localFileDeletedAt),
+        });
+      }
+    }
+    missing.sort((a, b) => Number(a.expected) - Number(b.expected));
+
     return {
       dataRoot: this.dataRoot,
       disk: this.getDiskSpace(),
+      dbSizeBytes: await this.getDbSizeBytes(),
+      missing: missing.slice(0, 200),
+      missingTruncated: missing.length > 200,
       dirs: [...dirTotals.entries()]
         .map(([name, stat]) => ({
           name,
@@ -111,7 +154,8 @@ export class StorageService {
    * ссылается база или который пишется прямо сейчас, через этот путь нельзя.
    */
   async cleanupOrphans(paths?: string[]) {
-    const files = await this.collectFiles();
+    const { refs } = await this.buildReferenceMap();
+    const files = this.walkDataDir(refs);
     const orphans = files.filter((file) => file.orphan);
     const byPath = new Map(orphans.map((file) => [file.path, file]));
 
@@ -185,9 +229,19 @@ export class StorageService {
     }
   }
 
-  private async collectFiles(): Promise<DiskFile[]> {
+  private async getDbSizeBytes(): Promise<string | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ size: bigint }>>`
+        SELECT pg_database_size(current_database()) AS size
+      `;
+      return rows && rows[0] ? String(rows[0].size) : null;
+    } catch {
+      return null; // не Postgres или нет прав — карточку просто не покажем
+    }
+  }
+
+  private walkDataDir(refs: Map<string, FileRef>): DiskFile[] {
     const root = this.dataRoot;
-    const refs = await this.buildReferenceMap();
     const out: DiskFile[] = [];
     const now = Date.now();
 
@@ -267,6 +321,7 @@ export class StorageService {
         playbackPath: true,
         audioPath: true,
         chatPath: true,
+        localFileDeletedAt: true,
         channel: { select: { twitchLogin: true } },
       },
     });
@@ -302,6 +357,6 @@ export class StorageService {
       }
     }
 
-    return refs;
+    return { refs, sessions };
   }
 }

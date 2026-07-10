@@ -109,6 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       title: t.nav.groupStorage,
       items: [
         { href: "/admin/storage", label: t.nav.telegramStorage, Icon: SendIcon, permission: "view_archives" },
+        { href: "/admin/files", label: t.nav.filesCheck, Icon: HardDriveIcon, permission: "view_archives" },
         { href: "/admin/local-replay", label: t.localReplay.navLabel, Icon: FolderOpenIcon, permission: null },
       ],
     },
