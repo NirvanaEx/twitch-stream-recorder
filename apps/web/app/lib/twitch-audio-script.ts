@@ -91,6 +91,16 @@ export function buildTwitchAudioPayload(origin: string): string {
   var chatModeButtons = {};
   var chatOffsetRow = null;
   var chatOffsetInput = null;
+  // Вид чата (настройка общая для всех VOD): размер текста в px.
+  var chatFontPx = 13;
+  try {
+    var savedChatSize = parseInt(localStorage.getItem('tsr-chat-size') || '', 10);
+    if (savedChatSize >= 11 && savedChatSize <= 20) chatFontPx = savedChatSize;
+  } catch (e) {}
+  var chatSettingsEl = null;
+  var chatSettingsOpen = false;
+  var chatSizeLabelEl = null;
+  var chatHeadOffsetEl = null;
   var CHAT_MAX_VISIBLE = 150;
   // Кандидаты на контейнер чата VOD (Twitch периодически меняет разметку).
   var CHAT_HOST_SELECTORS = [
@@ -1822,14 +1832,34 @@ export function buildTwitchAudioPayload(origin: string): string {
     }
     if (chatOffsetRow) chatOffsetRow.style.display = chatMode === 'record' ? 'flex' : 'none';
     if (chatOffsetInput) chatOffsetInput.value = String(chatOffset);
+    if (chatHeadOffsetEl) chatHeadOffsetEl.textContent = fmtChatOffset();
+  }
+
+  function fmtChatOffset() {
+    return (chatOffset > 0 ? '+' : '') + chatOffset + ' c';
   }
 
   function setChatOffset(value) {
     chatOffset = Math.round((isFinite(value) ? value : 0) * 10) / 10;
     if (chatOffsetInput) chatOffsetInput.value = String(chatOffset);
+    if (chatHeadOffsetEl) chatHeadOffsetEl.textContent = fmtChatOffset();
     chatForceRebuild = true;
+    // Применяем сразу, не дожидаясь тика: окно сообщений перестраивается от
+    // текущего места мгновенно, а сдвиг видно в шапке чата.
+    var v = getVideo();
+    if (chatMode === 'record' && v && chatListEl) renderChatWindow(v);
+    updateChatHeaderInfo();
     saveState();
     saveChannelChatPrefs();
+  }
+
+  function setChatFont(px) {
+    chatFontPx = Math.min(20, Math.max(11, Math.round(px)));
+    try {
+      localStorage.setItem('tsr-chat-size', String(chatFontPx));
+    } catch (e) {}
+    if (chatOverlay) chatOverlay.style.fontSize = chatFontPx + 'px';
+    if (chatSizeLabelEl) chatSizeLabelEl.textContent = String(chatFontPx);
   }
 
   function resetChatState() {
@@ -2026,19 +2056,58 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (!host) return false; // чат скрыт (fullscreen и т.п.) — попробуем позже
     if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
 
+    ensureChatStyle();
     chatOverlay = el('div', {
       position: 'absolute', top: '0', left: '0', right: '0', bottom: '0',
-      zIndex: '100', background: '#0e0e10', display: 'flex', flexDirection: 'column',
-      font: '13px/1.45 Inter, sans-serif', color: '#efeff1',
+      zIndex: '100', background: '#18181b', display: 'flex', flexDirection: 'column',
+      font: chatFontPx + 'px/1.5 Roobert, Inter, sans-serif', color: '#efeff1',
     });
 
-    var head = el('div', {
-      padding: '6px 10px', borderBottom: '1px solid #2f2f35', display: 'flex',
-      justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', flexShrink: '0',
+    var head = el('div', { borderBottom: '1px solid #2f2f35', flexShrink: '0' });
+    var headRow = el('div', {
+      padding: '6px 10px', display: 'flex', justifyContent: 'space-between',
+      alignItems: 'center', fontSize: '12px', gap: '6px',
     });
-    head.appendChild(el('span', { fontWeight: '600' }, '💬 Чат записи (TSR)'));
-    chatHeaderInfoEl = el('span', { opacity: '0.6' }, '');
-    head.appendChild(chatHeaderInfoEl);
+    headRow.appendChild(el('span', { fontWeight: '600', whiteSpace: 'nowrap' }, '💬 Чат записи'));
+    chatHeaderInfoEl = el('span', {
+      opacity: '0.6', flex: '1', textAlign: 'right',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }, '');
+    headRow.appendChild(chatHeaderInfoEl);
+    var gearBtn = makeButton('⚙️', function () {
+      chatSettingsOpen = !chatSettingsOpen;
+      if (chatSettingsEl) chatSettingsEl.style.display = chatSettingsOpen ? 'flex' : 'none';
+      gearBtn.style.background = chatSettingsOpen ? '#9147ff' : 'transparent';
+    });
+    gearBtn.title = 'Настройки чата: размер текста и сдвиг';
+    gearBtn.style.background = chatSettingsOpen ? '#9147ff' : 'transparent';
+    gearBtn.style.padding = '2px 6px';
+    headRow.appendChild(gearBtn);
+    head.appendChild(headRow);
+
+    // Настройки прямо в шапке чата: размер текста и сдвиг — не нужно тянуться
+    // к панели звука, когда подгоняешь чат по ходу просмотра.
+    chatSettingsEl = el('div', {
+      padding: '2px 10px 8px', display: chatSettingsOpen ? 'flex' : 'none',
+      gap: '12px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px',
+    });
+    var sizeWrap = el('span', { display: 'inline-flex', gap: '4px', alignItems: 'center' });
+    sizeWrap.appendChild(el('span', { opacity: '0.7' }, 'Текст'));
+    sizeWrap.appendChild(makeButton('−', function () { setChatFont(chatFontPx - 1); }));
+    chatSizeLabelEl = el('span', { minWidth: '20px', textAlign: 'center' }, String(chatFontPx));
+    sizeWrap.appendChild(chatSizeLabelEl);
+    sizeWrap.appendChild(makeButton('+', function () { setChatFont(chatFontPx + 1); }));
+    chatSettingsEl.appendChild(sizeWrap);
+    var offWrap = el('span', { display: 'inline-flex', gap: '4px', alignItems: 'center' });
+    offWrap.appendChild(el('span', { opacity: '0.7' }, 'Сдвиг, c'));
+    offWrap.appendChild(makeButton('−5', function () { setChatOffset(chatOffset - 5); }));
+    offWrap.appendChild(makeButton('−1', function () { setChatOffset(chatOffset - 1); }));
+    chatHeadOffsetEl = el('span', { minWidth: '34px', textAlign: 'center' }, fmtChatOffset());
+    offWrap.appendChild(chatHeadOffsetEl);
+    offWrap.appendChild(makeButton('+1', function () { setChatOffset(chatOffset + 1); }));
+    offWrap.appendChild(makeButton('+5', function () { setChatOffset(chatOffset + 5); }));
+    chatSettingsEl.appendChild(offWrap);
+    head.appendChild(chatSettingsEl);
     chatOverlay.appendChild(head);
 
     var wrap = el('div', { flex: '1', position: 'relative', minHeight: '0' });
@@ -2069,10 +2138,41 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatOverlay.appendChild(wrap);
 
     host.appendChild(chatOverlay);
+
+    // Стрелка Twitch «свернуть чат» рисуется поверх нашей шапки — сдвигаем
+    // заголовок вправо, чтобы стрелка ничего не перекрывала и осталась
+    // кликабельной (свёрнутая колонка прячет хост — оверлей уйдёт вместе с ней).
+    try {
+      var collapseBtn = document.querySelector(
+        'button[data-a-target="right-column__toggle-collapse-btn"]',
+      );
+      if (collapseBtn) {
+        var hostRect = host.getBoundingClientRect();
+        var btnRect = collapseBtn.getBoundingClientRect();
+        if (btnRect.bottom > hostRect.top && btnRect.top < hostRect.top + 48 &&
+            btnRect.right > hostRect.left && btnRect.left < hostRect.left + 80) {
+          headRow.style.paddingLeft = Math.max(10, btnRect.right - hostRect.left + 8) + 'px';
+        }
+      }
+    } catch (e) {}
+
     chatRenderedTo = 0;
     chatForceRebuild = true;
     chatPinned = true;
     return true;
+  }
+
+  // Классы для того, что инлайн-стилями не сделать (hover-подсветка строк,
+  // клик по времени сообщения).
+  function ensureChatStyle() {
+    if (document.getElementById('tsr-chat-style')) return;
+    var st = document.createElement('style');
+    st.id = 'tsr-chat-style';
+    st.textContent =
+      '.tsr-chat-row:hover{background:rgba(255,255,255,0.06);}' +
+      '.tsr-chat-ts{cursor:pointer;}' +
+      '.tsr-chat-ts:hover{opacity:1 !important;color:#bf94ff;}';
+    (document.head || document.documentElement).appendChild(st);
   }
 
   function removeChatOverlay() {
@@ -2081,6 +2181,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatListEl = null;
     chatJumpEl = null;
     chatHeaderInfoEl = null;
+    chatSettingsEl = null;
+    chatSizeLabelEl = null;
+    chatHeadOffsetEl = null;
     chatPinned = true;
   }
 
@@ -2114,9 +2217,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     img.alt = name;
     img.title = name;
     img.loading = 'lazy';
-    img.style.height = '20px';
+    img.style.height = '1.55em'; // масштабируется вместе с размером текста
     img.style.verticalAlign = 'middle';
-    img.style.margin = '-3px 1px';
+    img.style.margin = '-0.25em 0.08em';
     parent.appendChild(img);
   }
 
@@ -2168,18 +2271,28 @@ export function buildTwitchAudioPayload(origin: string): string {
 
   function buildChatRow(m) {
     var row = el('div', {
-      padding: '3px 10px', overflowWrap: 'anywhere', wordBreak: 'break-word',
+      padding: '3px 12px', overflowWrap: 'anywhere', wordBreak: 'break-word',
+      lineHeight: '1.5',
     });
+    row.className = 'tsr-chat-row';
     row.title = 'Место на VOD: ' + fmtTime(Math.max(0, m.vodTime)) +
       (m.isDeleted ? ' · сообщение удалено модератором' : '');
     if (m.isDeleted) {
       row.style.background = 'rgba(229,72,77,0.10)';
       row.style.borderLeft = '2px solid rgba(229,72,77,0.85)';
     }
-    row.appendChild(el('span', {
-      display: 'inline-block', minWidth: '36px', marginRight: '6px',
-      fontSize: '10px', opacity: '0.55', fontVariantNumeric: 'tabular-nums',
-    }, fmtTime(Math.max(0, m.vodTime))));
+    var ts = el('span', {
+      display: 'inline-block', minWidth: '3em', marginRight: '0.4em',
+      fontSize: '0.8em', opacity: '0.5', fontVariantNumeric: 'tabular-nums',
+    }, fmtTime(Math.max(0, m.vodTime)));
+    ts.className = 'tsr-chat-ts';
+    ts.title = 'Перемотать VOD к этому сообщению';
+    ts.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var vv = getVideo();
+      if (vv) vv.currentTime = Math.max(0, m.vodTime - 1);
+    });
+    row.appendChild(ts);
     appendChatBadges(row, m.badges);
     var author = el('span', { fontWeight: '700' }, m.authorDisplayName || m.authorLogin);
     author.style.color = m.authorColor || '#adadb8';
@@ -2192,7 +2305,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     appendChatBody(row, m);
     if (m.isDeleted) {
       row.appendChild(el('span', {
-        marginLeft: '6px', fontSize: '10px', color: '#ff8085', opacity: '0.9',
+        marginLeft: '0.4em', fontSize: '0.75em', color: '#ff8085', opacity: '0.9',
       }, 'удалено'));
     }
     return row;
@@ -2204,16 +2317,21 @@ export function buildTwitchAudioPayload(origin: string): string {
       broadcaster: 'СТР', moderator: 'MOD', vip: 'VIP', subscriber: 'SUB',
       staff: 'STAFF', admin: 'ADMIN', global_mod: 'GM', partner: '✓', turbo: 'T',
     };
+    // Цвета фирменных бейджей Twitch.
+    var colors = {
+      broadcaster: '#e91916', moderator: '#00ad03', vip: '#e005b9',
+      subscriber: '#9147ff', partner: '#9147ff',
+    };
     var entries = String(raw).split(',');
     for (var i = 0; i < entries.length; i++) {
       var kind = entries[i].split('/')[0];
       var label = labels[kind];
       if (!label) continue;
       var badge = el('span', {
-        display: 'inline-block', marginRight: '3px', padding: '0 3px',
-        borderRadius: '2px', background: kind === 'moderator' ? '#00ad96' : '#53535f',
-        color: '#fff', fontSize: '8px', fontWeight: '800', lineHeight: '14px',
-        verticalAlign: '1px',
+        display: 'inline-block', marginRight: '0.25em', padding: '0 0.3em',
+        borderRadius: '0.2em', background: colors[kind] || '#53535f',
+        color: '#fff', fontSize: '0.68em', fontWeight: '800', lineHeight: '1.6',
+        verticalAlign: '0.1em',
       }, label);
       badge.title = kind;
       parent.appendChild(badge);
@@ -2272,7 +2390,8 @@ export function buildTwitchAudioPayload(origin: string): string {
       text = 'загружаю…';
     } else if (chatMessages.length) {
       text = chatMessages.length + ' сообщ.' +
-        (chatDeletedCount ? ' · удалённых: ' + chatDeletedCount : '');
+        (chatDeletedCount ? ' · удалённых: ' + chatDeletedCount : '') +
+        (chatOffset ? ' · сдвиг ' + fmtChatOffset() : '');
     } else if (chatLoadedKey) {
       text = 'сообщений нет';
     } else {
