@@ -1159,6 +1159,9 @@ export function buildTwitchAudioPayload(origin: string): string {
   function syncNow(force) {
     var v = getVideo();
     if (!v || mode === 'twitch' || !currentTrackId) return;
+    // Идёт замер рассинхрона: не трогаем перемотку, mute и переключение
+    // частей, иначе окно сравнения будет испорчено.
+    if (calibrating) return;
     bindVideo(v);
     // In "both" mode Twitch must stay audible at all times. In record-only
     // mode it is muted below only after the matching recording is playable;
@@ -1280,6 +1283,298 @@ export function buildTwitchAudioPayload(origin: string): string {
     saveState();
     saveChannelOffset();
     syncNow(true);
+  }
+
+  // ---- Автоподгон сдвига по оригинальной дорожке VOD ---------------------
+  // Пока играют оба звука, скрипт ~15 секунд снимает огибающие громкости
+  // оригинала (captureStream плеера) и записи, взаимной корреляцией находит
+  // запаздывание и правит сдвиг сам. Работает только там, где оригинал не
+  // заглушён. Точность — десятки миллисекунд.
+  var CALIBRATION_SEC = 15;
+  var CALIBRATION_MAX_LAG_SEC = 10;
+  var calibrating = false;
+  var calibrationCleanup = null;
+  var syncButtonEl = null;
+  var SYNC_BUTTON_LABEL = 'Подогнать сдвиг автоматически';
+
+  function setSyncButtonLabel(text) {
+    if (syncButtonEl) syncButtonEl.textContent = text;
+  }
+
+  function abortCalibration(message) {
+    if (calibrationCleanup) calibrationCleanup();
+    if (message) setStatus(message);
+  }
+
+  // Убираем медленную составляющую громкости и оставляем только всплески
+  // (речь, музыка, звуковые события) — по ним корреляция устойчивее.
+  function envelopeOnsets(env, win) {
+    var prefix = [0];
+    for (var i = 0; i < env.length; i++) {
+      prefix.push(prefix[i] + env[i]);
+    }
+    var out = new Array(env.length);
+    for (var j = 0; j < env.length; j++) {
+      var lo = Math.max(0, j - win);
+      var hi = Math.min(env.length, j + win + 1);
+      var avg = (prefix[hi] - prefix[lo]) / (hi - lo);
+      out[j] = Math.max(0, env[j] - avg);
+    }
+    return out;
+  }
+
+  // Возвращает { lagSec, confidence }: на сколько секунд события в звуке
+  // записи происходят ПОЗЖЕ тех же событий в оригинале (положительное —
+  // запись отстаёт, сдвиг надо увеличить).
+  function estimateLag(envAudio, envVideo, hopSec) {
+    var n = Math.min(envAudio.length, envVideo.length);
+    if (n < 40) return null;
+
+    var meanA = 0;
+    var meanV = 0;
+    for (var i = 0; i < n; i++) {
+      meanA += envAudio[i];
+      meanV += envVideo[i];
+    }
+    meanA /= n;
+    meanV /= n;
+    if (meanA < 1e-4 || meanV < 1e-4) return null; // одна из дорожек молчит
+
+    // Лёгкая компрессия динамики, чтобы громкая музыка не забивала речь.
+    var compA = new Array(n);
+    var compV = new Array(n);
+    for (var c = 0; c < n; c++) {
+      compA[c] = Math.sqrt(envAudio[c]);
+      compV[c] = Math.sqrt(envVideo[c]);
+    }
+    var win = Math.max(1, Math.round(1.5 / hopSec));
+    var a = envelopeOnsets(compA, win);
+    var v = envelopeOnsets(compV, win);
+
+    // Центрируем: выпрямленные огибающие неотрицательны, и без этого
+    // корреляция даже несвязанных сигналов заметно больше нуля.
+    var avgA = 0;
+    var avgV = 0;
+    for (var z = 0; z < n; z++) {
+      avgA += a[z];
+      avgV += v[z];
+    }
+    avgA /= n;
+    avgV /= n;
+    for (var q = 0; q < n; q++) {
+      a[q] -= avgA;
+      v[q] -= avgV;
+    }
+
+    var maxLag = Math.min(Math.round(CALIBRATION_MAX_LAG_SEC / hopSec), n - 20);
+    var corrs = [];
+    var best = 0;
+    var bestLag = 0;
+    for (var k = -maxLag; k <= maxLag; k++) {
+      var from = Math.max(0, k);
+      var to = Math.min(n, n + k);
+      var sAV = 0;
+      var sAA = 0;
+      var sVV = 0;
+      for (var t = from; t < to; t++) {
+        var x = a[t];
+        var y = v[t - k];
+        sAV += x * y;
+        sAA += x * x;
+        sVV += y * y;
+      }
+      var denom = Math.sqrt(sAA * sVV);
+      var corr = denom > 0 ? sAV / denom : 0;
+      corrs.push(corr);
+      if (corr > best) {
+        best = corr;
+        bestLag = k;
+      }
+    }
+
+    // Острота пика: настоящее совпадение даёт один резкий максимум, ложное —
+    // много примерно одинаковых. Сравниваем пик с лучшим значением вне его
+    // окрестности ±0.5 c.
+    var guard = Math.round(0.5 / hopSec);
+    var second = 0;
+    for (var g = 0; g < corrs.length; g++) {
+      if (Math.abs(g - maxLag - bestLag) <= guard) continue;
+      if (corrs[g] > second) second = corrs[g];
+    }
+    var prominence = second > 0 ? best / second : 999;
+
+    return { lagSec: bestLag * hopSec, confidence: best, prominence: prominence };
+  }
+
+  function startOffsetCalibration() {
+    if (calibrating) return;
+    var v = getVideo();
+    if (!v) {
+      setStatus('Видео не найдено.');
+      return;
+    }
+    if (!currentTrackId) {
+      setStatus('Сначала выберите дорожку.');
+      return;
+    }
+    if (v.paused || v.ended) {
+      setStatus('Запустите воспроизведение и нажмите ещё раз.');
+      return;
+    }
+    if (audio.error || audio.readyState < 2) {
+      setStatus('Аудио записи ещё не готово — дождитесь загрузки.');
+      return;
+    }
+    if (!ensureAudioGraph()) {
+      setStatus('WebAudio недоступен — подгоните сдвиг вручную.');
+      return;
+    }
+
+    // В окне калибровки оригинал должен звучать, иначе сравнивать не с чем.
+    var winStart = v.currentTime;
+    var winEnd = winStart + CALIBRATION_SEC + 2;
+    for (var s = 0; s < mutedSegments.length; s++) {
+      if (mutedSegments[s].offset < winEnd &&
+          mutedSegments[s].offset + mutedSegments[s].duration > winStart) {
+        setStatus('Здесь оригинал Twitch заглушён — перемотайте на место со звуком.');
+        return;
+      }
+    }
+
+    var capture = null;
+    try {
+      capture = v.captureStream
+        ? v.captureStream()
+        : v.mozCaptureStream
+          ? v.mozCaptureStream()
+          : null;
+    } catch (e) {
+      capture = null;
+    }
+    if (!capture || !capture.getAudioTracks().length) {
+      setStatus('Браузер не отдаёт звук плеера — подгоните сдвиг вручную.');
+      return;
+    }
+
+    // На время калибровки должны играть ОБА звука; исходный режим вернём.
+    var prevMode = mode;
+    if (mode !== 'both') applyMode('both');
+    syncNow(true); // точный сик с текущим сдвигом — его ошибку и измеряем
+
+    var vidSource;
+    try {
+      vidSource = audioCtx.createMediaStreamSource(capture);
+    } catch (e) {
+      if (prevMode !== 'both') applyMode(prevMode);
+      setStatus('Не удалось подключиться к звуку плеера.');
+      return;
+    }
+
+    // Один процессор на обе дорожки: каналы выровнены по сэмплам, поэтому
+    // измеряется именно рассинхрон контента, а не рассинхрон замеров.
+    var merger = audioCtx.createChannelMerger(2);
+    vidSource.connect(merger, 0, 0);
+    audioSourceNode.connect(merger, 0, 1);
+    var processor = audioCtx.createScriptProcessor(4096, 2, 1);
+    var sink = audioCtx.createGain();
+    sink.gain.value = 0;
+    merger.connect(processor);
+    processor.connect(sink);
+    sink.connect(audioCtx.destination);
+
+    var HOP = 1024;
+    var hopSec = HOP / audioCtx.sampleRate;
+    var skipHops = Math.ceil(0.7 / hopSec); // даём сику устаканиться
+    var targetHops = skipHops + Math.ceil(CALIBRATION_SEC / hopSec);
+    var envV = [];
+    var envA = [];
+
+    function onSeeked() {
+      abortCalibration('Перемотка — автоподгон отменён.');
+    }
+    v.addEventListener('seeked', onSeeked);
+    var watchdog = setTimeout(function () {
+      abortCalibration('Автоподгон прерван по таймауту.');
+    }, (CALIBRATION_SEC + 15) * 1000);
+
+    calibrating = true;
+    setSyncButtonLabel('Слушаю оба звука…');
+    setStatus('Автоподгон: сравниваю с оригиналом… 0/' + CALIBRATION_SEC + ' c');
+
+    calibrationCleanup = function () {
+      calibrating = false;
+      calibrationCleanup = null;
+      clearTimeout(watchdog);
+      v.removeEventListener('seeked', onSeeked);
+      processor.onaudioprocess = null;
+      try { processor.disconnect(); } catch (e) {}
+      try { merger.disconnect(); } catch (e) {}
+      try { vidSource.disconnect(); } catch (e) {}
+      try { sink.disconnect(); } catch (e) {}
+      try {
+        var streamTracks = capture.getTracks();
+        for (var t = 0; t < streamTracks.length; t++) streamTracks[t].stop();
+      } catch (e) {}
+      setSyncButtonLabel(SYNC_BUTTON_LABEL);
+      if (prevMode !== 'both') applyMode(prevMode);
+    };
+
+    function finishCalibration() {
+      var envAudio = envA.slice(skipHops);
+      var envVideo = envV.slice(skipHops);
+      var appliedOffset = offset; // сдвиг, с которым играло окно замера
+      abortCalibration();
+
+      var result = estimateLag(envAudio, envVideo, hopSec);
+      if (!result) {
+        setStatus('Звук слишком тихий для сравнения — прибавьте громкость Twitch и повторите.');
+        return;
+      }
+      if (result.confidence < 0.25 || result.prominence < 1.5) {
+        setStatus(
+          'Не удалось уверенно сопоставить дорожки (совпадение ' +
+          Math.round(result.confidence * 100) + '%) — подгоните вручную.',
+        );
+        return;
+      }
+
+      var newOffset = appliedOffset + result.lagSec;
+      if (Math.abs(newOffset) > 60) {
+        setStatus('Получился неправдоподобный сдвиг (' + newOffset.toFixed(1) + ' c) — не применяю.');
+        return;
+      }
+
+      setOffset(newOffset);
+      setStatus(
+        'Сдвиг подогнан: ' + (newOffset >= 0 ? '+' : '') + newOffset.toFixed(1) +
+        ' c (совпадение ' + Math.round(result.confidence * 100) + '%)',
+      );
+    }
+
+    processor.onaudioprocess = function (event) {
+      if (!calibrating) return;
+      if (v.paused || v.ended || audio.paused || audio.error) {
+        abortCalibration('Воспроизведение остановилось — автоподгон отменён.');
+        return;
+      }
+      var chV = event.inputBuffer.getChannelData(0);
+      var chA = event.inputBuffer.getChannelData(1);
+      for (var b = 0; b + HOP <= chV.length; b += HOP) {
+        var sumV = 0;
+        var sumA = 0;
+        for (var i = b; i < b + HOP; i++) {
+          sumV += chV[i] * chV[i];
+          sumA += chA[i] * chA[i];
+        }
+        envV.push(Math.sqrt(sumV / HOP));
+        envA.push(Math.sqrt(sumA / HOP));
+      }
+      var doneSec = Math.max(0, Math.round((envV.length - skipHops) * hopSec));
+      setStatus('Автоподгон: сравниваю с оригиналом… ' + Math.min(doneSec, CALIBRATION_SEC) + '/' + CALIBRATION_SEC + ' c');
+      if (envV.length >= targetHops) {
+        finishCalibration();
+      }
+    };
   }
 
   // ---- Чат записи: загрузка, синхронизация и оверлей ---------------------
@@ -2045,6 +2340,15 @@ export function buildTwitchAudioPayload(origin: string): string {
     offsetRow.appendChild(makeButton('+5', function () { setOffset(offset + 5); }));
     bodyEl.appendChild(offsetRow);
 
+    var syncRow = el('div', { display: 'flex', gap: '6px', marginBottom: '8px' });
+    syncButtonEl = makeButton(SYNC_BUTTON_LABEL, startOffsetCalibration);
+    syncButtonEl.style.flex = '1';
+    syncButtonEl.title =
+      'Сравнивает звук записи с оригинальной дорожкой VOD (~' + CALIBRATION_SEC +
+      ' секунд, слышны оба звука) и выставляет сдвиг сам. Нужно место, где оригинал не заглушён.';
+    syncRow.appendChild(syncButtonEl);
+    bodyEl.appendChild(syncRow);
+
     // Чат: оригинальный VOD-чат Twitch или записанный (с удалёнными и самыми
     // первыми сообщениями). У чата свой сдвиг — рассинхрон чата и звука
     // бывает разным.
@@ -2169,6 +2473,7 @@ export function buildTwitchAudioPayload(origin: string): string {
   }
 
   function removePanel() {
+    if (calibrating) abortCalibration();
     if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
     panel = null;
     bodyEl = null;
@@ -2185,6 +2490,7 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatModeButtons = {};
     chatOffsetRow = null;
     chatOffsetInput = null;
+    syncButtonEl = null;
     panelHovered = false;
   }
 
