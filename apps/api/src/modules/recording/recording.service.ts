@@ -559,27 +559,24 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Active recording cannot be deleted.");
     }
 
-    if (session.playbackPath) {
-      const playbackPath = resolve(session.playbackPath);
-
-      if (existsSync(playbackPath)) {
-        rmSync(playbackPath, { force: true });
-      }
+    // Все файлы сессии: mp4/m4a/чат по ссылкам из базы плюс исходный .ts,
+    // который остаётся от прерванной записи, — раньше он не удалялся и
+    // копился на диске «невидимым» местом.
+    const fileCandidates = new Set<string>();
+    for (const storedPath of [
+      session.playbackPath,
+      session.recordingPath,
+      session.audioPath,
+      session.chatPath,
+    ]) {
+      if (storedPath) fileCandidates.add(resolve(storedPath));
     }
-
-    if (session.chatPath) {
-      const chatPath = resolve(session.chatPath);
-
-      if (existsSync(chatPath)) {
-        rmSync(chatPath, { force: true });
-      }
+    for (const mediaPath of [session.playbackPath, session.recordingPath]) {
+      if (mediaPath) fileCandidates.add(resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ".ts"));
     }
-
-    if (session.audioPath) {
-      const audioPath = resolve(session.audioPath);
-
-      if (existsSync(audioPath)) {
-        rmSync(audioPath, { force: true });
+    for (const filePath of fileCandidates) {
+      if (existsSync(filePath)) {
+        rmSync(filePath, { force: true });
       }
     }
 

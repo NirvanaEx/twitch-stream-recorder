@@ -36,6 +36,28 @@ type Dictionary = {
     autoUploadOn: string;
     keepLocalNote: string;
     openSettings: string;
+    diskTitle: string;
+    diskSubtitle: string;
+    diskFree: string;
+    diskUsed: string;
+    diskOrphans: string;
+    purgeOrphans: string;
+    purgeConfirm: string;
+    purgeDone: string;
+    onlyOrphans: string;
+    diskEmpty: string;
+    truncatedNote: string;
+    fileCol: string;
+    modifiedCol: string;
+    statusOrphan: string;
+    statusRecording: string;
+    statusRecent: string;
+    fileKindVideo: string;
+    fileKindAudio: string;
+    fileKindChat: string;
+    fileKindSource: string;
+    fileKindOther: string;
+    deleteFile: string;
   };
   common: {
     appName: string;
@@ -360,6 +382,29 @@ const dictionaries: Record<Locale, Dictionary> = {
       autoUploadOn: "Автовыгрузка включена",
       keepLocalNote: "Локальная копия хранится {days} дн. после выгрузки",
       openSettings: "Открыть настройки",
+      diskTitle: "Файлы на диске",
+      diskSubtitle:
+        "Каждый файл в хранилище сверяется с базой. «Лишние» ни к чему не привязаны — это остатки удалённых записей и прерванных захватов, их можно удалить полностью.",
+      diskFree: "Свободно на диске",
+      diskUsed: "Занято файлами",
+      diskOrphans: "Лишние файлы",
+      purgeOrphans: "Удалить лишние",
+      purgeConfirm: "Удалить все лишние файлы ({size})? Они не привязаны ни к одной записи в базе.",
+      purgeDone: "Удалено файлов: {count}, освобождено {size}.",
+      onlyOrphans: "Только лишние",
+      diskEmpty: "Файлов не найдено.",
+      truncatedNote: "Показаны самые большие файлы; итоги посчитаны по всем.",
+      fileCol: "Файл",
+      modifiedCol: "Изменён",
+      statusOrphan: "лишний",
+      statusRecording: "идёт запись",
+      statusRecent: "изменён только что",
+      fileKindVideo: "видео",
+      fileKindAudio: "аудио",
+      fileKindChat: "чат",
+      fileKindSource: "исходник записи",
+      fileKindOther: "файл",
+      deleteFile: "Удалить файл",
     },
     common: {
       appName: "Twitch Stream Recorder",
@@ -698,6 +743,29 @@ const dictionaries: Record<Locale, Dictionary> = {
       autoUploadOn: "Auto-upload is on",
       keepLocalNote: "Local copies are kept for {days} day(s) after upload",
       openSettings: "Open settings",
+      diskTitle: "Files on disk",
+      diskSubtitle:
+        "Every file in the storage folder is checked against the database. Orphans belong to nothing — leftovers of deleted recordings and interrupted captures — and can be removed safely.",
+      diskFree: "Free disk space",
+      diskUsed: "Used by files",
+      diskOrphans: "Orphan files",
+      purgeOrphans: "Delete orphans",
+      purgeConfirm: "Delete all orphan files ({size})? They are not linked to any recording.",
+      purgeDone: "Deleted {count} file(s), freed {size}.",
+      onlyOrphans: "Orphans only",
+      diskEmpty: "No files found.",
+      truncatedNote: "Showing the largest files; totals include everything.",
+      fileCol: "File",
+      modifiedCol: "Modified",
+      statusOrphan: "orphan",
+      statusRecording: "recording",
+      statusRecent: "just modified",
+      fileKindVideo: "video",
+      fileKindAudio: "audio",
+      fileKindChat: "chat",
+      fileKindSource: "capture source",
+      fileKindOther: "file",
+      deleteFile: "Delete file",
     },
     common: {
       appName: "Twitch Stream Recorder",
