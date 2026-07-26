@@ -929,11 +929,25 @@ textarea {
 /* Height comes from the grid row (i.e. from the video), so there is no second
    viewport calculation to disagree with the player's. */
 .replay-stage--normal .replay-stage__chat {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   overflow: hidden;
   min-height: 360px;
+}
+
+/* The chat is taken out of flow so it cannot inflate the row it shares with the
+   video. An auto grid row is as tall as its TALLEST item, so an in-flow chat
+   sized itself from its own message list (200 rendered messages ≈ 4400px), the
+   row grew to match, and the video column was stretched with dead space below
+   it — measured 4434px for both columns against a 208px video. "overflow:
+   hidden" could not help: the element itself was that tall, so nothing
+   overflowed it. Out of flow it contributes no height, the row is sized by the
+   video alone, and .chat-list finally has a bounded parent to scroll inside. */
+.replay-stage--normal .replay-stage__chat > .chat-replay {
+  position: absolute;
+  inset: 0;
 }
 
 .replay-stage--normal:not(.has-chat) .replay-stage__player {
@@ -992,10 +1006,12 @@ textarea {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* One column here, so there is no video row to borrow a height from, and the
+     out-of-flow chat would collapse to its min-height. Give it a definite one:
+     55vh is what the old content-driven sizing was capped at anyway. */
   .replay-stage--normal .replay-stage__chat {
-    height: auto;
+    height: 55vh;
     min-height: 320px;
-    max-height: 55vh;
   }
 
   .replay-title {
