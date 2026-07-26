@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractEmotes } from "./kick-chat.service";
+import { extractEmotes, sortHistoryChronologically } from "./kick-chat.service";
 import { normalizeKickTimestamp } from "./kick-public.client";
 
 test("inline emote tokens are unwrapped into readable text", () => {
@@ -32,6 +32,36 @@ test("a message that is nothing but an emote survives", () => {
 test("plain messages pass through untouched and malformed tokens are left alone", () => {
   assert.deepEqual(extractEmotes("just talking"), { text: "just talking", emotes: [] });
   assert.deepEqual(extractEmotes("[emote:oops]"), { text: "[emote:oops]", emotes: [] });
+});
+
+test("chat history is stored oldest-first so equal replay times keep chat order", () => {
+  // Kick's messages endpoint returns newest-first, but backfilled rows all
+  // share relativeTimeSec 0 and the replay sorts by that column alone — the
+  // insertion order IS the order the viewer sees.
+  const sorted = sortHistoryChronologically([
+    { id: "c", created_at: "2026-07-26T08:20:05Z" },
+    { id: "b", created_at: "2026-07-26T08:17:54Z" },
+    { id: "a", created_at: "2026-07-26T08:10:43Z" },
+  ]);
+
+  assert.deepEqual(
+    sorted.map((message) => message.id),
+    ["a", "b", "c"],
+  );
+});
+
+test("history entries without a readable timestamp sort last, in their own order", () => {
+  const sorted = sortHistoryChronologically([
+    { id: "x", created_at: undefined },
+    { id: "b", created_at: "2026-07-26T08:17:54Z" },
+    { id: "y", created_at: "not a date" },
+    { id: "a", created_at: "2026-07-26T08:10:43Z" },
+  ]);
+
+  assert.deepEqual(
+    sorted.map((message) => message.id),
+    ["a", "b", "x", "y"],
+  );
 });
 
 test("Kick's space-separated timestamps are read as UTC, not local time", () => {

@@ -37,6 +37,26 @@ export type KickPublicChannel = {
   thumbnail: string | null;
 };
 
+// One recent chat message, in the exact shape Kick's endpoint returns it —
+// which is also the shape of the Pusher ChatMessageEvent payload, so chat
+// capture stores both through the same code path.
+export type KickRecentMessage = {
+  id?: string;
+  content?: string;
+  type?: string;
+  created_at?: string;
+  sender?: {
+    id?: number;
+    username?: string;
+    slug?: string;
+    identity?: {
+      color?: string;
+      badges?: { type?: string; text?: string; count?: number }[];
+      badges_v2?: { name?: string; image_url?: string; metadata?: unknown }[];
+    };
+  };
+};
+
 // The recorder polls every channel on a timer and several call sites may want
 // the same channel within one pass. A Python process per lookup is expensive
 // enough that a few seconds of reuse is worth much more than freshness here.
@@ -78,8 +98,38 @@ export class KickPublicClient {
     return request;
   }
 
+  /**
+   * Latest chat messages of a channel, newest first — the prelude that chat
+   * capture backfills at recording start. Uncached: it is called once per
+   * capture, and stale history is worse than a second Python spawn.
+   */
+  async getRecentMessages(channelId: number): Promise<KickRecentMessage[]> {
+    const scriptPath = this.resolveScriptPath("kick-messages.py");
+
+    if (!scriptPath) {
+      throw new Error("kick-messages.py was not found.");
+    }
+
+    const python = await this.resolvePython();
+    const raw = await this.run(python, [scriptPath, String(channelId)]);
+
+    let payload: { ok?: boolean; error?: string; messages?: KickRecentMessage[] } | null = null;
+
+    try {
+      payload = JSON.parse(raw.trim().split("\n").pop() ?? "");
+    } catch {
+      throw new Error(`Kick messages helper returned no JSON: ${raw.slice(0, 200)}`);
+    }
+
+    if (!payload?.ok) {
+      throw new Error(`Kick messages lookup failed: ${payload?.error ?? "unknown error"}`);
+    }
+
+    return payload.messages ?? [];
+  }
+
   private async fetchChannel(slug: string): Promise<KickPublicChannel | null> {
-    const scriptPath = this.resolveScriptPath();
+    const scriptPath = this.resolveScriptPath("kick-channel.py");
 
     if (!scriptPath) {
       throw new Error(
@@ -125,11 +175,11 @@ export class KickPublicClient {
   }
 
   /** dist/ sits next to scripts/ at runtime; src/ is three levels deeper in dev. */
-  private resolveScriptPath() {
+  private resolveScriptPath(scriptName: string) {
     const candidates = [
-      resolve(process.cwd(), "scripts", "kick-channel.py"),
-      resolve(__dirname, "..", "..", "..", "scripts", "kick-channel.py"),
-      resolve(__dirname, "..", "..", "..", "..", "scripts", "kick-channel.py"),
+      resolve(process.cwd(), "scripts", scriptName),
+      resolve(__dirname, "..", "..", "..", "scripts", scriptName),
+      resolve(__dirname, "..", "..", "..", "..", "scripts", scriptName),
     ];
 
     return candidates.find((candidate) => existsSync(candidate)) ?? null;

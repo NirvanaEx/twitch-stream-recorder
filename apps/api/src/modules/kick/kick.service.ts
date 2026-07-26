@@ -227,6 +227,22 @@ export class KickService {
     return channel?.chatroomId ?? null;
   }
 
+  /**
+   * Chat history for the backfill at capture start — like the chatroom id,
+   * something only the public client can answer. Needs the channel's numeric
+   * id first; that lookup is cached, and at capture start the live poll has
+   * usually just primed it.
+   */
+  async getRecentChatMessages(login: string) {
+    const channel = await this.publicClient.getChannel(this.normalizeChannelInput(login));
+
+    if (!channel?.id) {
+      return [];
+    }
+
+    return this.publicClient.getRecentMessages(channel.id);
+  }
+
   private async getChannelBySlug(slug: string) {
     const channels = await this.request<KickChannel[]>(
       `${API_BASE}/channels?slug=${encodeURIComponent(slug)}`,

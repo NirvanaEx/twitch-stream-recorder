@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { KickRecentMessage } from "./kick-public.client";
 import { KickService } from "./kick.service";
 
 /**
@@ -61,6 +62,12 @@ type KickChatPayload = {
   sender?: KickSender;
 };
 
+// The history backfill and the live socket overlap around capture start, so
+// the same message can arrive twice; provider ids seen so far close that
+// window. The cap only bounds memory on very long streams — by the time it is
+// reached the backfill is long finished and dedup has nothing left to catch.
+const SEEN_IDS_MAX = 5_000;
+
 type ActiveCapture = {
   channelId: string;
   sessionId: string;
@@ -75,6 +82,7 @@ type ActiveCapture = {
   stopped: boolean;
   joined: boolean;
   messageCount: number;
+  seenProviderIds: Set<string>;
 };
 
 @Injectable()
@@ -137,10 +145,62 @@ export class KickChatService {
       stopped: false,
       joined: false,
       messageCount: 0,
+      seenProviderIds: new Set(),
     };
 
     this.captures.set(channelId, capture);
     this.connect(capture);
+    void this.backfillHistory(capture);
+  }
+
+  /**
+   * Kick, unlike Twitch IRC, can hand back the messages written just before
+   * the capture began, so a recording that starts mid-stream opens with a
+   * living chat instead of silence until the first new message. They all
+   * land at second 0 of the timeline — they predate the video. Best-effort:
+   * a failure only costs this prelude, never the capture itself.
+   */
+  private async backfillHistory(capture: ActiveCapture) {
+    let history: KickRecentMessage[];
+
+    try {
+      history = await this.kickService.getRecentChatMessages(capture.channelLogin);
+    } catch (error) {
+      this.logger.warn(
+        `[kick-chat:${capture.channelLogin}] history backfill failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
+
+    if (capture.stopped || history.length === 0) {
+      return;
+    }
+
+    let stored = 0;
+
+    for (const message of sortHistoryChronologically(history)) {
+      if (capture.stopped) break;
+      if (await this.persistMessage(capture, message, { history: true })) stored += 1;
+    }
+
+    if (stored === 0) {
+      return;
+    }
+
+    this.logger.log(
+      `[kick-chat:${capture.channelLogin}] backfilled ${stored} pre-capture message(s).`,
+    );
+
+    // The subscription handler normally flips these; do it here too so the
+    // prelude is visible even while the socket is still connecting.
+    if (!capture.stopped && !capture.joined) {
+      await this.markSession(capture.sessionId, {
+        chatStatus: "recording",
+        chatAvailable: true,
+      });
+    }
   }
 
   stopCapture(channelId: string) {
@@ -161,7 +221,9 @@ export class KickChatService {
 
     this.captures.delete(channelId);
 
-    if (capture.joined) {
+    // Backfilled-only sessions (socket never joined) still hold messages and
+    // must finalize the same way, or they would stay "recording" forever.
+    if (capture.joined || capture.messageCount > 0) {
       void this.markSession(capture.sessionId, { chatStatus: "ready" });
       this.logger.log(
         `[kick-chat:${capture.channelLogin}] capture stopped after ${capture.messageCount} message(s).`,
@@ -277,16 +339,31 @@ export class KickChatService {
     capture.pingTimer.unref();
   }
 
-  private async persistMessage(capture: ActiveCapture, payload: KickChatPayload) {
+  private async persistMessage(
+    capture: ActiveCapture,
+    payload: KickChatPayload,
+    options: { history?: boolean } = {},
+  ): Promise<boolean> {
     // Kick also sends subscription/host events through the same channel.
     if (payload.type && payload.type !== "message") {
-      return;
+      return false;
+    }
+
+    // Around capture start the same message can come in twice: once from the
+    // history backfill and once from the live socket.
+    if (payload.id) {
+      if (capture.seenProviderIds.has(payload.id)) {
+        return false;
+      }
+      if (capture.seenProviderIds.size < SEEN_IDS_MAX) {
+        capture.seenProviderIds.add(payload.id);
+      }
     }
 
     const { text, emotes } = extractEmotes(payload.content ?? "");
 
     if (!text) {
-      return;
+      return false;
     }
 
     const messageTimestamp = payload.created_at ? new Date(payload.created_at) : new Date();
@@ -332,24 +409,31 @@ export class KickChatService {
 
       capture.messageCount += 1;
 
-      this.realtimeGateway.server?.emit("chat:message", {
-        sessionId: capture.sessionId,
-        message: {
-          id: saved.id,
-          authorLogin: saved.authorLogin,
-          authorDisplayName: saved.authorDisplayName,
-          authorColor: saved.authorColor,
-          textRaw: saved.textRaw,
-          relativeTimeSec: saved.relativeTimeSec,
-          messageTimestamp: saved.messageTimestamp.toISOString(),
-        },
-      });
+      // Backfilled history is not "a message just arrived" — only live
+      // messages are announced to realtime listeners.
+      if (!options.history) {
+        this.realtimeGateway.server?.emit("chat:message", {
+          sessionId: capture.sessionId,
+          message: {
+            id: saved.id,
+            authorLogin: saved.authorLogin,
+            authorDisplayName: saved.authorDisplayName,
+            authorColor: saved.authorColor,
+            textRaw: saved.textRaw,
+            relativeTimeSec: saved.relativeTimeSec,
+            messageTimestamp: saved.messageTimestamp.toISOString(),
+          },
+        });
+      }
+
+      return true;
     } catch (error) {
       this.logger.warn(
         `[kick-chat:${capture.channelLogin}] failed to persist message: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      return false;
     }
   }
 
@@ -431,6 +515,22 @@ export class KickChatService {
       );
     }
   }
+}
+
+/**
+ * Kick returns chat history newest-first. Stored rows must go in oldest-first:
+ * backfilled messages share relativeTimeSec 0 (they predate the video), the
+ * replay orders by that column alone, and Postgres returns equal keys in
+ * insertion order — so insertion order IS the chat order the viewer sees.
+ * Messages without a parseable timestamp sort last, keeping their own order.
+ */
+export function sortHistoryChronologically(history: KickRecentMessage[]) {
+  const at = (message: KickRecentMessage) => {
+    const time = message.created_at ? new Date(message.created_at).getTime() : NaN;
+    return Number.isNaN(time) ? Number.POSITIVE_INFINITY : time;
+  };
+
+  return [...history].sort((a, b) => at(a) - at(b));
 }
 
 /**
