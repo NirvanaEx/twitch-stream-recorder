@@ -307,6 +307,9 @@ export default function PublicWatchPage({
   const stageClass = [
     "replay-stage",
     `replay-stage--${mode}`,
+    // Screen-fit: the stage takes exactly the viewport height and the two
+    // columns (video+info | chat) divide it, so the page itself never scrolls.
+    "replay-stage--fit",
     chatVisible ? "has-chat" : "",
   ]
     .filter(Boolean)
@@ -315,7 +318,11 @@ export default function PublicWatchPage({
   // Keep one stable DOM tree across normal / theater / fullscreen so the
   // <video> element never re-mounts and playback continues seamlessly.
   return (
-    <div className={mode === "theater" ? "replay-page-host" : "public-shell"}>
+    <div
+      className={
+        mode === "theater" ? "replay-page-host" : "public-shell public-shell--watch"
+      }
+    >
       <div className={stageClass}>
         <div className="replay-stage__main">
           <header className="replay-stage__header">
