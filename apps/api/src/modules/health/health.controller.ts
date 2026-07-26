@@ -1,11 +1,11 @@
 import { Controller, Get } from "@nestjs/common";
 import { AllowAnonymous } from "../auth/auth.decorators";
-import { TwitchService } from "../twitch/twitch.service";
+import { PlatformsService } from "../platforms/platforms.service";
 
 @AllowAnonymous()
 @Controller("health")
 export class HealthController {
-  constructor(private readonly twitchService: TwitchService) {}
+  constructor(private readonly platformsService: PlatformsService) {}
 
   @Get()
   getHealth() {
@@ -13,9 +13,7 @@ export class HealthController {
       ok: true,
       service: "api",
       timestamp: new Date().toISOString(),
-      integrations: {
-        twitch: this.twitchService.getConfigurationState(),
-      },
+      integrations: this.platformsService.getConfigurationState(),
     };
   }
 }

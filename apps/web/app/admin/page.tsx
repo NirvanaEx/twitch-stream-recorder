@@ -9,6 +9,7 @@ import { useAuth } from "../lib/auth-context";
 import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "../components/IconButton";
 import { Pagination } from "../components/Pagination";
+import { PlatformTag } from "../components/PlatformTag";
 import {
   CircleDotIcon,
   FilmIcon,
@@ -26,6 +27,7 @@ type ChannelItem = {
   profileImageUrl: string | null;
   isEnabled: boolean;
   autoRecord: boolean;
+  platform: "twitch" | "kick";
   audioOnly: boolean;
   recordVideo: boolean;
   recordAudio: boolean;
@@ -111,6 +113,7 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<{ id: string; action: Action } | null>(null);
   const [channelInput, setChannelInput] = useState("");
+  const [platform, setPlatform] = useState<"twitch" | "kick">("twitch");
   const [page, setPage] = useState(1);
   const [now, setNow] = useState(() => Date.now());
 
@@ -182,6 +185,7 @@ export default function DashboardPage() {
     try {
       const response = await apiSend<CreateChannelResponse>("channels", "POST", {
         channel: channelInput,
+        platform,
       });
       setChannelInput("");
       await load();
@@ -300,10 +304,23 @@ export default function DashboardPage() {
           </div>
           <div className="panel-body">
             <form onSubmit={handleSubmit} className="input-row">
+              <select
+                value={platform}
+                onChange={(event) =>
+                  setPlatform(event.target.value === "kick" ? "kick" : "twitch")
+                }
+                aria-label={t.channels.platformLabel}
+                style={{ flex: "none", width: 120 }}
+              >
+                <option value="twitch">Twitch</option>
+                <option value="kick">Kick</option>
+              </select>
               <input
                 value={channelInput}
                 onChange={(event) => setChannelInput(event.target.value)}
-                placeholder={t.channels.inputHint}
+                placeholder={
+                  platform === "kick" ? t.channels.inputHintKick : t.channels.inputHint
+                }
                 required
               />
               <button
@@ -370,7 +387,10 @@ export default function DashboardPage() {
                             </div>
                             <div className="cell-name">
                               <strong>{displayName}</strong>
-                              <span>@{channel.twitchLogin}</span>
+                              <span>
+                                <PlatformTag platform={channel.platform} />@
+                                {channel.twitchLogin}
+                              </span>
                             </div>
                           </div>
                         </td>
