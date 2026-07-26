@@ -13,6 +13,10 @@ import {
 import { useRealtimeRefresh } from "../../../lib/use-realtime-refresh";
 import { useLanguage } from "../../../providers";
 import { ChatReplay } from "../../../components/ChatReplay";
+import {
+  TelegramSpeedChip,
+  type TelegramStreamStats,
+} from "../../../components/TelegramSpeedChip";
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
 import { DownloadIcon, HardDriveIcon, SendIcon, TrashIcon } from "../../../components/icons";
 import { clearResume, readResume, saveResume } from "../../../lib/resume";
@@ -84,12 +88,7 @@ export default function ArchiveReplayPage() {
   const [currentPart, setCurrentPart] = useState(1);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
   // Live Telegram streaming throughput, shown as a chip next to the source.
-  const [tgStats, setTgStats] = useState<{
-    active: boolean;
-    mbpsFromTelegram?: number;
-    mbpsToClient?: number;
-    servedMb?: number;
-  } | null>(null);
+  const [tgStats, setTgStats] = useState<TelegramStreamStats | null>(null);
 
   // Restore the user's stored chat preference on mount. Default is ON;
   // toggling the in-player chat button persists the choice for next time.
@@ -195,12 +194,7 @@ export default function ArchiveReplayPage() {
 
     let cancelled = false;
     const poll = () => {
-      apiGet<{
-        active: boolean;
-        mbpsFromTelegram?: number;
-        mbpsToClient?: number;
-        servedMb?: number;
-      }>(`archives/${params.id}/stream-stats`)
+      apiGet<TelegramStreamStats>(`archives/${params.id}/stream-stats`)
         .then((stats) => {
           if (!cancelled) setTgStats(stats);
         })
@@ -418,22 +412,8 @@ export default function ArchiveReplayPage() {
                   <strong>
                     {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
                   </strong>
-                  {data.item.videoSource === "telegram" && tgStats?.active ? (
-                    <span
-                      style={{
-                        marginLeft: 6,
-                        padding: "1px 8px",
-                        borderRadius: 999,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        background: "rgba(124, 77, 255, 0.16)",
-                        color: "var(--accent)",
-                        whiteSpace: "nowrap",
-                      }}
-                      title="Скорость загрузки из Telegram прямо сейчас"
-                    >
-                      ▼ {tgStats.mbpsFromTelegram?.toFixed(2)} МБ/с
-                    </span>
+                  {data.item.videoSource === "telegram" ? (
+                    <TelegramSpeedChip stats={tgStats} />
                   ) : null}
                 </span>
               ) : null}

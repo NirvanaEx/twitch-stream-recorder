@@ -1,4 +1,11 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { RecordingService } from "../recording/recording.service";
 import { resolveSessionPlaybackState } from "../recording/playback.utils";
@@ -7,7 +14,7 @@ import { CreateChannelDto } from "./dto/create-channel.dto";
 import { UpdateChannelDto } from "./dto/update-channel.dto";
 
 @Injectable()
-export class ChannelsService {
+export class ChannelsService implements OnModuleInit {
   private readonly logger = new Logger(ChannelsService.name);
 
   constructor(
@@ -15,6 +22,26 @@ export class ChannelsService {
     private readonly twitchService: TwitchService,
     private readonly recordingService: RecordingService,
   ) {}
+
+  /**
+   * Channels created before video/audio became separate switches only had
+   * `audioOnly`. New columns default to "record everything", which would
+   * silently turn video back on for audio-only channels — so translate the old
+   * flag once. Self-limiting: after this runs, recordVideo is false for those
+   * rows, and any later toggle keeps audioOnly in sync itself.
+   */
+  async onModuleInit() {
+    const migrated = await this.prisma.channel.updateMany({
+      where: { audioOnly: true, recordVideo: true },
+      data: { recordVideo: false, recordAudio: true },
+    });
+
+    if (migrated.count > 0) {
+      this.logger.log(
+        `Moved ${migrated.count} audio-only channel(s) onto the separate video/audio switches.`,
+      );
+    }
+  }
 
   async listChannels() {
     const items = await this.prisma.channel.findMany({
@@ -44,6 +71,8 @@ export class ChannelsService {
           profileImageUrl: channel.profileImageUrl,
           isEnabled: channel.isEnabled,
           autoRecord: channel.autoRecord,
+          recordVideo: channel.recordVideo,
+          recordAudio: channel.recordAudio,
           audioOnly: channel.audioOnly,
           manualStopUntilOffline: channel.manualStopUntilOffline,
           preferredQuality: channel.preferredQuality,
@@ -144,7 +173,23 @@ export class ChannelsService {
   }
 
   async updateChannel(id: string, dto: UpdateChannelDto) {
-    await this.ensureChannelExists(id);
+    const current = await this.ensureChannelExists(id);
+
+    // Video and audio are separate switches now. `audioOnly` is still accepted
+    // from older clients and simply means "video off, audio on".
+    let recordVideo = dto.recordVideo ?? current.recordVideo;
+    let recordAudio = dto.recordAudio ?? current.recordAudio;
+
+    if (dto.recordVideo === undefined && dto.audioOnly !== undefined) {
+      recordVideo = !dto.audioOnly;
+      if (dto.audioOnly) recordAudio = true;
+    }
+
+    if (!recordVideo && !recordAudio) {
+      throw new BadRequestException(
+        "Нужно оставить включённой хотя бы одну дорожку: видео или звук.",
+      );
+    }
 
     const channel = await this.prisma.channel.update({
       where: { id },
@@ -154,7 +199,10 @@ export class ChannelsService {
         ...(dto.autoRecord !== undefined ? { autoRecord: dto.autoRecord } : {}),
         // Takes effect from the NEXT recording: an active capture keeps the
         // mode it was started with.
-        ...(dto.audioOnly !== undefined ? { audioOnly: dto.audioOnly } : {}),
+        recordVideo,
+        recordAudio,
+        // Derived mirror the recorder uses to pick the streamlink variant.
+        audioOnly: recordAudio && !recordVideo,
         ...(dto.preferredQuality !== undefined
           ? { preferredQuality: dto.preferredQuality }
           : {}),

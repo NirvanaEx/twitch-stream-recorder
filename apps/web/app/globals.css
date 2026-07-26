@@ -2439,3 +2439,173 @@ textarea {
   margin-top: 3px;
   accent-color: var(--accent);
 }
+
+/* ---------- Archive cards ---------- */
+/* The archive list is a gallery, not a spreadsheet: a cover frame identifies a
+   recording far faster than a row of timestamps. Audio-only captures get their
+   own block and their own cover treatment — they are a different artefact
+   (a track that overlays a Twitch VOD), not a recording without a picture. */
+
+.archive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.archive-grid.audio {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.archive-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  overflow: hidden;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.archive-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.archive-cover {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, #1b2030, #11141a);
+  overflow: hidden;
+}
+
+.archive-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.archive-card.audio .archive-cover {
+  aspect-ratio: 3 / 1;
+  background: linear-gradient(135deg, var(--accent-soft), rgba(34, 197, 94, 0.10));
+}
+
+/* Audio has no frame to show: a waveform-ish glyph over the channel avatar
+   reads as "sound" at a glance and keeps the block visually distinct. */
+.archive-cover-audio {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  padding: 0 16px;
+}
+
+.archive-cover-audio .avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+
+.archive-cover-audio .glyph {
+  font-size: 22px;
+  line-height: 1;
+  flex: none;
+}
+
+.archive-cover-audio .bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.archive-cover-audio .bars i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.archive-cover-badge {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.archive-cover-source {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.archive-cover-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.archive-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  flex: 1;
+}
+
+.archive-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.archive-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.archive-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.archive-card-foot .action-row {
+  gap: 4px;
+}

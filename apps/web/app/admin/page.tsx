@@ -27,6 +27,8 @@ type ChannelItem = {
   isEnabled: boolean;
   autoRecord: boolean;
   audioOnly: boolean;
+  recordVideo: boolean;
+  recordAudio: boolean;
   manualStopUntilOffline: boolean;
   preferredQuality: string;
   isLive: boolean;
@@ -220,9 +222,19 @@ export default function DashboardPage() {
 
   async function handleToggleChange(
     channel: ChannelItem,
-    field: "autoRecord" | "audioOnly",
+    field: "autoRecord" | "recordVideo" | "recordAudio",
     nextValue: boolean,
   ) {
+    // Video and audio are independent, but turning both off would mean
+    // "record nothing" — that is what the auto-record switch is for.
+    if (
+      (field === "recordVideo" && !nextValue && !channel.recordAudio) ||
+      (field === "recordAudio" && !nextValue && !channel.recordVideo)
+    ) {
+      setError(t.channels.trackRequired);
+      return;
+    }
+
     const previousItems = items;
     setItems((current) =>
       current.map((c) => (c.id === channel.id ? { ...c, [field]: nextValue } : c)),
@@ -326,8 +338,11 @@ export default function DashboardPage() {
                     {canManage ? (
                       <>
                         <th className="col-status">{t.channels.autoRecordLabel}</th>
-                        <th className="col-status" title={t.channels.audioOnlyHint}>
-                          {t.channels.audioOnlyLabel}
+                        <th className="col-status" title={t.channels.recordVideoHint}>
+                          {t.channels.recordVideoLabel}
+                        </th>
+                        <th className="col-status" title={t.channels.recordAudioHint}>
+                          {t.channels.recordAudioLabel}
                         </th>
                       </>
                     ) : null}
@@ -385,15 +400,32 @@ export default function DashboardPage() {
                               </label>
                             </td>
                             <td className="col-status">
-                              <label className="switch" title={t.channels.audioOnlyHint}>
+                              <label className="switch" title={t.channels.recordVideoHint}>
                                 <input
                                   type="checkbox"
-                                  checked={channel.audioOnly}
+                                  checked={channel.recordVideo}
                                   disabled={busyHere}
                                   onChange={(event) =>
                                     void handleToggleChange(
                                       channel,
-                                      "audioOnly",
+                                      "recordVideo",
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                <span className="slider" />
+                              </label>
+                            </td>
+                            <td className="col-status">
+                              <label className="switch" title={t.channels.recordAudioHint}>
+                                <input
+                                  type="checkbox"
+                                  checked={channel.recordAudio}
+                                  disabled={busyHere}
+                                  onChange={(event) =>
+                                    void handleToggleChange(
+                                      channel,
+                                      "recordAudio",
                                       event.target.checked,
                                     )
                                   }

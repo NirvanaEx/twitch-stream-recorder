@@ -14,7 +14,16 @@ export class UpdateChannelDto {
   @IsBoolean()
   autoRecord?: boolean;
 
-  // Record only the Twitch audio_only variant (no video).
+  // Independent capture switches. At least one must stay on.
+  @IsOptional()
+  @IsBoolean()
+  recordVideo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  recordAudio?: boolean;
+
+  /** @deprecated Kept so older clients keep working; maps onto recordVideo. */
   @IsOptional()
   @IsBoolean()
   audioOnly?: boolean;

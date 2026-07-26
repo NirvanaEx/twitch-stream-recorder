@@ -1,5 +1,15 @@
-import { Controller, Delete, Get, Param, Query, Req, Res } from "@nestjs/common";
-import { createReadStream, type Stats } from "node:fs";
+import {
+  Controller,
+  Delete,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+  Req,
+  Res,
+} from "@nestjs/common";
+import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
+import { resolve } from "node:path";
 import { RequirePermissions } from "../auth/auth.decorators";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -26,12 +36,59 @@ export class ArchivesController {
     this.deleteArchiveAudio = this.deleteArchiveAudio.bind(this);
     this.getArchiveChat = this.getArchiveChat.bind(this);
     this.getStreamStats = this.getStreamStats.bind(this);
+    this.getThumbnail = this.getThumbnail.bind(this);
+  }
+
+  /**
+   * Cover frame grabbed from the recording. Served from disk because Twitch's
+   * own preview URL stops resolving once the broadcast ends.
+   */
+  @Get(":id/thumbnail")
+  async getThumbnail(@Param("id") id: string, @Req() req: any, @Res() res: any) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { thumbnailPath: true },
+    });
+
+    if (!session?.thumbnailPath) {
+      throw new NotFoundException("Обложка для этой записи не найдена.");
+    }
+
+    const absolutePath = resolve(session.thumbnailPath);
+
+    if (!existsSync(absolutePath)) {
+      throw new NotFoundException("Файл обложки отсутствует на диске.");
+    }
+
+    const stat = statSync(absolutePath);
+    const cache = buildMediaCacheHeaders(stat, 86_400);
+
+    if (req.headers["if-none-match"] === cache.etag) {
+      res.writeHead(304, cache.headers);
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Length": stat.size,
+      "Content-Type": "image/jpeg",
+      ...cache.headers,
+    });
+    createReadStream(absolutePath).pipe(res);
   }
 
   @Get(":id/stream-stats")
   getStreamStats(@Param("id") id: string) {
     const stats = this.telegramStreamService.getLiveStats(id);
-    return stats ? { active: true, ...stats } : { active: false };
+
+    if (stats) {
+      return { active: true, ...stats };
+    }
+
+    // Nothing streaming this archive, but other archives may still be pulling
+    // from the same MTProto connection — the panel shows that as context.
+    const global = this.telegramStreamService.getGlobalStats();
+    return { active: false, global };
   }
 
   @Get(":id/chat")
@@ -124,11 +181,16 @@ export class ArchivesController {
   }
 
   @Get()
-  listArchives(@Query("page") rawPage?: string, @Query("pageSize") rawPageSize?: string) {
+  listArchives(
+    @Query("page") rawPage?: string,
+    @Query("pageSize") rawPageSize?: string,
+    @Query("kind") rawKind?: string,
+  ) {
     const page = Number.parseInt(rawPage ?? "1", 10) || 1;
     const pageSize = Number.parseInt(rawPageSize ?? "15", 10) || 15;
+    const kind = rawKind === "video" || rawKind === "audio" ? rawKind : "all";
 
-    return this.recordingService.getArchiveList(page, pageSize);
+    return this.recordingService.getArchiveList(page, pageSize, kind);
   }
 
   @Get(":id")
