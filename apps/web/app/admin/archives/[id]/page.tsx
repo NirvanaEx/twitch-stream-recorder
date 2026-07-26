@@ -18,7 +18,13 @@ import {
   type TelegramStreamStats,
 } from "../../../components/TelegramSpeedChip";
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
-import { DownloadIcon, HardDriveIcon, SendIcon, TrashIcon } from "../../../components/icons";
+import {
+  ChatDownloadIcon,
+  DownloadIcon,
+  HardDriveIcon,
+  SendIcon,
+  TrashIcon,
+} from "../../../components/icons";
 import { clearResume, readResume, saveResume } from "../../../lib/resume";
 
 type TelegramPart = {
@@ -366,184 +372,150 @@ export default function ArchiveReplayPage() {
   return (
     <main className={mode === "theater" ? "replay-page-host" : "page-shell page-shell--wide"}>
       <div className={stageClass}>
-        <header className="replay-stage__header page-header">
-          <div>
-            <span
-              style={{
-                fontSize: 11,
-                color: "var(--text-faint)",
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-              }}
-            >
-              {data?.item.channelDisplayName ?? t.common.archives}
-            </span>
-            <h2 className="page-title">{playerTitle}</h2>
-            <p className="page-copy">{data?.item.categoryName ?? ""}</p>
-            <div className="replay-meta" style={{ marginTop: 8 }}>
-              <span>
-                {t.archives.recordedAt}:
-                <strong>
-                  {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "—"}
-                </strong>
-              </span>
-              {data?.item.endedAt ? (
-                <span>
-                  {t.archives.endedAt}:
-                  <strong>{new Date(data.item.endedAt).toLocaleString()}</strong>
-                </span>
-              ) : null}
-              <span>
-                {t.common.duration}:
-                <strong>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</strong>
-              </span>
-              <span>
-                {t.archives.size}:
-                <strong>{formatFileSize(data?.item.fileSizeBytes)}</strong>
-              </span>
-              {data?.item.videoSource ? (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                  {data.item.videoSource === "telegram" ? (
-                    <SendIcon size={13} />
-                  ) : (
-                    <HardDriveIcon size={13} />
-                  )}
-                  {t.replay.sourceLabel}:
-                  <strong>
-                    {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
-                  </strong>
-                  {data.item.videoSource === "telegram" ? (
-                    <TelegramSpeedChip stats={tgStats} />
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div className="action-row">
-            <Link className="btn" href="/admin/archives">
-              ← {t.replay.backToArchives}
+        {/* Everything except the chat lives in one column. The stage used to be
+            a grid with named areas for header/player/chat only, so notices and
+            the part selector were auto-placed into implicit rows BELOW the
+            video — an error about the archive rendered under the player. */}
+        <div className="replay-stage__main">
+          <header className="replay-stage__header">
+            <Link className="replay-back" href="/admin/archives" title={t.replay.backToArchives}>
+              ←
             </Link>
-            <a
-              className="icon-btn"
-              href={withAuthToken(
-                buildApiUrl(
-                  activePart
-                    ? `archives/${params.id}/video?part=${activePart.partIndex}&download=1`
-                    : `archives/${params.id}/video?download=1`,
-                ),
-              )}
-              title={t.localReplay.downloadVideo}
-              download
-            >
-              <DownloadIcon />
-            </a>
-            <a
-              className="icon-btn"
-              href={withAuthToken(buildApiUrl(`archives/${params.id}/bundle`))}
-              title={t.localReplay.downloadBundle}
-              download
-              style={{ position: "relative" }}
-            >
-              <DownloadIcon />
-              <span
-                style={{
-                  position: "absolute",
-                  bottom: 2,
-                  right: 2,
-                  fontSize: 8,
-                  fontWeight: 700,
-                  color: "var(--accent)",
-                  background: "var(--panel)",
-                  borderRadius: 2,
-                  padding: "0 2px",
-                  lineHeight: 1.1,
-                }}
-              >
-                CHAT
-              </span>
-            </a>
-            <button
-              type="button"
-              className="icon-btn danger"
-              disabled={busyDelete || isLive}
-              title={t.replay.deleteArchive}
-              onClick={() => void handleDelete()}
-            >
-              <TrashIcon />
-            </button>
-          </div>
-        </header>
 
-        {mode === "normal" && error ? <div className="notice error">{error}</div> : null}
-        {mode === "normal" && isLive ? (
-          <div className="notice info">{t.replay.recordingInProgress}</div>
-        ) : null}
-
-        {!playlist && mode === "normal" && telegramParts.length > 1 ? (
-          <div className="action-row" style={{ margin: "8px 0" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-              {t.archives.telegramPart}
-              <select
-                className="input"
-                style={{ width: "auto", padding: "4px 8px" }}
-                value={currentPart}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (next === currentPart) return;
-                  setPendingAutoplay(true);
-                  setCurrentPart(next);
-                }}
-              >
-                {telegramParts.map((part) => (
-                  <option key={part.partIndex} value={part.partIndex}>
-                    {part.partIndex} / {part.partCount}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        ) : null}
-
-        <div className="replay-stage__player">
-          {data?.videoReady && videoSrc ? (
-            <VideoPlayer
-              src={videoSrc}
-              playlist={playlist ?? undefined}
-              initialSegment={initialSegmentRef.current}
-              onSegmentChange={handleSegmentChange}
-              mode={mode}
-              onModeChange={setMode}
-              chatVisible={chatVisible}
-              showChatButton={Boolean(data)}
-              onChatToggle={() => setChatVisible((value) => !value)}
-              onVideoElement={setVideoElement}
-              isLive={isLive}
-              autoPlay={false}
-              title={mode !== "normal" ? playerTitle : undefined}
-              emptyText={t.replay.videoPending}
-            />
-          ) : (
-            <div className="vp">
-              <div className="vp__empty">
-                {data?.item.localFileDeletedAt ? (
-                  <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
-                    {t.archives.localFileDeleted}
-                    {(data.item.telegramParts ?? []).map((part) =>
-                      part.url ? (
-                        <a key={part.partIndex} href={part.url} target="_blank" rel="noreferrer">
-                          {part.partCount > 1
-                            ? `${t.archives.telegramPart} ${part.partIndex}/${part.partCount}`
-                            : t.archives.openInTelegram}
-                        </a>
-                      ) : null,
-                    )}
-                  </span>
-                ) : (
-                  t.replay.videoPending
-                )}
+            <div className="replay-titles">
+              <h2 className="replay-title" title={playerTitle}>
+                {playerTitle}
+              </h2>
+              <div className="replay-subtitle">
+                <span>{data?.item.channelDisplayName ?? t.common.archives}</span>
+                {data?.item.categoryName ? <span>{data.item.categoryName}</span> : null}
+                {isLive ? <span className="badge live">{t.common.recording}</span> : null}
               </div>
             </div>
-          )}
+
+            <div className="action-row">
+              <a
+                className="icon-btn"
+                href={withAuthToken(
+                  buildApiUrl(
+                    activePart
+                      ? `archives/${params.id}/video?part=${activePart.partIndex}&download=1`
+                      : `archives/${params.id}/video?download=1`,
+                  ),
+                )}
+                title={t.localReplay.downloadVideo}
+                download
+              >
+                <DownloadIcon />
+              </a>
+              <a
+                className="icon-btn"
+                href={withAuthToken(buildApiUrl(`archives/${params.id}/bundle`))}
+                title={t.localReplay.downloadBundle}
+                download
+              >
+                <ChatDownloadIcon />
+              </a>
+              <button
+                type="button"
+                className="icon-btn danger"
+                disabled={busyDelete || isLive}
+                title={t.replay.deleteArchive}
+                onClick={() => void handleDelete()}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          </header>
+
+          {mode === "normal" && error ? <div className="notice error">{error}</div> : null}
+
+          <div className="replay-stage__player">
+            {data?.videoReady && videoSrc ? (
+              <VideoPlayer
+                src={videoSrc}
+                playlist={playlist ?? undefined}
+                initialSegment={initialSegmentRef.current}
+                onSegmentChange={handleSegmentChange}
+                mode={mode}
+                onModeChange={setMode}
+                chatVisible={chatVisible}
+                showChatButton={Boolean(data)}
+                onChatToggle={() => setChatVisible((value) => !value)}
+                onVideoElement={setVideoElement}
+                isLive={isLive}
+                autoPlay={false}
+                title={mode !== "normal" ? playerTitle : undefined}
+                emptyText={t.replay.videoPending}
+              />
+            ) : (
+              <div className="vp">
+                <div className="vp__empty">
+                  {data?.item.localFileDeletedAt ? (
+                    <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
+                      {t.archives.localFileDeleted}
+                      {(data.item.telegramParts ?? []).map((part) =>
+                        part.url ? (
+                          <a key={part.partIndex} href={part.url} target="_blank" rel="noreferrer">
+                            {part.partCount > 1
+                              ? `${t.archives.telegramPart} ${part.partIndex}/${part.partCount}`
+                              : t.archives.openInTelegram}
+                          </a>
+                        ) : null,
+                      )}
+                    </span>
+                  ) : (
+                    t.replay.videoPending
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Facts about the file belong under the video, not above it: they
+              are read once and never while watching. */}
+          <div className="replay-facts">
+            <span title={t.archives.recordedAt}>
+              {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "—"}
+            </span>
+            <span>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</span>
+            <span>{formatFileSize(data?.item.fileSizeBytes)}</span>
+
+            {data?.item.videoSource ? (
+              <span className="replay-facts__source">
+                {data.item.videoSource === "telegram" ? (
+                  <SendIcon size={13} />
+                ) : (
+                  <HardDriveIcon size={13} />
+                )}
+                {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
+                {data.item.videoSource === "telegram" ? (
+                  <TelegramSpeedChip stats={tgStats} />
+                ) : null}
+              </span>
+            ) : null}
+
+            {!playlist && telegramParts.length > 1 ? (
+              <label className="replay-facts__part">
+                {t.archives.telegramPart}
+                <select
+                  value={currentPart}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (next === currentPart) return;
+                    setPendingAutoplay(true);
+                    setCurrentPart(next);
+                  }}
+                >
+                  {telegramParts.map((part) => (
+                    <option key={part.partIndex} value={part.partIndex}>
+                      {part.partIndex} / {part.partCount}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
         </div>
 
         {hasChat ? (

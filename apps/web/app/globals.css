@@ -267,10 +267,6 @@ textarea {
   object-fit: contain;
 }
 
-.page-shell--wide .chat-panel {
-  max-height: calc(100vh - 220px);
-}
-
 .page-header {
   display: flex;
   align-items: flex-end;
@@ -779,11 +775,23 @@ textarea {
 
 /* ---------- Replay stage (replay page wrapper, 3 modes) ---------- */
 
-/* Normal mode is just a flex column inside the regular page-shell. */
+/* Two columns and nothing else: everything that is not chat lives in
+   .replay-stage__main. This used to be a grid with named areas for
+   header/player/chat only, so notices and the part selector were auto-placed
+   into implicit rows AFTER them — an error about the archive rendered below
+   the video instead of above it. */
 .replay-stage {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+  min-height: 0;
+}
+
+.replay-stage__main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -798,66 +806,151 @@ textarea {
   min-width: 0;
 }
 
-/* Normal layout, with chat: 2 columns. */
+/* ---- Compact header: one row, title + context + actions ---- */
+
+.replay-stage__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.replay-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  text-decoration: none;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.replay-back:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.replay-titles {
+  min-width: 0;
+  flex: 1;
+}
+
+.replay-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.replay-subtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.replay-subtitle > span + span::before {
+  content: "\00b7";
+  margin-right: 10px;
+  color: var(--text-faint);
+}
+
+.replay-subtitle .badge::before {
+  content: none;
+}
+
+.replay-stage__header .action-row {
+  flex: none;
+}
+
+/* ---- Facts strip under the video ---- */
+
+.replay-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.replay-facts__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.replay-facts__part {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.replay-facts__part select {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* ---- Normal mode: video and chat fill the viewport height ---- */
+
 .replay-stage--normal.has-chat {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  grid-template-rows: auto 1fr;
-  grid-template-areas:
-    "header header"
-    "player chat";
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) var(--chat-width, 340px);
+  /* Stretch, not start: the chat column takes exactly the height of the main
+     column, so its top and bottom line up with the content instead of ending
+     somewhere in the middle of the video. */
   align-items: stretch;
 }
 
-.replay-stage--normal.has-chat .replay-stage__header { grid-area: header; }
-.replay-stage--normal.has-chat .replay-stage__player { grid-area: player; min-width: 0; }
-.replay-stage--normal.has-chat .replay-stage__chat   {
-  grid-area: chat;
-  height: 100%;
-  min-height: 480px;
-  max-height: calc(100vh - 220px);
+/* Capped by the space actually left below the page header rather than a magic
+   constant, so the video neither clips nor leaves a gap. */
+.replay-stage--normal .vp {
+  max-height: calc(100vh - var(--replay-chrome, 230px));
 }
 
+/* Height comes from the grid row (i.e. from the video), so there is no second
+   viewport calculation to disagree with the player's. */
 .replay-stage--normal .replay-stage__chat {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   overflow: hidden;
+  min-height: 360px;
 }
-
-/* Notices (error / "still recording") that live inside the stage should
-   span the full width when the layout becomes a grid. */
-.replay-stage--normal.has-chat > .notice {
-  grid-column: 1 / -1;
-}
-
-.replay-stage--theater > .notice { display: none; }
-
-/* Theater is a strict player+chat grid: any extra in-flow rows (part
-   selector, etc.) would steal a grid cell and shrink the video. */
-.replay-stage--theater > .action-row { display: none; }
 
 .replay-stage--normal:not(.has-chat) .replay-stage__player {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
 }
 
-/* Keep the player from overflowing on tall, narrow content widths in
-   normal mode — match the chat panel's max-height. */
-.replay-stage--normal .replay-stage__player .vp {
-  max-height: calc(100vh - 220px);
-}
+/* ---- Theater: player + chat, nothing else ---- */
 
-/* Theater: covers entire viewport, hides the page header. */
 .replay-stage--theater {
   position: fixed;
   inset: 0;
   z-index: 100;
   background: #000;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) var(--chat-width, 340px);
   grid-template-rows: 100%;
   gap: 0;
   overflow: hidden;
@@ -867,7 +960,15 @@ textarea {
   grid-template-columns: 1fr;
 }
 
-.replay-stage--theater .replay-stage__header {
+.replay-stage--theater .replay-stage__main {
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.replay-stage--theater .replay-stage__header,
+.replay-stage--theater .replay-facts,
+.replay-stage--theater .notice {
   display: none;
 }
 
@@ -885,21 +986,20 @@ textarea {
   overflow: hidden;
 }
 
-/* Mobile portrait: Twitch-app-style layout — full-width video on top, chat
-   filling the rest of the screen below it. */
+/* ---- Mobile portrait: video on top, chat filling the rest ---- */
 @media (max-width: 900px) and (orientation: portrait) {
   .replay-stage--normal.has-chat {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
-    grid-template-areas:
-      "header"
-      "player"
-      "chat";
   }
 
-  .replay-stage--normal.has-chat .replay-stage__chat {
+  .replay-stage--normal .replay-stage__chat {
+    height: auto;
     min-height: 320px;
-    max-height: 50vh;
+    max-height: 55vh;
+  }
+
+  .replay-title {
+    white-space: normal;
   }
 
   .replay-stage--theater.has-chat {
@@ -907,8 +1007,6 @@ textarea {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  /* In theater the video keeps its aspect ratio at the top and the chat
-     takes everything below — no black bars around a "50% tall" video. */
   .replay-stage--theater.has-chat .replay-stage__player {
     height: auto;
   }
@@ -924,25 +1022,18 @@ textarea {
   }
 }
 
-/* Mobile landscape: same as desktop — video left, chat right — but with a
-   narrower chat column so the video stays large. */
+/* ---- Mobile landscape: keep two columns, narrower chat ---- */
 @media (max-width: 900px) and (orientation: landscape) {
-  .replay-stage--normal.has-chat {
-    grid-template-columns: minmax(0, 1fr) 260px;
-  }
-
-  .replay-stage--normal.has-chat .replay-stage__chat {
-    min-height: 0;
-  }
-
+  .replay-stage--normal.has-chat,
   .replay-stage--theater.has-chat {
-    grid-template-columns: minmax(0, 1fr) 260px;
+    --chat-width: 250px;
+  }
+
+  .replay-stage--normal .replay-stage__chat {
+    min-height: 0;
   }
 }
 
-/* Fullscreen: parent is a normal page; the player itself becomes the
-   fullscreen element via the native fullscreen API. The page header / chat
-   stay in the DOM but are hidden by the browser's fullscreen rendering. */
 
 /* ---------- VideoPlayer ---------- */
 
@@ -1712,12 +1803,14 @@ textarea {
   margin-left: 4px;
 }
 
+/* Height is owned by .replay-stage__chat. Two competing sets of min/max
+   heights (one here, one on the stage) used to fight and leave the chat column
+   a different height from the video. */
 .chat-panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   height: 100%;
-  min-height: 480px;
-  max-height: 720px;
 }
 
 .chat-replay {
@@ -1727,32 +1820,74 @@ textarea {
   min-height: 0;
 }
 
-.chat-heading {
+/* One row instead of a heading plus an always-open settings block: those cost
+   115px of a 595px panel before the first message became visible. */
+.chat-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 10px 16px 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  flex: none;
 }
 
-.chat-heading strong {
+.chat-bar__title {
   font-size: 13px;
+  font-weight: 600;
   color: var(--text);
 }
 
-.chat-heading span {
+.chat-bar__count {
+  font-size: 11px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
 
-.chat-controls {
+.chat-bar__offset {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-bar__gear {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.chat-bar__gear:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.chat-bar__gear.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.chat-settings {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  flex: none;
 }
 
 .chat-offset-row {
@@ -1765,7 +1900,7 @@ textarea {
 }
 
 .chat-offset-row button {
-  background: var(--panel-2);
+  background: var(--panel);
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1791,6 +1926,7 @@ textarea {
   font-size: 12px;
   color: var(--text-dim);
 }
+
 
 .chat-list-wrap {
   position: relative;

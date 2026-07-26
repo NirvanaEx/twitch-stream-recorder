@@ -155,6 +155,21 @@ export function MessageIcon(props: IconProps) {
   );
 }
 
+/**
+ * Download the chat bundle. Replaces a hand-positioned "CHAT" label that used
+ * to be absolutely placed inside a plain download button.
+ */
+export function ChatDownloadIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M21 11.5a2 2 0 0 1-2 2h-1l-4 3.5v-3.5H5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <path d="M12 17v5" />
+      <path d="m9.5 19.5 2.5 2.5 2.5-2.5" />
+    </svg>
+  );
+}
+
 export function PlusIcon(props: IconProps) {
   const p = withDefaults(props);
   return (
