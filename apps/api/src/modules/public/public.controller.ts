@@ -12,7 +12,12 @@ import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
-import { extractChatRoles, extractInlineEmotes } from "../chat/chat-roles.utils";
+import {
+  deletionOffsetSec,
+  extractChatRoles,
+  extractInlineEmotes,
+  resolveCaptureAnchorMs,
+} from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -596,6 +601,8 @@ export class PublicStreamsController {
       }),
     ]);
 
+    const anchorMs = resolveCaptureAnchorMs(messages);
+
     return {
       messages: messages.map((message) => ({
         id: message.id,
@@ -610,6 +617,7 @@ export class PublicStreamsController {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
@@ -667,6 +675,8 @@ export class PublicStreamsController {
       }),
     ]);
 
+    const anchorMs = resolveCaptureAnchorMs(messages);
+
     return {
       messages: messages.map((message) => ({
         id: message.id,
@@ -685,6 +695,7 @@ export class PublicStreamsController {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),

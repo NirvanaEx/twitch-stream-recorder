@@ -172,6 +172,59 @@ export function useChatPrefs() {
   return { prefs, update, toggleRole, reset };
 }
 
+/**
+ * Chat offset, remembered per recording.
+ *
+ * It is a correction for one archive's alignment, so a single shared value
+ * would carry a fix for one stream onto every other one. Keyed by archive
+ * instead, and only stored once it differs from what the server computed —
+ * otherwise a later server-side improvement could never reach a viewer who
+ * had merely opened the page.
+ */
+export function useChatOffset(storageKey: string | null, defaultOffsetSec: number) {
+  const [offset, setOffset] = useState(defaultOffsetSec);
+  const [loaded, setLoaded] = useState(false);
+
+  const key = storageKey ? `tsr-chat-offset:${storageKey}` : null;
+
+  useEffect(() => {
+    setLoaded(false);
+
+    if (!key) {
+      setOffset(defaultOffsetSec);
+      setLoaded(true);
+      return;
+    }
+
+    let stored: number | null = null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw !== null) {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) stored = parsed;
+      }
+    } catch {
+      // Ignore unavailable storage.
+    }
+
+    setOffset(stored ?? defaultOffsetSec);
+    setLoaded(true);
+  }, [key, defaultOffsetSec]);
+
+  useEffect(() => {
+    if (!loaded || !key) return;
+
+    try {
+      if (offset === defaultOffsetSec) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, String(offset));
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [offset, defaultOffsetSec, key, loaded]);
+
+  return [offset, setOffset] as const;
+}
+
 /** "word, other" -> ["word", "other"], lowercased and de-blanked. */
 export function splitList(value: string) {
   return value

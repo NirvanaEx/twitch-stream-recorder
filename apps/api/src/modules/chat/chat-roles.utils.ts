@@ -95,6 +95,43 @@ export function extractChatRoles(badgesJson: string | null | undefined): ChatRol
   return ROLE_ORDER.filter((role) => roles.has(role));
 }
 
+/**
+ * When a deletion happened, on the same timeline as relativeTimeSec.
+ *
+ * A ban wipes the author's whole backlog, so every one of their earlier
+ * messages is flagged deleted. Replaying that as "struck through from the
+ * start" is wrong: during the stream those messages looked perfectly normal
+ * until the moment the hammer fell. With the deletion placed on the timeline,
+ * the replay can strike them exactly when chat saw it happen.
+ *
+ * The capture anchor is not stored, but every message carries both its wall
+ * clock time and its offset from that anchor, so it can be recovered. The max
+ * is taken rather than the first message's: relativeTimeSec is clamped at 0,
+ * so anything captured before the anchor (Kick backfills its recent history)
+ * would drag the estimate backwards. Accurate to within a second, which is
+ * the resolution of relativeTimeSec anyway.
+ */
+export function resolveCaptureAnchorMs(
+  messages: Array<{ messageTimestamp: Date; relativeTimeSec: number }>,
+): number | null {
+  let anchor: number | null = null;
+
+  for (const message of messages) {
+    const candidate = message.messageTimestamp.getTime() - message.relativeTimeSec * 1000;
+    if (anchor === null || candidate > anchor) anchor = candidate;
+  }
+
+  return anchor;
+}
+
+export function deletionOffsetSec(
+  deletedAt: Date | null | undefined,
+  anchorMs: number | null,
+): number | null {
+  if (!deletedAt || anchorMs === null) return null;
+  return Math.round((deletedAt.getTime() - anchorMs) / 1000);
+}
+
 export type InlineEmote = { id: string; name: string; start: number; end: number };
 
 /**

@@ -11,9 +11,16 @@ import {
 } from "react";
 import { apiGet } from "../lib/api";
 import { CHAT_COPY, ROLE_LABELS, type ChatCopy } from "../lib/chat-copy";
-import { readableAuthorColor, splitList, useChatPrefs, type ChatRole } from "../lib/chat-prefs";
+import {
+  readableAuthorColor,
+  splitList,
+  useChatOffset,
+  useChatPrefs,
+  type ChatRole,
+} from "../lib/chat-prefs";
 import {
   formatRenderTime,
+  isVisiblyDeleted,
   messageRoles,
   parseActionMessage,
   type ChatMessage,
@@ -70,13 +77,18 @@ export function ChatReplay({
   const [data, setData] = useState<ChatResponse | null>(staticData ?? null);
   const [loading, setLoading] = useState(!staticData);
   const [loadError, setLoadError] = useState(false);
-  const [offset, setOffset] = useState(defaultOffsetSec);
+  // Remembered per recording — an offset tuned for one stream is wrong for
+  // the next, so a single shared value would keep breaking alignment.
+  const [offset, setOffset] = useChatOffset(archiveId ?? chatUrl ?? null, defaultOffsetSec);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [activeUser, setActiveUser] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // State, not a ref: the card positions itself against this element and has
+  // to re-render once it exists.
+  const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
 
   const [liveEmotes, setLiveEmotes] = useState<EmotePayload | null>(null);
   const [liveEmotesState, setLiveEmotesState] = useState<"idle" | "loading" | "error">("idle");
@@ -224,14 +236,21 @@ export function ChatReplay({
   const visibleMessages = useMemo(() => {
     if (timeline.length === 0) return [];
 
-    const toEntry = (message: ChatMessage) => ({
+    // `deleted` is resolved here, not in the row: the strike has to appear at
+    // the moment of the ban rather than from the start, and this memo already
+    // reruns as the clock moves. Rows stay memo-stable because the flag only
+    // ever flips once.
+    const toEntry = (message: ChatMessage, chatTime: number) => ({
       message,
       renderTime: message.relativeTimeSec - baseOffsetSec + offset,
+      deleted: isVisiblyDeleted(message, chatTime),
     });
 
-    // Live recordings (or no video): show the latest captured messages.
+    // Live recordings (or no video): whatever is already deleted, is deleted.
     if (isLive || !videoElement) {
-      return timeline.slice(-MAX_VISIBLE).map(toEntry);
+      return timeline
+        .slice(-MAX_VISIBLE)
+        .map((message) => toEntry(message, Number.POSITIVE_INFINITY));
     }
 
     // VOD: find how many messages have reached their render time. We want the
@@ -249,7 +268,7 @@ export function ChatReplay({
     const start = Math.max(0, lo - MAX_VISIBLE);
     const entries = [];
     for (let i = start; i < lo; i += 1) {
-      entries.push(toEntry(timeline[i]));
+      entries.push(toEntry(timeline[i], threshold));
     }
     return entries;
   }, [timeline, currentTime, offset, baseOffsetSec, isLive, videoElement]);
@@ -387,8 +406,8 @@ export function ChatReplay({
         />
       ) : null}
 
-      <div className="chat-list-wrap">
-        <div ref={listRef} className="chat-list" onScroll={handleScroll}>
+      <div className="chat-list-wrap" ref={setWrapEl}>
+        <div ref={listRef} className="chat-list thin-scroll" onScroll={handleScroll}>
           {loading ? (
             <div className="chat-empty">{copy.loading}</div>
           ) : loadError ? (
@@ -403,6 +422,7 @@ export function ChatReplay({
                 key={entry.message.id}
                 message={entry.message}
                 renderTime={entry.renderTime}
+                deleted={entry.deleted}
                 emoteMap={emoteMap}
                 emotePx={prefs.emotePx}
                 readableColors={prefs.readableColors}
@@ -439,6 +459,7 @@ export function ChatReplay({
             onSeek={seekTo}
             canSeek={canSeek}
             toRenderTime={toRenderTime}
+            anchorEl={wrapEl}
           />
         ) : null}
       </div>
@@ -449,6 +470,7 @@ export function ChatReplay({
 const ChatMessageRow = memo(function ChatMessageRow({
   message,
   renderTime,
+  deleted,
   emoteMap,
   emotePx,
   readableColors,
@@ -463,6 +485,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
 }: {
   message: ChatMessage;
   renderTime: number;
+  /** Already struck through at the player's current position. */
+  deleted: boolean;
   emoteMap: Map<string, EmoteEntry>;
   emotePx: number;
   readableColors: boolean;
@@ -487,7 +511,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
   const className = [
     "chat-message",
-    message.isDeleted ? "is-deleted" : "",
+    deleted ? "is-deleted" : "",
     display.isAction ? "is-action" : "",
     highlightFirstMessage && message.isFirstMessage ? "is-first" : "",
     role ? `is-role is-role--${role}` : "",
@@ -498,8 +522,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
     .join(" ");
 
   // null = the message was deleted on its own; a number = a timeout/ban took
-  // the author's whole history with it, and the length is worth showing.
-  const ban = message.isDeleted ? message.banDurationSec ?? null : null;
+  // the author's whole history with it, and the length is worth showing. The
+  // chip appears together with the strike, not before it.
+  const ban = deleted ? message.banDurationSec ?? null : null;
   const color = readableColors ? readableAuthorColor(message.authorColor) : message.authorColor;
 
   return (

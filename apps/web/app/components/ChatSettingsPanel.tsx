@@ -41,7 +41,7 @@ export function ChatSettingsPanel({
   liveEmotesNote,
 }: Props) {
   return (
-    <div className="chat-settings">
+    <div className="chat-settings thin-scroll">
       <div className="chat-offset-row">
         <span className="chat-offset-label">{copy.offset}</span>
         <button type="button" onClick={() => setOffset((o) => o - 5)} title="-5s">

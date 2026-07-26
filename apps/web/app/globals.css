@@ -2256,33 +2256,45 @@ textarea {
   padding: 12px 16px;
   font-size: 13px;
   line-height: 1.5;
-  /* Firefox */
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  /* Scrollbar styling comes from .thin-scroll — one source of truth. */
 }
 
-/* WebKit / Chromium thin themed scrollbar */
-.chat-list::-webkit-scrollbar {
+/* Thin themed scrollbar, applied through .thin-scroll so every scrollable
+   chat surface looks the same instead of only the message list carrying it.
+   The two engines are kept apart on purpose: Chromium ignores
+   ::-webkit-scrollbar entirely once scrollbar-width is set, which silently
+   forced the bar back to its own ~10px "thin" instead of these 6px. */
+@supports (-moz-appearance: none) {
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+}
+
+.thin-scroll::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.chat-list::-webkit-scrollbar-track {
+.thin-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.chat-list::-webkit-scrollbar-thumb {
+.thin-scroll::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 3px;
 }
 
-.chat-list::-webkit-scrollbar-thumb:hover {
+.thin-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
 }
 
 .chat-message {
   word-wrap: break-word;
   word-break: break-word;
+  /* The list clips overflow, so an unbroken 40-character word would have its
+     tail cut off rather than wrapped. Force the break. */
+  overflow-wrap: anywhere;
 }
 
 .chat-message.is-deleted {
@@ -2622,7 +2634,7 @@ textarea {
 
 .chat-bar__filtered {
   font-size: 11px;
-  color: var(--warning, #fbbf24);
+  color: var(--warn);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2631,26 +2643,59 @@ textarea {
    desktop and narrower on mobile, so there is no room for a second one. */
 
 .chat-user-card {
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: 6px;
-  max-height: 60%;
+  position: fixed;
+  max-height: min(60vh, 460px);
   display: flex;
   flex-direction: column;
   background: var(--panel-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  z-index: 3;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  z-index: 60;
+  overflow: hidden;
 }
 
 .chat-user-card__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 7px 9px;
   border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.chat-user-card__grip {
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+
+.chat-user-card__meta {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-user-card__search {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 4px 7px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.chat-user-card__search:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .chat-user-card__name {
@@ -2679,11 +2724,10 @@ textarea {
 .chat-user-card__roles {
   display: flex;
   gap: 3px;
-  padding: 6px 9px 0;
+  flex-wrap: wrap;
 }
 
 .chat-user-card__stats {
-  padding: 6px 9px 0;
   font-size: 11px;
   color: var(--text-dim);
 }
@@ -2694,7 +2738,6 @@ textarea {
 }
 
 .chat-user-card__hint {
-  padding: 2px 9px 6px;
   font-size: 10px;
   color: var(--text-faint);
   font-style: italic;
@@ -2702,13 +2745,17 @@ textarea {
 
 .chat-user-card__list {
   overflow-y: auto;
-  padding: 0 6px 6px;
+  /* Never sideways: chat is full of unbroken strings like "ЫВЗАХЫВЗАХЫВА",
+     and letting them widen the box turns every row into a scroll. */
+  overflow-x: hidden;
+  padding: 4px 6px 6px;
   font-size: 12px;
 }
 
 .chat-user-card__row {
   display: block;
   width: 100%;
+  max-width: 100%;
   text-align: left;
   background: none;
   border: none;
@@ -2719,6 +2766,19 @@ textarea {
   font-size: inherit;
   font-family: inherit;
   line-height: 1.35;
+  white-space: normal;
+  /* "anywhere" and not "break-word": a single 40-character word with no
+     spaces has to break mid-word, which break-word alone will not do here. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-user-card__row .chat-text {
+  display: inline;
+}
+
+.chat-user-card__row .chat-emote {
+  max-width: 100%;
 }
 
 .chat-user-card__row:hover:not(:disabled) {

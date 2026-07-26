@@ -59,6 +59,10 @@ export const CHAT_COPY = {
     userCardSeek: "Перемотать к этому сообщению",
     userCardOtherPart: "Это сообщение в другой части записи",
     userCardDeleted: "удалённых",
+    userCardDrag: "Потяните, чтобы перенести окно",
+    userCardSearch: "Поиск по сообщениям",
+    userCardNoMatch: "Ничего не найдено.",
+    offsetSaved: "сохранён для этой записи",
   },
   en: {
     title: "Chat",
@@ -113,6 +117,10 @@ export const CHAT_COPY = {
     userCardSeek: "Jump to this message",
     userCardOtherPart: "This message is in another part of the recording",
     userCardDeleted: "deleted",
+    userCardDrag: "Drag to move the window",
+    userCardSearch: "Search messages",
+    userCardNoMatch: "Nothing found.",
+    offsetSaved: "saved for this recording",
   },
 } as const;
 

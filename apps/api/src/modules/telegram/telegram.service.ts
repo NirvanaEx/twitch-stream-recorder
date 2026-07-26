@@ -11,7 +11,12 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
-import { extractChatRoles, extractInlineEmotes } from "../chat/chat-roles.utils";
+import {
+  deletionOffsetSec,
+  extractChatRoles,
+  extractInlineEmotes,
+  resolveCaptureAnchorMs,
+} from "../chat/chat-roles.utils";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
@@ -626,6 +631,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
+    const anchorMs = resolveCaptureAnchorMs(messages);
+
     const bundle = {
       version: 1,
       kind: "tsr-archive-bundle",
@@ -652,6 +659,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
