@@ -35,6 +35,7 @@ type PublicStreamDetail = {
   fileSizeBytes: string | null;
   videoUrl: string;
   videoSource: "local" | "telegram";
+  audioOnly: boolean;
   chatOffsetSec: number;
   telegramParts: PublicTelegramPart[];
 };
@@ -74,7 +75,7 @@ export default function PublicWatchPage({
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [chatVisible, setChatVisible] = useState(true);
-  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [videoElement, setVideoElement] = useState<HTMLMediaElement | null>(null);
   // 1-based index of the Telegram part being played (split recordings only).
   const [currentPart, setCurrentPart] = useState(1);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
@@ -432,6 +433,8 @@ export default function PublicWatchPage({
               playlist={playlist ?? undefined}
               initialSegment={initialSegmentRef.current}
               onSegmentChange={handleSegmentChange}
+              audioOnly={data.audioOnly}
+              artworkUrl={data.channel.profileImageUrl}
               poster={posterSrc}
               mode={mode}
               onModeChange={setMode}

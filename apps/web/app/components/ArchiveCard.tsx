@@ -2,6 +2,7 @@
 
 import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
+import { waveformHeights } from "../lib/waveform";
 import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "./IconButton";
 import { PlatformTag } from "./PlatformTag";
@@ -41,20 +42,6 @@ export type ArchiveItem = {
   thumbnailUrl: string | null;
   durationSec: number | null;
 };
-
-// Deterministic pseudo-waveform for the audio cover: the same recording always
-// draws the same bars, so cards stay stable between refreshes.
-function waveformHeights(seed: string, count: number) {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  }
-  return Array.from({ length: count }, (_, index) => {
-    hash = (hash * 1103515245 + 12345) >>> 0;
-    const wave = Math.sin((index / count) * Math.PI);
-    return Math.round(6 + ((hash % 100) / 100) * 16 * (0.45 + wave * 0.55));
-  });
-}
 
 export function ArchiveCard({
   archive,

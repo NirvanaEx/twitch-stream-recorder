@@ -68,7 +68,7 @@ export default function LocalReplayPage() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [videoElement, setVideoElement] = useState<HTMLMediaElement | null>(null);
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [chatVisible, setChatVisible] = useState(true);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -135,6 +135,12 @@ export default function LocalReplayPage() {
   const ready = Boolean(videoUrl && bundle);
   const hasChat = chatVisible && ready;
 
+  // An audio-only recording is downloaded as .m4a — play it as audio instead
+  // of putting a silent black rectangle on the screen.
+  const isAudioFile =
+    (videoFile?.type ?? "").startsWith("audio/") ||
+    /\.(m4a|mp3|aac|ogg|opus|wav|flac)$/i.test(videoFile?.name ?? "");
+
   const stageClass = [
     "replay-stage",
     `replay-stage--${mode}`,
@@ -161,7 +167,7 @@ export default function LocalReplayPage() {
               <FilePicker
                 label={t.localReplay.pickVideo}
                 hint={t.localReplay.pickVideoHint}
-                accept="video/*"
+                accept="video/*,audio/*"
                 file={videoFile}
                 onPick={(file) => setVideoFile(file)}
               />
@@ -222,6 +228,7 @@ export default function LocalReplayPage() {
         <div className="replay-stage__player">
           <VideoPlayer
             src={videoUrl!}
+            audioOnly={isAudioFile}
             mode={mode}
             onModeChange={setMode}
             chatVisible={chatVisible}

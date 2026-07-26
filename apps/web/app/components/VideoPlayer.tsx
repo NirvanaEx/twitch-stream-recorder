@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { waveformHeights } from "../lib/waveform";
 import {
   CloseIcon,
   FullscreenExitIcon,
@@ -33,8 +34,17 @@ type VideoPlayerProps = {
   onChatToggle?: () => void;
   chatVisible?: boolean;
   showChatButton?: boolean;
-  onVideoElement?: (element: HTMLVideoElement | null) => void;
+  onVideoElement?: (element: HTMLMediaElement | null) => void;
   isLive?: boolean;
+  /**
+   * Audio-only recording: there is no picture to show, so the media element is
+   * an <audio> behind a cover strip instead of a 16:9 video stage, and every
+   * control that only means something for video (theater, fullscreen, frame
+   * previews on the timeline) is dropped.
+   */
+  audioOnly?: boolean;
+  /** Cover image for audio mode — the channel avatar. */
+  artworkUrl?: string | null;
   emptyText?: string;
   /** Optional title shown in the top-left when in theater / fullscreen modes. */
   title?: string;
@@ -84,6 +94,8 @@ export function VideoPlayer({
   showChatButton = false,
   onVideoElement,
   isLive = false,
+  audioOnly = false,
+  artworkUrl,
   emptyText,
   title,
   onClose,
@@ -92,7 +104,7 @@ export function VideoPlayer({
   initialSegment,
   onSegmentChange,
 }: VideoPlayerProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useRef<HTMLMediaElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const centerIconTimerRef = useRef<number | null>(null);
@@ -122,10 +134,10 @@ export function VideoPlayer({
   const lastTouchAtRef = useRef(0);
   const lastTapRef = useRef<{ time: number; zone: "left" | "mid" | "right" } | null>(null);
 
-  // Bubble video element up so external code (chat replay, etc.) can listen
-  // to it. We send the element on mount and null on unmount.
+  // Bubble the media element up so external code (chat replay, etc.) can
+  // listen to it. We send the element on mount and null on unmount.
   const setVideoNode = useCallback(
-    (node: HTMLVideoElement | null) => {
+    (node: HTMLMediaElement | null) => {
       videoRef.current = node;
       onVideoElement?.(node);
     },
@@ -285,7 +297,7 @@ export function VideoPlayer({
       }
 
       setWaiting(false);
-      setMediaError(describeMediaError(v.error));
+      setMediaError(describeMediaError(v.error, audioOnly));
     };
 
     setMediaError(null);
@@ -325,7 +337,7 @@ export function VideoPlayer({
       v.removeEventListener("volumechange", onVolume);
       v.removeEventListener("ratechange", onRate);
     };
-  }, [effectiveSrc]);
+  }, [effectiveSrc, audioOnly]);
 
   // Restore stored volume / muted across visits.
   useEffect(() => {
@@ -497,12 +509,15 @@ export function VideoPlayer({
   // ---- Auto-hide controls during playback -------------------------------
 
   const armHide = useCallback(() => {
+    // Audio mode has nothing behind the controls to uncover — hiding them
+    // would just leave an empty strip.
+    if (audioOnly) return;
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     hideTimerRef.current = window.setTimeout(() => {
       const v = videoRef.current;
       if (v && !v.paused) setControlsVisible(false);
     }, HIDE_DELAY_MS);
-  }, []);
+  }, [audioOnly]);
 
   const handleMouseMove = useCallback(() => {
     // Touch taps fire synthetic mouse events afterwards; if we react to
@@ -566,7 +581,7 @@ export function VideoPlayer({
     if (!controlsVisible) {
       setControlsVisible(true);
       armHide();
-    } else if (isPlaying) {
+    } else if (isPlaying && !audioOnly) {
       setControlsVisible(false);
     }
   };
@@ -626,11 +641,13 @@ export function VideoPlayer({
           break;
         case "f":
         case "F":
+          if (audioOnly) break;
           event.preventDefault();
           toggleFullscreen();
           break;
         case "t":
         case "T":
+          if (audioOnly) break;
           event.preventDefault();
           toggleTheater();
           break;
@@ -682,6 +699,7 @@ export function VideoPlayer({
     return () => window.removeEventListener("keydown", onKey);
   }, [
     adjustVolume,
+    audioOnly,
     flashCenterHint,
     mode,
     onChatToggle,
@@ -797,6 +815,7 @@ export function VideoPlayer({
   const containerClassName = [
     "vp",
     `vp--${mode}`,
+    audioOnly ? "vp--audio" : "",
     controlsVisible ? "vp--show" : "vp--hide",
     isPlaying ? "vp--playing" : "vp--paused",
     className ?? "",
@@ -804,23 +823,57 @@ export function VideoPlayer({
     .filter(Boolean)
     .join(" ");
 
+  // Audio has no frames to show: the stage is a cover strip with a
+  // deterministic waveform, the same decoration the archive card uses.
+  const waveBars = useMemo(
+    () => (audioOnly ? waveformHeights(effectiveSrc || "audio", 64) : []),
+    [audioOnly, effectiveSrc],
+  );
+
   return (
     <div
       ref={containerRef}
       className={containerClassName}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => {
-        if (isPlaying) setControlsVisible(false);
+        if (isPlaying && !audioOnly) setControlsVisible(false);
       }}
       onDoubleClick={(event) => {
         // Avoid double-click toggling when clicking on controls. Touch
         // double-taps are handled in onPointerUp (they seek, not fullscreen).
+        if (audioOnly) return;
         if ((event.target as HTMLElement).closest(".vp__controls")) return;
         if (Date.now() - lastTouchAtRef.current < 700) return;
         toggleFullscreen();
       }}
     >
-      {effectiveSrc ? (
+      {effectiveSrc && audioOnly ? (
+        <div className="vp__audio-stage" onPointerUp={handleVideoPointerUp}>
+          <audio
+            ref={setVideoNode}
+            className="vp__audio-media"
+            src={effectiveSrc}
+            autoPlay={autoPlay}
+            preload="metadata"
+          />
+          {artworkUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="vp__audio-avatar" src={artworkUrl} alt="" />
+          ) : (
+            <span className="vp__audio-glyph" aria-hidden>
+              🎧
+            </span>
+          )}
+          <span className="vp__audio-wave" aria-hidden>
+            {waveBars.map((height, index) => (
+              <i
+                key={index}
+                style={{ height: 8 + height * 2, animationDelay: `${(index % 12) * 70}ms` }}
+              />
+            ))}
+          </span>
+        </div>
+      ) : effectiveSrc ? (
         <video
           ref={setVideoNode}
           className="vp__video"
@@ -881,7 +934,7 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {!isPlaying && currentTime === 0 && effectiveSrc && !mediaError ? (
+      {!isPlaying && currentTime === 0 && effectiveSrc && !mediaError && !audioOnly ? (
         <button type="button" className="vp__big-play" onClick={togglePlay} aria-label="Play">
           <PlayIcon size={44} />
         </button>
@@ -899,24 +952,27 @@ export function VideoPlayer({
             <div className="vp__progress-track" />
             <div className="vp__progress-buffered" style={{ width: `${bufferedPct}%` }} />
             <div className="vp__progress-played" style={{ width: `${progressPct}%` }} />
-            {/* Kept mounted so the preview video's metadata loads only once. */}
+            {/* Kept mounted so the preview video's metadata loads only once.
+                Audio has no frames — only the hovered timestamp is shown. */}
             <div
-              className="vp__scrub-preview"
+              className={`vp__scrub-preview${audioOnly ? " vp__scrub-preview--time" : ""}`}
               style={{
                 left: `clamp(86px, ${scrubPreview?.left ?? 0}%, calc(100% - 86px))`,
                 visibility: scrubPreview ? "visible" : "hidden",
               }}
               aria-hidden
             >
-              <video
-                ref={previewVideoRef}
-                className="vp__scrub-video"
-                src={previewSrc || undefined}
-                muted
-                playsInline
-                preload="metadata"
-                tabIndex={-1}
-              />
+              {audioOnly ? null : (
+                <video
+                  ref={previewVideoRef}
+                  className="vp__scrub-video"
+                  src={previewSrc || undefined}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  tabIndex={-1}
+                />
+              )}
               <span className="vp__scrub-time">
                 {scrubPreview ? formatTime(scrubPreview.time) : ""}
               </span>
@@ -1035,27 +1091,33 @@ export function VideoPlayer({
               </button>
             ) : null}
 
-            <button
-              type="button"
-              className={`vp__btn ${mode === "theater" ? "vp__btn--active" : ""}`}
-              onClick={toggleTheater}
-              title="Режим кинотеатра (T)"
-            >
-              <TheaterIcon size={20} />
-            </button>
+            {/* Theater and fullscreen exist to enlarge a picture — an audio
+                track has none, so the audio player stays compact. */}
+            {audioOnly ? null : (
+              <>
+                <button
+                  type="button"
+                  className={`vp__btn ${mode === "theater" ? "vp__btn--active" : ""}`}
+                  onClick={toggleTheater}
+                  title="Режим кинотеатра (T)"
+                >
+                  <TheaterIcon size={20} />
+                </button>
 
-            <button
-              type="button"
-              className="vp__btn"
-              onClick={toggleFullscreen}
-              title="Полный экран (F)"
-            >
-              {mode === "fullscreen" ? (
-                <FullscreenExitIcon size={20} />
-              ) : (
-                <FullscreenIcon size={20} />
-              )}
-            </button>
+                <button
+                  type="button"
+                  className="vp__btn"
+                  onClick={toggleFullscreen}
+                  title="Полный экран (F)"
+                >
+                  {mode === "fullscreen" ? (
+                    <FullscreenExitIcon size={20} />
+                  ) : (
+                    <FullscreenIcon size={20} />
+                  )}
+                </button>
+              </>
+            )}
           </div>
         </div>
       ) : null}
@@ -1063,18 +1125,21 @@ export function VideoPlayer({
   );
 }
 
-function describeMediaError(error: MediaError | null) {
+function describeMediaError(error: MediaError | null, audioOnly = false) {
+  const what = audioOnly ? "аудио" : "видео";
   switch (error?.code) {
     case MediaError.MEDIA_ERR_NETWORK:
-      return "Ошибка сети при загрузке видео. Проверьте подключение и попробуйте снова.";
+      return `Ошибка сети при загрузке ${what}. Проверьте подключение и попробуйте снова.`;
     case MediaError.MEDIA_ERR_DECODE:
-      return "Не удалось декодировать видео — файл может быть повреждён.";
+      return `Не удалось декодировать ${what} — файл может быть повреждён.`;
     case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-      return "Видео недоступно: файл не найден или формат не поддерживается браузером.";
+      return audioOnly
+        ? "Аудио недоступно: файл не найден или формат не поддерживается браузером."
+        : "Видео недоступно: файл не найден или формат не поддерживается браузером.";
     case MediaError.MEDIA_ERR_ABORTED:
-      return "Загрузка видео была прервана.";
+      return `Загрузка ${what} была прервана.`;
     default:
-      return "Не удалось воспроизвести видео.";
+      return `Не удалось воспроизвести ${what}.`;
   }
 }
 
