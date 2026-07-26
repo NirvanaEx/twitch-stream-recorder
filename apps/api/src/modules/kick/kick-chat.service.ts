@@ -585,7 +585,11 @@ export function sortHistoryChronologically(history: KickRecentMessage[]) {
  * its name so the stored text is readable, and record where it landed so a
  * renderer can put the image back later.
  */
-export function extractEmotes(content: string) {
+export function extractEmotes(rawContent: string) {
+  // Leading whitespace is dropped up front: trimming after the loop would
+  // shift every recorded position by the number of characters removed, and
+  // the renderer would paste each image a few letters off.
+  const content = rawContent.trim();
   const emotes: { id: string; name: string; start: number; end: number }[] = [];
   let text = "";
   let cursor = 0;
@@ -608,5 +612,6 @@ export function extractEmotes(content: string) {
 
   text += content.slice(cursor);
 
-  return { text: text.trim(), emotes };
+  // trimEnd only — trailing spaces cannot move an index that precedes them.
+  return { text: text.trimEnd(), emotes };
 }

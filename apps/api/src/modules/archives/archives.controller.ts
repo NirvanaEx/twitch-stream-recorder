@@ -11,6 +11,7 @@ import {
 import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { RequirePermissions } from "../auth/auth.decorators";
+import { extractChatRoles, extractInlineEmotes } from "../chat/chat-roles.utils";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import type { EmoteSnapshotPayload } from "../chat/seventv.service";
@@ -105,7 +106,9 @@ export class ArchivesController {
         authorColor: message.authorColor,
         textRaw: message.textRaw,
         badges: parseStoredJsonString(message.badgesJson),
+        roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
+        inlineEmotes: extractInlineEmotes(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
@@ -169,7 +172,9 @@ export class ArchivesController {
         authorColor: message.authorColor,
         textRaw: message.textRaw,
         badges: parseStoredJsonString(message.badgesJson),
+        roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
+        inlineEmotes: extractInlineEmotes(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
