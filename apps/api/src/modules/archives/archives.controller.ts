@@ -12,6 +12,7 @@ import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { RequirePermissions } from "../auth/auth.decorators";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
+import { LiveEmotesService } from "../chat/live-emotes.service";
 import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -33,6 +34,7 @@ export class ArchivesController {
     private readonly telegramStreamService: TelegramStreamService,
     private readonly thumbnailService: ThumbnailService,
     private readonly emoteMirrorService: EmoteMirrorService,
+    private readonly liveEmotesService: LiveEmotesService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -112,6 +114,16 @@ export class ArchivesController {
       })),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
+  }
+
+  /**
+   * The channel's 7TV set as it is today — the "current emotes" mode of the
+   * replay. Separate from ":id/chat" on purpose: the recorded snapshot must
+   * stay the default, and this costs a 7TV round-trip.
+   */
+  @Get(":id/emotes/live")
+  async getArchiveLiveEmotes(@Param("id") id: string) {
+    return { emotes: await this.liveEmotesService.forSession(id) };
   }
 
   @Get(":id/bundle")
