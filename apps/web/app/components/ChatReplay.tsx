@@ -16,6 +16,10 @@ type ChatMessage = {
   relativeTimeSec: number;
   messageTimestamp: string;
   isDeleted: boolean;
+  /** Timeout seconds behind the deletion; 0 = permanent ban; null = plain delete. */
+  banDurationSec?: number | null;
+  /** The author's first message ever in this channel (Twitch first-msg tag). */
+  isFirstMessage?: boolean;
 };
 
 type EmoteEntry = {
@@ -72,8 +76,28 @@ export function ChatReplay({
   const [loading, setLoading] = useState(!staticData);
   const [loadError, setLoadError] = useState(false);
   const [offset, setOffset] = useState(defaultOffsetSec);
-  const [showDeleted, setShowDeleted] = useState(false);
+  // Deleted messages are shown by default — with strikethrough and the ban
+  // length, hiding them turned out to be the rarer wish. The toggle persists.
+  const [showDeleted, setShowDeleted] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("tsr-chat-show-deleted") === "0") {
+        setShowDeleted(false);
+      }
+    } catch {
+      // Ignore broken localStorage.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tsr-chat-show-deleted", showDeleted ? "1" : "0");
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [showDeleted]);
   const [currentTime, setCurrentTime] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
@@ -336,6 +360,7 @@ export function ChatReplay({
                 message={entry.message}
                 renderTime={entry.renderTime}
                 emoteMap={emoteMap}
+                locale={locale}
               />
             ))
           )}
@@ -365,14 +390,27 @@ function formatRenderTime(seconds: number) {
     : `${minutes}:${secs.toString().padStart(2, "0")}`;
 }
 
+/** "10 мин" / "1 ч" / "30 сек"; 0 means the ban had no end. */
+function formatBanDuration(seconds: number, locale: "ru" | "en") {
+  if (seconds <= 0) return locale === "ru" ? "бан" : "ban";
+  if (seconds < 60) return `${seconds} ${locale === "ru" ? "сек" : "s"}`;
+  if (seconds < 3600) {
+    return `${Math.round(seconds / 60)} ${locale === "ru" ? "мин" : "min"}`;
+  }
+  const hours = Math.round((seconds / 3600) * 10) / 10;
+  return `${hours} ${locale === "ru" ? "ч" : "h"}`;
+}
+
 const ChatMessageItem = memo(function ChatMessageItem({
   message,
   renderTime,
   emoteMap,
+  locale,
 }: {
   message: ChatMessage;
   renderTime: number;
   emoteMap: Map<string, EmoteEntry>;
+  locale: "ru" | "en";
 }) {
   const display = useMemo(() => parseActionMessage(message.textRaw), [message.textRaw]);
   const tokens = useMemo(() => renderTokens(display.text, emoteMap, message.emotes), [
@@ -386,9 +424,15 @@ const ChatMessageItem = memo(function ChatMessageItem({
     "chat-message",
     message.isDeleted ? "is-deleted" : "",
     display.isAction ? "is-action" : "",
+    message.isFirstMessage ? "is-first" : "",
   ]
     .filter(Boolean)
     .join(" ");
+
+  const copy = CHAT_COPY[locale];
+  // null = the message was deleted on its own; a number = a timeout/ban took
+  // the author's whole history with it, and the length is worth showing.
+  const ban = message.isDeleted ? message.banDurationSec ?? null : null;
 
   return (
     <div className={className}>
@@ -418,6 +462,14 @@ const ChatMessageItem = memo(function ChatMessageItem({
           ),
         )}
       </span>
+      {ban !== null ? (
+        <span
+          className={`chat-ban${ban === 0 ? " chat-ban--perma" : ""}`}
+          title={ban === 0 ? copy.banPermanent : copy.banTimeout}
+        >
+          {ban === 0 ? "⛔" : "⏱"} {formatBanDuration(ban, locale)}
+        </span>
+      ) : null}
     </div>
   );
 });
@@ -546,6 +598,8 @@ const CHAT_COPY = {
     settings: "Настройки чата",
     offsetAria: "Сдвиг чата в секундах",
     showDeleted: "Показывать удалённые",
+    banPermanent: "Пользователь забанен навсегда",
+    banTimeout: "Пользователь получил таймаут",
     loading: "Загружаю чат…",
     loadError: "Не удалось загрузить чат. Проверьте соединение с сервером.",
     empty: "Для этого стрима сообщения чата не записались.",
@@ -559,6 +613,8 @@ const CHAT_COPY = {
     settings: "Chat settings",
     offsetAria: "Chat offset in seconds",
     showDeleted: "Show deleted",
+    banPermanent: "User was banned permanently",
+    banTimeout: "User was timed out",
     loading: "Loading chat…",
     loadError: "Could not load chat. Check the server connection.",
     empty: "No chat messages were captured for this stream.",

@@ -357,7 +357,17 @@ export class ChatService {
     } else if (parsed.command === "CLEARMSG") {
       void this.markDeletedByMessageId(capture, parsed.tags["target-msg-id"] ?? null);
     } else if (parsed.command === "CLEARCHAT") {
-      void this.markDeletedByUser(capture, parsed.params[1] ?? null);
+      // ":tmi CLEARCHAT #chan :baduser" — the banned login is the TRAILING
+      // part, not params[1]; reading params[1] meant timeouts and bans never
+      // marked anything for four months of archives. ban-duration is the
+      // timeout in seconds; a CLEARCHAT without it is a permanent ban.
+      const target = parsed.trailing ?? parsed.params[1] ?? null;
+      const banDuration = Number.parseInt(parsed.tags["ban-duration"] ?? "", 10);
+      void this.markDeletedByUser(
+        capture,
+        target,
+        Number.isFinite(banDuration) && banDuration > 0 ? banDuration : 0,
+      );
     }
   }
 
@@ -395,6 +405,8 @@ export class ChatService {
           emotesJson: parsed.tags["emotes"] ? JSON.stringify(parsed.tags["emotes"]) : null,
           messageTimestamp,
           relativeTimeSec,
+          // Twitch marks the author's first-ever message in this channel.
+          isFirstMessage: parsed.tags["first-msg"] === "1",
         },
       });
 
@@ -445,7 +457,11 @@ export class ChatService {
     }
   }
 
-  private async markDeletedByUser(capture: ActiveCapture, login: string | null) {
+  private async markDeletedByUser(
+    capture: ActiveCapture,
+    login: string | null,
+    banDurationSec: number | null = null,
+  ) {
     if (!login) {
       return;
     }
@@ -459,7 +475,7 @@ export class ChatService {
       if (capture.keepDeletedMessages) {
         await this.prisma.chatMessage.updateMany({
           where,
-          data: { isDeleted: true, deletedAt: new Date() },
+          data: { isDeleted: true, deletedAt: new Date(), banDurationSec },
         });
       } else {
         await this.prisma.chatMessage.deleteMany({ where });

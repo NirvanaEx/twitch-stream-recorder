@@ -646,6 +646,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        banDurationSec: message.banDurationSec,
+        isFirstMessage: message.isFirstMessage,
       })),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };

@@ -8,93 +8,93 @@ datasource db {
 }
 
 model Channel {
-  id               String    @id @default(cuid())
+  id                     String          @id @default(cuid())
   // "twitch" | "kick". The twitchUserId/twitchLogin columns hold the platform's
   // own id and slug for both — they keep their original names because renaming
   // a column through `prisma db push` drops its data, and the login of every
   // tracked channel is not worth losing over cosmetics.
-  platform         String    @default("twitch")
-  twitchUserId     String?
-  twitchLogin      String
-  displayName      String?
-  profileImageUrl  String?
-  isEnabled        Boolean   @default(true)
-  autoRecord       Boolean   @default(true)
-  manualStopUntilOffline Boolean @default(false)
-  preferredQuality String    @default("best")
+  platform               String          @default("twitch")
+  twitchUserId           String?
+  twitchLogin            String
+  displayName            String?
+  profileImageUrl        String?
+  isEnabled              Boolean         @default(true)
+  autoRecord             Boolean         @default(true)
+  manualStopUntilOffline Boolean         @default(false)
+  preferredQuality       String          @default("best")
   // Two independent switches. Video off + audio on records the audio_only
   // Twitch variant (useful when the streamer keeps VODs: the track overlays
   // the VOD via the userscript, so storing video again is a waste). Video on
   // + audio on keeps both. Both off is rejected — that is what isEnabled and
   // autoRecord are for.
-  recordVideo      Boolean   @default(true)
-  recordAudio      Boolean   @default(true)
+  recordVideo            Boolean         @default(true)
+  recordAudio            Boolean         @default(true)
   // Derived mirror of "audio without video", kept in sync by ChannelsService.
   // The recorder reads it to pick the streamlink variant.
-  audioOnly        Boolean   @default(false)
-  isLive           Boolean   @default(false)
-  currentTitle     String?
-  currentGameName  String?
-  liveStartedAt    DateTime?
-  lastSeenLiveAt   DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  streamSessions   StreamSession[]
+  audioOnly              Boolean         @default(false)
+  isLive                 Boolean         @default(false)
+  currentTitle           String?
+  currentGameName        String?
+  liveStartedAt          DateTime?
+  lastSeenLiveAt         DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  streamSessions         StreamSession[]
 
   // The same slug can exist on both platforms and mean different people.
   @@unique([platform, twitchLogin])
 }
 
 model StreamSession {
-  id                 String    @id @default(cuid())
-  channelId          String
-  twitchStreamId     String?
-  title              String?
-  categoryName       String?
-  startedAt          DateTime?
-  endedAt            DateTime?
-  status             String    @default("idle")
-  videoStatus        String    @default("idle")
-  chatStatus         String    @default("idle")
-  replayStatus       String    @default("idle")
-  isLive             Boolean   @default(false)
-  recordingSource    String?
-  recordingPath      String?
-  playbackPath       String?
-  previewImageUrl    String?
-  fileSizeBytes      String?
+  id                      String               @id @default(cuid())
+  channelId               String
+  twitchStreamId          String?
+  title                   String?
+  categoryName            String?
+  startedAt               DateTime?
+  endedAt                 DateTime?
+  status                  String               @default("idle")
+  videoStatus             String               @default("idle")
+  chatStatus              String               @default("idle")
+  replayStatus            String               @default("idle")
+  isLive                  Boolean              @default(false)
+  recordingSource         String?
+  recordingPath           String?
+  playbackPath            String?
+  previewImageUrl         String?
+  fileSizeBytes           String?
   // Actual recorded length in seconds (probed from the output file). Unlike
   // endedAt-startedAt it reflects when capture really started — important when
   // the recorder joined the stream partway through.
-  durationSec        Int?
-  errorMessage       String?
-  chatAvailable      Boolean   @default(false)
-  chatPath           String?
-  stoppedByUser      Boolean   @default(false)
-  savedChatOffsetSec Int?
+  durationSec             Int?
+  errorMessage            String?
+  chatAvailable           Boolean              @default(false)
+  chatPath                String?
+  stoppedByUser           Boolean              @default(false)
+  savedChatOffsetSec      Int?
   // The session was captured in audio-only mode: playbackPath points to an
   // .m4a, there is no video, and the Telegram copy is a single audio message.
-  audioOnly          Boolean   @default(false)
+  audioOnly               Boolean              @default(false)
   // Whether a standalone .m4a should be produced for this session. Captured
   // from the channel at start so a mid-recording settings change cannot make
   // the completion path disagree with what was recorded.
-  extractAudio       Boolean   @default(true)
+  extractAudio            Boolean              @default(true)
   // Frame grabbed from the finished recording, used as the archive cover.
   // Twitch's own previewImageUrl points at a live thumbnail that 404s once
   // the broadcast ends, so covers used to disappear from the panel.
-  thumbnailPath      String?
+  thumbnailPath           String?
   // Telegram offload: none | pending | uploading | uploaded | error
-  telegramStatus     String    @default("none")
-  telegramUploadedAt DateTime?
-  telegramError      String?
+  telegramStatus          String               @default("none")
+  telegramUploadedAt      DateTime?
+  telegramError           String?
   // Message id of the chat bundle (.tsr.json) posted to the channel.
-  telegramChatMessageId String?
+  telegramChatMessageId   String?
   // Set when the local video file was removed after a successful Telegram upload.
-  localFileDeletedAt DateTime?
+  localFileDeletedAt      DateTime?
   // Standalone audio track (.m4a) extracted after the recording so it can be
   // overlaid on the Twitch VOD (DMCA-muted sections) via the userscript.
-  audioPath          String?
-  audioSizeBytes     String?
+  audioPath               String?
+  audioSizeBytes          String?
   // Telegram copy of the audio track (single message, not split into parts).
   telegramAudioChatId     String?
   telegramAudioMessageId  String?
@@ -102,24 +102,24 @@ model StreamSession {
   telegramAudioUploadedAt DateTime?
   // Set when the audio track was removed everywhere (local file and the
   // Telegram message) — only by an explicit "delete audio" request.
-  audioDeletedAt     DateTime?
+  audioDeletedAt          DateTime?
   // Set when only the local .m4a was dropped by the local-retention cleanup:
   // the Telegram copy is still there and playback falls back to it.
-  audioLocalDeletedAt DateTime?
+  audioLocalDeletedAt     DateTime?
   // The moment the capture process (streamlink) exited — BEFORE the remux,
   // unlike endedAt which lands minutes later. captureEndedAt - durationSec is
   // the most precise "where the recording starts on the VOD timeline" anchor:
   // immune to both the capture startup delay and the --hls-live-restart
   // rewind that make createdAt drift.
-  captureEndedAt     DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  channel            Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  telegramParts      TelegramUploadPart[]
+  captureEndedAt          DateTime?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  channel                 Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  telegramParts           TelegramUploadPart[]
 }
 
 model TelegramUploadPart {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   streamSessionId String
   partIndex       Int
   partCount       Int
@@ -131,16 +131,16 @@ model TelegramUploadPart {
   fileSizeBytes   String?
   // Position of this part on the whole-stream timeline; used to keep chat
   // replay in sync when the player switches between parts.
-  startOffsetSec  Int      @default(0)
+  startOffsetSec  Int           @default(0)
   durationSec     Int?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime      @default(now())
   session         StreamSession @relation(fields: [streamSessionId], references: [id], onDelete: Cascade)
 
   @@unique([streamSessionId, partIndex])
 }
 
 model ChatMessage {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   streamSessionId   String
   providerMessageId String?
   authorLogin       String
@@ -151,9 +151,14 @@ model ChatMessage {
   emotesJson        String?
   messageTimestamp  DateTime
   relativeTimeSec   Int
-  isDeleted         Boolean  @default(false)
+  isDeleted         Boolean   @default(false)
   deletedAt         DateTime?
-  createdAt         DateTime @default(now())
+  // Why the message was wiped: seconds of the timeout that removed it,
+  // 0 for a permanent ban, null for a plain single-message deletion.
+  banDurationSec    Int?
+  // Twitch first-msg tag: the author's first message ever in this channel.
+  isFirstMessage    Boolean   @default(false)
+  createdAt         DateTime  @default(now())
 
   @@index([streamSessionId, relativeTimeSec])
 }
