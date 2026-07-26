@@ -50,6 +50,11 @@ type ChatReplayProps = {
   archiveId?: string;
   /** Override the API path used to load chat (e.g. the public endpoint). */
   chatUrl?: string;
+  /**
+   * API path returning the channel's 7TV set as it is now. Omit to hide the
+   * "current emotes" switch — an offline bundle has no server to ask.
+   */
+  liveEmotesUrl?: string;
   staticData?: ChatResponse;
   // Audio-only archives play through an <audio> element, so only the shared
   // HTMLMediaElement surface (currentTime / timeupdate) may be used here.
@@ -70,6 +75,7 @@ const MAX_VISIBLE = 200;
 export function ChatReplay({
   archiveId,
   chatUrl,
+  liveEmotesUrl,
   staticData,
   videoElement,
   isLive,
@@ -86,16 +92,63 @@ export function ChatReplay({
   // length, hiding them turned out to be the rarer wish. The toggle persists.
   const [showDeleted, setShowDeleted] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The recorded snapshot is the default on purpose: it is what the chat
+  // actually saw. "Current" is the opt-in for recordings whose snapshot is
+  // missing (every Kick stream captured before 7TV was wired up) or older
+  // than the channel's set. The choice persists across archives.
+  const [useLiveEmotes, setUseLiveEmotes] = useState(false);
+  const [liveEmotes, setLiveEmotes] = useState<EmotePayload | null>(null);
+  const [liveEmotesState, setLiveEmotesState] = useState<"idle" | "loading" | "error">("idle");
 
   useEffect(() => {
     try {
       if (window.localStorage.getItem("tsr-chat-show-deleted") === "0") {
         setShowDeleted(false);
       }
+      if (window.localStorage.getItem("tsr-chat-live-emotes") === "1") {
+        setUseLiveEmotes(true);
+      }
     } catch {
       // Ignore broken localStorage.
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tsr-chat-live-emotes", useLiveEmotes ? "1" : "0");
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [useLiveEmotes]);
+
+  // Fetched lazily — the snapshot mode must not pay for a 7TV round-trip.
+  useEffect(() => {
+    if (!useLiveEmotes || !liveEmotesUrl || liveEmotes) return undefined;
+
+    let cancelled = false;
+    setLiveEmotesState("loading");
+
+    void (async () => {
+      try {
+        const response = await apiGet<{ emotes: EmotePayload | null }>(liveEmotesUrl);
+        if (cancelled) return;
+        setLiveEmotes(response.emotes);
+        setLiveEmotesState("idle");
+      } catch {
+        if (!cancelled) setLiveEmotesState("error");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [useLiveEmotes, liveEmotesUrl, liveEmotes]);
+
+  // A different archive may be a different channel — drop the cached set.
+  useEffect(() => {
+    setLiveEmotes(null);
+    setLiveEmotesState("idle");
+  }, [liveEmotesUrl]);
 
   useEffect(() => {
     try {
@@ -197,12 +250,15 @@ export function ChatReplay({
   }, [videoElement]);
 
   const emoteMap = useMemo(() => {
+    // One source or the other, never a blend: mixing them would silently
+    // present today's emotes as part of the record.
+    const source = useLiveEmotes && liveEmotes ? liveEmotes : data?.emotes;
     const map = new Map<string, EmoteEntry>();
-    for (const emote of data?.emotes?.emotes ?? []) {
+    for (const emote of source?.emotes ?? []) {
       map.set(emote.name, emote);
     }
     return map;
-  }, [data?.emotes]);
+  }, [data?.emotes, useLiveEmotes, liveEmotes]);
 
   // The deleted-filtered, time-sorted message list. Recomputed only when the
   // data or the "show deleted" toggle changes — NOT on every timeupdate.
@@ -344,6 +400,23 @@ export function ChatReplay({
             />
             <span>{copy.showDeleted}</span>
           </label>
+          {liveEmotesUrl ? (
+            <label className="chat-toggle" title={copy.liveEmotesHint}>
+              <input
+                type="checkbox"
+                checked={useLiveEmotes}
+                onChange={(event) => setUseLiveEmotes(event.target.checked)}
+              />
+              <span>
+                {copy.liveEmotes}
+                {useLiveEmotes && liveEmotesState === "loading" ? ` — ${copy.liveEmotesLoading}` : ""}
+                {useLiveEmotes && liveEmotesState === "error" ? ` — ${copy.liveEmotesError}` : ""}
+                {useLiveEmotes && liveEmotesState === "idle" && liveEmotes === null
+                  ? ` — ${copy.liveEmotesNone}`
+                  : ""}
+              </span>
+            </label>
+          ) : null}
         </div>
       ) : null}
 
@@ -640,6 +713,12 @@ const CHAT_COPY = {
     settings: "Настройки чата",
     offsetAria: "Сдвиг чата в секундах",
     showDeleted: "Показывать удалённые",
+    liveEmotes: "Текущие эмоуты канала",
+    liveEmotesHint:
+      "По умолчанию показываются эмоуты на момент записи. Здесь — набор канала на 7TV прямо сейчас: пригодится, если снапшот не снялся или набор с тех пор пополнился.",
+    liveEmotesLoading: "загружаю…",
+    liveEmotesError: "не удалось загрузить",
+    liveEmotesNone: "у канала нет 7TV",
     banPermanent: "Пользователь забанен навсегда",
     banTimeout: "Пользователь получил таймаут",
     loading: "Загружаю чат…",
@@ -655,6 +734,12 @@ const CHAT_COPY = {
     settings: "Chat settings",
     offsetAria: "Chat offset in seconds",
     showDeleted: "Show deleted",
+    liveEmotes: "Channel's current emotes",
+    liveEmotesHint:
+      "By default the emotes are the ones from the time of recording. This shows the channel's 7TV set as it is now — useful when no snapshot was taken, or the set has grown since.",
+    liveEmotesLoading: "loading…",
+    liveEmotesError: "could not load",
+    liveEmotesNone: "channel has no 7TV",
     banPermanent: "User was banned permanently",
     banTimeout: "User was timed out",
     loading: "Loading chat…",

@@ -12,6 +12,7 @@ import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
+import { LiveEmotesService } from "../chat/live-emotes.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -57,6 +58,7 @@ export class PublicStreamsController {
     private readonly recordingService: RecordingService,
     private readonly telegramStreamService: TelegramStreamService,
     private readonly thumbnailService: ThumbnailService,
+    private readonly liveEmotesService: LiveEmotesService,
   ) {}
 
   @Get()
@@ -610,6 +612,26 @@ export class PublicStreamsController {
       })),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
+  }
+
+  /**
+   * The channel's 7TV set as it is today — the "current emotes" mode of the
+   * replay. The recorded snapshot stays the default; this is the opt-in.
+   */
+  @Get(":id/emotes/live")
+  async getLiveEmotes(@Param("id") id: string) {
+    // Existence only: unlike ":id/chat" this is not gated on the video being
+    // ready — the emotes are just as useful while a recording is still running.
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!session) {
+      throw new NotFoundException("Запись не найдена.");
+    }
+
+    return { emotes: await this.liveEmotesService.forSession(id) };
   }
 
   /**

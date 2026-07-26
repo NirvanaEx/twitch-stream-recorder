@@ -457,6 +457,7 @@ export default function PublicWatchPage({
           <aside className="replay-stage__chat">
             <ChatReplay
               chatUrl={`public/streams/${id}/chat`}
+              liveEmotesUrl={`public/streams/${id}/emotes/live`}
               videoElement={videoElement}
               isLive={false}
               defaultOffsetSec={data?.chatOffsetSec ?? 0}

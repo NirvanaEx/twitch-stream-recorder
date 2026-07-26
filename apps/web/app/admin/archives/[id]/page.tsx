@@ -561,6 +561,7 @@ export default function ArchiveReplayPage() {
           <aside className="replay-stage__chat">
             <ChatReplay
               archiveId={data!.item.id}
+              liveEmotesUrl={`archives/${data!.item.id}/emotes/live`}
               videoElement={videoElement}
               isLive={isLive}
               defaultOffsetSec={data!.item.chatOffsetSec ?? 0}
