@@ -1122,6 +1122,57 @@ textarea {
   }
 }
 
+/* ---- Screen-fit stage inside the admin shell ---- */
+
+/* The admin replay can't use the watch page's own "100dvh minus padding"
+   calc: the shell around it has an asymmetric .content-area padding and, on
+   mobile, a sticky sidebar bar of unknown height. So when the shell hosts a
+   fit stage, the frame is pinned to the viewport and the height flows DOWN
+   through the chain (frame → content → page → stage) instead of the stage
+   computing it from the viewport a second time. */
+.app-frame:has(.replay-stage--fit) {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.app-frame:has(.replay-stage--fit) .sidebar {
+  overflow-y: auto;
+}
+
+.app-frame:has(.replay-stage--fit) .content-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* The 40px bottom pad is chrome for scrolling list pages; under a
+     one-screen stage it was exactly the dead strip below video and chat. */
+  padding-bottom: 20px;
+}
+
+.app-frame:has(.replay-stage--fit) .content-area > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Inherit the height from the shell chain instead of the watch calc. */
+.content-area .replay-stage--fit.replay-stage--normal {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  /* Mobile stacks the sidebar bar above the content: give the content row
+     the remainder explicitly — auto rows would size to content and the
+     stage would lose its definite height. */
+  .app-frame:has(.replay-stage--fit) {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-frame:has(.replay-stage--fit) .content-area {
+    padding-bottom: 14px;
+  }
+}
+
 
 /* ---------- VideoPlayer ---------- */
 
