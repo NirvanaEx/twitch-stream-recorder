@@ -56,6 +56,13 @@ export type ChatPrefs = {
   hideCommands: boolean;
   /** Comma-separated logins to hide entirely (bots). */
   hiddenUsers: string;
+  /**
+   * Show the whole broadcast timeline at once. Off by default: the category
+   * strip would otherwise announce that the streamer switches to something
+   * else two hours in, which is exactly the kind of thing people watch a
+   * recording to discover.
+   */
+  revealTimeline: boolean;
 };
 
 export const DEFAULT_CHAT_PREFS: ChatPrefs = {
@@ -72,6 +79,7 @@ export const DEFAULT_CHAT_PREFS: ChatPrefs = {
   keywords: "",
   hideCommands: false,
   hiddenUsers: "",
+  revealTimeline: false,
 };
 
 export const CHAT_PREFS_LIMITS = {

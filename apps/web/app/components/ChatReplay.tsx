@@ -33,6 +33,7 @@ import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { ChatText } from "./ChatText";
 import { ChatUserCard } from "./ChatUserCard";
 import { SettingsIcon } from "./icons";
+import { StreamMetaStrip } from "./StreamMetaStrip";
 
 type ChatReplayProps = {
   archiveId?: string;
@@ -43,6 +44,11 @@ type ChatReplayProps = {
    * "current emotes" switch — an offline bundle has no server to ask.
    */
   liveEmotesUrl?: string;
+  /**
+   * API path for the broadcast's viewers/title/category series. Omit to hide
+   * the strip — an offline bundle carries no such data.
+   */
+  timelineUrl?: string;
   staticData?: ChatResponse;
   // Audio-only archives play through an <audio> element, so only the shared
   // HTMLMediaElement surface (currentTime / timeupdate) may be used here.
@@ -64,6 +70,7 @@ export function ChatReplay({
   archiveId,
   chatUrl,
   liveEmotesUrl,
+  timelineUrl,
   staticData,
   videoElement,
   isLive,
@@ -405,6 +412,15 @@ export function ChatReplay({
           liveEmotesNote={liveEmotesNote}
         />
       ) : null}
+
+      <StreamMetaStrip
+        timelineUrl={timelineUrl}
+        chatTimeSec={userThreshold}
+        reveal={prefs.revealTimeline}
+        onToggleReveal={() => update("revealTimeline", !prefs.revealTimeline)}
+        copy={copy}
+        locale={locale}
+      />
 
       <div className="chat-list-wrap" ref={setWrapEl}>
         <div ref={listRef} className="chat-list thin-scroll" onScroll={handleScroll}>

@@ -171,6 +171,27 @@ model EmoteSnapshot {
   createdAt       DateTime @default(now())
 }
 
+// What the stream looked like at a point in time: viewers, title, category.
+// The session row only keeps the values it started with, so a rename or a
+// category switch mid-broadcast was lost entirely.
+//
+// A new table rather than columns on StreamSession: this is a series, and the
+// container starts with a plain `prisma db push`, which is safe for an added
+// table but refuses anything that could drop data on an existing one.
+model StreamMetaPoint {
+  id              String   @id @default(cuid())
+  streamSessionId String
+  // Seconds from the same capture anchor chat messages use, so the two line
+  // up on one timeline without any extra bookkeeping.
+  relativeTimeSec Int
+  viewerCount     Int?
+  title           String?
+  categoryName    String?
+  createdAt       DateTime @default(now())
+
+  @@index([streamSessionId, relativeTimeSec])
+}
+
 model AppSettings {
   id                    String   @id @default("default")
   // DEPRECATED, unused: archive expiry was never enforced, and Telegram is

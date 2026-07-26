@@ -26,6 +26,7 @@ type TwitchStream = {
   title: string;
   started_at: string;
   thumbnail_url: string;
+  viewer_count?: number;
 };
 
 type TwitchPublicChannelPayload = {
@@ -53,6 +54,8 @@ type LiveStreamSnapshot = {
   title: string | null;
   startedAt: string | null;
   previewImageUrl: string | null;
+  /** Absent on the credential-free path — the public payload has no count. */
+  viewerCount: number | null;
   source: "api" | "public";
 };
 
@@ -68,6 +71,7 @@ type TwitchPublicGqlResponse = {
         title: string | null;
         createdAt: string | null;
         previewImageURL: string | null;
+        viewersCount: number | null;
         game?: {
           displayName: string | null;
         } | null;
@@ -101,6 +105,7 @@ const TWITCH_PUBLIC_CHANNEL_QUERY = `
         id
         title
         createdAt
+        viewersCount
         previewImageURL(width: 640, height: 360)
         game {
           displayName
@@ -240,6 +245,7 @@ export class TwitchService {
       title: stream.title,
       startedAt: stream.started_at,
       previewImageUrl: stream.thumbnail_url,
+      viewerCount: typeof stream.viewer_count === "number" ? stream.viewer_count : null,
       source: "api",
     };
   }
@@ -264,6 +270,7 @@ export class TwitchService {
       title: stream.title,
       startedAt: stream.started_at,
       previewImageUrl: stream.thumbnail_url,
+      viewerCount: typeof stream.viewer_count === "number" ? stream.viewer_count : null,
       source: "api",
     };
   }
@@ -389,6 +396,8 @@ export class TwitchService {
             title: user.stream.title,
             startedAt: user.stream.createdAt,
             previewImageUrl: user.stream.previewImageURL,
+            viewerCount:
+              typeof user.stream.viewersCount === "number" ? user.stream.viewersCount : null,
             source: "public",
           }
         : null,

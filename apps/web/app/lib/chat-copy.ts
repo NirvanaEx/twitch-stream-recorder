@@ -63,6 +63,15 @@ export const CHAT_COPY = {
     userCardSearch: "Поиск по сообщениям",
     userCardNoMatch: "Ничего не найдено.",
     offsetSaved: "сохранён для этой записи",
+
+    metaViewers: "зрителей",
+    metaPeak: "пик",
+    metaNoData: "Для этой записи данных об эфире нет.",
+    metaReveal: "Показать весь эфир",
+    metaRevealHint:
+      "По умолчанию видно только то, до чего доиграла запись, — иначе полоса категорий сразу выдаёт, что будет дальше.",
+    metaAhead: "дальше",
+    metaCategory: "Категория",
   },
   en: {
     title: "Chat",
@@ -121,6 +130,15 @@ export const CHAT_COPY = {
     userCardSearch: "Search messages",
     userCardNoMatch: "Nothing found.",
     offsetSaved: "saved for this recording",
+
+    metaViewers: "viewers",
+    metaPeak: "peak",
+    metaNoData: "No broadcast data was recorded for this stream.",
+    metaReveal: "Reveal whole stream",
+    metaRevealHint:
+      "By default only the part the recording has reached is shown — otherwise the category strip gives away what happens later.",
+    metaAhead: "ahead",
+    metaCategory: "Category",
   },
 } as const;
 

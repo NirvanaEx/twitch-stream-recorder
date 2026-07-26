@@ -458,6 +458,7 @@ export default function PublicWatchPage({
             <ChatReplay
               chatUrl={`public/streams/${id}/chat`}
               liveEmotesUrl={`public/streams/${id}/emotes/live`}
+              timelineUrl={`public/streams/${id}/timeline`}
               videoElement={videoElement}
               isLive={false}
               defaultOffsetSec={data?.chatOffsetSec ?? 0}
