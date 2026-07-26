@@ -26,15 +26,31 @@ type SevenTvUserResponse = {
   };
 };
 
+/**
+ * 7TV keys a connection by the *platform's own user id*. For Kick that is the
+ * user id (`user_id`), NOT the channel id — they differ (xQc: channel 668,
+ * user 676, and only 676 resolves). Channel.twitchUserId already holds the
+ * user id for both platforms, so no extra lookup is needed.
+ */
+export type EmotePlatform = "twitch" | "kick";
+
 export type EmoteEntry = {
   id: string;
   name: string;
+  /** Original 7TV CDN url. Kept verbatim: the userscript and old snapshots use it. */
   url: string;
+  /**
+   * API-relative path of our own copy, set once the image has been mirrored to
+   * disk. Absent when mirroring is off or the download failed.
+   */
+  localUrl?: string;
   animated: boolean;
 };
 
 export type EmoteSnapshotPayload = {
   provider: "7tv";
+  /** Absent in snapshots taken before Kick support — read as "twitch". */
+  platform?: EmotePlatform;
   fetchedAt: string;
   emotes: EmoteEntry[];
 };
@@ -43,18 +59,28 @@ export type EmoteSnapshotPayload = {
 export class SevenTvService {
   private readonly logger = new Logger(SevenTvService.name);
 
-  async fetchSnapshot(twitchUserId: string | null | undefined): Promise<EmoteSnapshotPayload | null> {
-    if (!twitchUserId) {
+  async fetchSnapshot(
+    platform: EmotePlatform,
+    platformUserId: string | null | undefined,
+  ): Promise<EmoteSnapshotPayload | null> {
+    if (!platformUserId) {
       return null;
     }
 
     try {
-      const response = await fetch(`https://7tv.io/v3/users/twitch/${encodeURIComponent(twitchUserId)}`, {
-        headers: { Accept: "application/json" },
-      });
+      const response = await fetch(
+        `https://7tv.io/v3/users/${platform}/${encodeURIComponent(platformUserId)}`,
+        { headers: { Accept: "application/json" } },
+      );
 
       if (!response.ok) {
-        this.logger.warn(`7TV lookup failed for user ${twitchUserId}: ${response.status}`);
+        // 404 is the normal answer for a streamer who never linked 7TV —
+        // common on Kick, so it is not worth a warning.
+        if (response.status !== 404) {
+          this.logger.warn(
+            `7TV lookup failed for ${platform} user ${platformUserId}: ${response.status}`,
+          );
+        }
         return null;
       }
 
@@ -67,12 +93,13 @@ export class SevenTvService {
 
       return {
         provider: "7tv",
+        platform,
         fetchedAt: new Date().toISOString(),
         emotes,
       };
     } catch (error) {
       this.logger.warn(
-        `7TV snapshot fetch error for ${twitchUserId}: ${
+        `7TV snapshot fetch error for ${platform} user ${platformUserId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

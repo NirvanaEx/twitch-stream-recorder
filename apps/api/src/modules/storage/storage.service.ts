@@ -10,6 +10,13 @@ const RECENT_FILE_MS = 10 * 60 * 1000;
 // The disk table shows only the biggest files; totals are computed over all.
 const MAX_LISTED_FILES = 500;
 
+// Top-level dirs whose files are never orphans. The 7TV emote mirror is
+// referenced only from a JSON blob inside EmoteSnapshot, never by a path
+// column, so the reference map cannot see it — without this every mirrored
+// image would be offered up for deletion, which is precisely the copy that
+// keeps old chat replays alive once 7TV drops an emote.
+const NEVER_ORPHAN_DIRS = new Set(["emotes"]);
+
 type FileRef = {
   sessionId: string;
   channelLogin: string;
@@ -274,15 +281,16 @@ export class StorageService {
         const ref = refs.get(resolve(absPath)) ?? null;
         const locked = Boolean(ref && ref.status === "recording");
         const recent = !ref && now - stat.mtimeMs < RECENT_FILE_MS;
+        const topDir = rel.includes("/") ? rel.slice(0, rel.indexOf("/")) : ".";
         out.push({
           absPath,
           path: rel,
-          dir: rel.includes("/") ? rel.slice(0, rel.indexOf("/")) : ".",
+          dir: topDir,
           sizeBytes: stat.size,
           mtimeMs: stat.mtimeMs,
           kind: this.kindOf(rel),
           ref,
-          orphan: !ref && !recent,
+          orphan: !ref && !recent && !NEVER_ORPHAN_DIRS.has(topDir),
           locked,
           recent,
         });

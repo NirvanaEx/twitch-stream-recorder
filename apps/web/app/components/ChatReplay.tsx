@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { apiGet } from "../lib/api";
+import { apiGet, buildApiUrl } from "../lib/api";
 import { useLanguage } from "../providers";
 import { SettingsIcon } from "./icons";
 
@@ -25,7 +25,13 @@ type ChatMessage = {
 type EmoteEntry = {
   id: string;
   name: string;
+  /** Original 7TV CDN url — the fallback when our own copy is unavailable. */
   url: string;
+  /**
+   * Our mirrored copy: an API-relative path for an online archive, or a
+   * self-contained data: URI inside a downloaded .tsr.json bundle.
+   */
+  localUrl?: string;
   animated: boolean;
 };
 
@@ -456,6 +462,19 @@ const ChatMessageItem = memo(function ChatMessageItem({
               alt={token.name}
               className="chat-emote"
               loading="lazy"
+              onError={
+                token.fallbackUrl
+                  ? (event) => {
+                      // Our copy is missing (recorded before the mirror, or the
+                      // file was lost) — retry against 7TV once, then stop, so a
+                      // dead url cannot loop.
+                      const image = event.currentTarget;
+                      if (token.fallbackUrl && image.src !== token.fallbackUrl) {
+                        image.src = token.fallbackUrl;
+                      }
+                    }
+                  : undefined
+              }
             />
           ) : (
             <span key={`text-${index}`}>{token.value}</span>
@@ -476,7 +495,7 @@ const ChatMessageItem = memo(function ChatMessageItem({
 
 type Token =
   | { type: "text"; value: string }
-  | { type: "emote"; name: string; url: string };
+  | { type: "emote"; name: string; url: string; fallbackUrl?: string };
 
 function renderTokens(
   text: string,
@@ -508,6 +527,29 @@ function renderTokens(
   return tokens;
 }
 
+/**
+ * Prefer our mirrored copy, keep the 7TV CDN as the fallback.
+ *
+ * A snapshot freezes which emotes a stream had, but not the pictures — those
+ * lived only on cdn.7tv.app, so an emote deleted there turned every old replay
+ * into broken boxes. Recordings made after the mirror landed carry `localUrl`;
+ * older ones have only `url` and keep working exactly as before.
+ *
+ * A data: URI (offline bundle) is already self-contained; anything else is an
+ * API-relative path that has to go through the configured API base.
+ */
+function resolveEmoteSrc(emote: EmoteEntry): { url: string; fallbackUrl?: string } {
+  if (!emote.localUrl) {
+    return { url: emote.url };
+  }
+
+  if (emote.localUrl.startsWith("data:")) {
+    return { url: emote.localUrl };
+  }
+
+  return { url: buildApiUrl(emote.localUrl), fallbackUrl: emote.url };
+}
+
 function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Token[] {
   if (!text) return [];
   if (emoteMap.size === 0) return [{ type: "text", value: text }];
@@ -519,7 +561,7 @@ function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Tok
     const emote = emoteMap.get(part);
 
     if (emote) {
-      tokens.push({ type: "emote", name: emote.name, url: emote.url });
+      tokens.push({ type: "emote", name: emote.name, ...resolveEmoteSrc(emote) });
     } else {
       const last = tokens[tokens.length - 1];
       if (last?.type === "text") {
