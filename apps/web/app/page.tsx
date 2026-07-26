@@ -17,6 +17,9 @@ type PublicStreamCard = {
     profileImageUrl: string | null;
   };
   previewImageUrl: string | null;
+  // Frame from the recording; Twitch's own preview 404s once the broadcast
+  // ends, which is exactly when an archive gets watched.
+  thumbnailUrl: string | null;
   startedAt: string | null;
   endedAt: string | null;
   fileSizeBytes: string | null;
@@ -146,10 +149,10 @@ export default function PublicHomePage() {
                 className="stream-card"
               >
                 <div className="stream-card-thumb">
-                  {item.previewImageUrl ? (
+                  {item.thumbnailUrl ?? item.previewImageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={item.previewImageUrl}
+                      src={(item.thumbnailUrl ?? item.previewImageUrl) as string}
                       alt={item.title ?? item.channel.displayName}
                       loading="lazy"
                     />

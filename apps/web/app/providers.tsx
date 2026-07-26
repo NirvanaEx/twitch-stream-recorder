@@ -135,6 +135,11 @@ type Dictionary = {
     autoRecordLabel: string;
     audioOnlyLabel: string;
     audioOnlyHint: string;
+    recordVideoLabel: string;
+    recordVideoHint: string;
+    recordAudioLabel: string;
+    recordAudioHint: string;
+    trackRequired: string;
     autoRecordWaiting: string;
     refreshHint: string;
     twitchSetupTitle: string;
@@ -155,6 +160,13 @@ type Dictionary = {
     title: string;
     subtitle: string;
     empty: string;
+    streamsBlock: string;
+    streamsBlockHint: string;
+    audioBlock: string;
+    audioBlockHint: string;
+    audioEmpty: string;
+    noCover: string;
+    hasAudioTrack: string;
     category: string;
     recordedAt: string;
     endedAt: string;
@@ -203,6 +215,15 @@ type Dictionary = {
     closeOverlay: string;
     sourceLabel: string;
     sourceLocal: string;
+    speedTitle: string;
+    speedArchive: string;
+    speedServer: string;
+    speedToClient: string;
+    speedWasted: string;
+    speedPart: string;
+    speedAudio: string;
+    speedStreamsOne: string;
+    speedStreamsMany: string;
   };
   settings: {
     title: string;
@@ -499,6 +520,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       added: "Канал добавлен.",
       autoRecordingStarted: "Эфир уже шел, запись запущена автоматически.",
       autoRecordLabel: "Автозапись",
+      recordVideoLabel: "Видео",
+      recordVideoHint:
+        "Записывать видео стрима. Выключите, если у стримера остаются VOD и нужен только звук.",
+      recordAudioLabel: "Звук",
+      recordAudioHint:
+        "Сохранять отдельную звуковую дорожку — её накладывает на VOD пользовательский скрипт.",
+      trackRequired: "Нужно оставить включённой хотя бы одну дорожку: видео или звук.",
       audioOnlyLabel: "Только звук",
       audioOnlyHint:
         "Записывать только аудиодорожку (поток audio_only, без видео). Удобно, когда стример хранит VOD: звук накладывается на VOD скриптом. Действует со следующей записи.",
@@ -525,6 +553,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       title: "Архивы",
       subtitle: "Все записи, которые уже можно открыть прямо в браузере.",
       empty: "Записей пока нет.",
+      streamsBlock: "Записи стримов",
+      streamsBlockHint: "Видео с обложкой из самой записи.",
+      audioBlock: "Аудиодорожки",
+      audioBlockHint: "Отдельные записи звука — накладываются на VOD Twitch.",
+      audioEmpty: "Аудиозаписей пока нет.",
+      noCover: "Без обложки",
+      hasAudioTrack: "Есть отдельная звуковая дорожка",
       category: "Категория",
       recordedAt: "Записано",
       size: "Размер",
@@ -573,6 +608,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       closeOverlay: "Закрыть",
       sourceLabel: "Источник",
       sourceLocal: "Диск сервера",
+      speedTitle: "Скорость из Telegram",
+      speedArchive: "Эта запись",
+      speedServer: "Всего по серверу",
+      speedToClient: "к клиенту",
+      speedWasted: "впустую",
+      speedPart: "Часть",
+      speedAudio: "Звук",
+      speedStreamsOne: "поток",
+      speedStreamsMany: "потоков",
     },
     settings: {
       title: "Настройки",
@@ -877,6 +921,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       added: "Channel added.",
       autoRecordingStarted: "The stream was already live, so recording started automatically.",
       autoRecordLabel: "Auto record",
+      recordVideoLabel: "Video",
+      recordVideoHint:
+        "Record the stream video. Turn it off when the streamer keeps VODs and only audio is needed.",
+      recordAudioLabel: "Audio",
+      recordAudioHint:
+        "Keep a standalone audio track — the userscript overlays it on the Twitch VOD.",
+      trackRequired: "Keep at least one track enabled: video or audio.",
       audioOnlyLabel: "Audio only",
       audioOnlyHint:
         "Record only the audio track (the audio_only stream variant, no video). Useful when the streamer keeps VODs: the script overlays the sound on the VOD. Takes effect from the next recording.",
@@ -903,6 +954,13 @@ const dictionaries: Record<Locale, Dictionary> = {
       title: "Archives",
       subtitle: "Every recording that is already playable in the browser.",
       empty: "No recordings yet.",
+      streamsBlock: "Stream recordings",
+      streamsBlockHint: "Video, with a cover frame taken from the recording.",
+      audioBlock: "Audio tracks",
+      audioBlockHint: "Standalone audio captures — they overlay the Twitch VOD.",
+      audioEmpty: "No audio recordings yet.",
+      noCover: "No cover",
+      hasAudioTrack: "A separate audio track exists",
       category: "Category",
       recordedAt: "Recorded",
       size: "Size",
@@ -951,6 +1009,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       closeOverlay: "Close",
       sourceLabel: "Source",
       sourceLocal: "Server disk",
+      speedTitle: "Telegram throughput",
+      speedArchive: "This recording",
+      speedServer: "Server total",
+      speedToClient: "to client",
+      speedWasted: "wasted",
+      speedPart: "Part",
+      speedAudio: "Audio",
+      speedStreamsOne: "stream",
+      speedStreamsMany: "streams",
     },
     settings: {
       title: "Settings",

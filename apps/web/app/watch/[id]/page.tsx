@@ -29,6 +29,7 @@ type PublicStreamDetail = {
     profileImageUrl: string | null;
   };
   previewImageUrl: string | null;
+  thumbnailUrl: string | null;
   startedAt: string | null;
   endedAt: string | null;
   fileSizeBytes: string | null;
@@ -300,7 +301,7 @@ export default function PublicWatchPage({
   const videoSrc = activePart
     ? buildMediaUrl(activePart.streamUrl)
     : buildMediaUrl(data.videoUrl) || buildApiUrl(`public/streams/${id}/video`);
-  const posterSrc = data.previewImageUrl ?? undefined;
+  const posterSrc = data.thumbnailUrl ?? data.previewImageUrl ?? undefined;
   const playerTitle = data.title || data.channel.displayName;
 
   const stageClass = [

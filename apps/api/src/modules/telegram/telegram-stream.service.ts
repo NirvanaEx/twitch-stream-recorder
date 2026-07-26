@@ -72,18 +72,39 @@ type StreamSource = {
   messageId: string;
   totalSize: number;
   contentType: string;
+  kind: "video" | "audio";
+  // 1-based part number for split recordings; null for audio tracks.
+  partIndex: number | null;
   // How long the browser may keep fetched ranges (Cache-Control max-age).
   // Audio tracks get a full day — the Twitch overlay reloads them on every
   // VOD visit; video defaults to an hour.
   cacheSeconds?: number;
 };
 
-// Live throughput for an archive being streamed from Telegram, surfaced in the
-// admin panel so speed can be seen without tailing container logs.
+// Live throughput of ONE HTTP response pulling from Telegram, surfaced in the
+// admin panel so speed can be seen without tailing container logs. Keyed per
+// response rather than per archive: a viewer scrubbing the timeline has
+// several responses open at once, and they used to overwrite each other's
+// numbers, so the panel showed whichever sample landed last instead of the sum.
 type LiveStreamStat = {
+  id: number;
+  statsKey: string;
+  cacheKey: string;
+  kind: "video" | "audio";
+  partIndex: number | null;
+  rangeStart: number;
+  rangeEnd: number;
+  totalSize: number;
+  startedAt: number;
+  // Bytes pulled from Telegram and actually handed to the response...
+  downloadedBytes: number;
+  // ...and bytes the read-ahead workers fetched but nobody consumed (see the
+  // byteRange() finally block). They cost exactly as much bandwidth on the
+  // shared MTProto connection, so they are counted instead of vanishing.
+  wastedBytes: number;
+  servedBytes: number;
   mbpsFromTelegram: number;
   mbpsToClient: number;
-  servedBytes: number;
   updatedAt: number;
 };
 
@@ -97,8 +118,22 @@ export class TelegramStreamService {
   // LRU chunk cache: key `${cacheKey}:${alignedOffset}` -> raw 512 KB chunk.
   private readonly chunkCache = new Map<string, Buffer>();
   private chunkCacheBytes = 0;
-  // Latest throughput sample per statsKey (archive id), for the panel widget.
-  private readonly liveStats = new Map<string, LiveStreamStat>();
+  // One entry per in-flight HTTP response, for the panel widget.
+  private readonly liveStreams = new Map<number, LiveStreamStat>();
+  private streamSeq = 0;
+  // Every byte pulled from Telegram by any stream, discarded read-ahead
+  // included — the honest load on the single MTProto connection.
+  private totalBytesFromTelegram = 0;
+  // Subset of the above that nobody consumed. Tracked server-wide because a
+  // stream only learns about its own waste as it shuts down, by which point
+  // its entry is already gone from the panel.
+  private totalWastedBytes = 0;
+  private globalMbps = 0;
+  private globalWastedMbps = 0;
+  private globalSampleBytes = 0;
+  private globalSampleWasted = 0;
+  private globalSampleAt = 0;
+  private globalTimer: NodeJS.Timeout | null = null;
   // Concurrency gate for the shared MTProto connection (see the constant).
   private activeStreams = 0;
   private readonly slotWaiters: Array<() => void> = [];
@@ -108,19 +143,120 @@ export class TelegramStreamService {
     return this.activeStreams > 0;
   }
 
-  /** Current Telegram throughput for an archive, or null when idle. */
+  /**
+   * Telegram throughput for one archive: the sum over its open responses, a
+   * per-response breakdown for the hover panel, and the server-wide totals.
+   * Null when nothing is streaming that archive.
+   */
   getLiveStats(statsKey: string) {
-    const stat = this.liveStats.get(statsKey);
-    if (!stat) return null;
-    if (Date.now() - stat.updatedAt > LIVE_STATS_TTL_MS) {
-      this.liveStats.delete(statsKey);
+    const all = this.listLiveStreams();
+    const mine = all.filter((stat) => stat.statsKey === statsKey);
+
+    if (mine.length === 0) {
       return null;
     }
+
+    const sum = (stats: LiveStreamStat[], pick: (stat: LiveStreamStat) => number) =>
+      stats.reduce((acc, stat) => acc + pick(stat), 0);
+
     return {
-      mbpsFromTelegram: Number(stat.mbpsFromTelegram.toFixed(2)),
-      mbpsToClient: Number(stat.mbpsToClient.toFixed(2)),
-      servedMb: Math.round(stat.servedBytes / 1_048_576),
+      // Kept flat for the existing chip: this archive's combined speed.
+      mbpsFromTelegram: round2(sum(mine, (stat) => stat.mbpsFromTelegram)),
+      mbpsToClient: round2(sum(mine, (stat) => stat.mbpsToClient)),
+      servedMb: Math.round(sum(mine, (stat) => stat.servedBytes) / 1_048_576),
+      streams: mine.map((stat) => this.toPublicStream(stat)),
+      global: {
+        // Includes the discarded read-ahead, so it can exceed the sum of the
+        // per-stream numbers — that gap IS the waste.
+        mbpsFromTelegram: round2(this.globalMbps),
+        mbpsWasted: round2(this.globalWastedMbps),
+        mbpsToClient: round2(sum(all, (stat) => stat.mbpsToClient)),
+        activeStreams: all.length,
+      },
     };
+  }
+
+  /** Every stream currently reading from Telegram, plus the server totals. */
+  getGlobalStats() {
+    const all = this.listLiveStreams();
+
+    return {
+      mbpsFromTelegram: round2(this.globalMbps),
+      mbpsWasted: round2(this.globalWastedMbps),
+      mbpsToClient: round2(all.reduce((acc, stat) => acc + stat.mbpsToClient, 0)),
+      activeStreams: all.length,
+      streams: all.map((stat) => this.toPublicStream(stat)),
+    };
+  }
+
+  /** Live entries, dropping any that a missed finalize() left behind. */
+  private listLiveStreams() {
+    const now = Date.now();
+    const alive: LiveStreamStat[] = [];
+
+    for (const [id, stat] of this.liveStreams) {
+      if (now - stat.updatedAt > LIVE_STATS_TTL_MS) {
+        this.liveStreams.delete(id);
+        continue;
+      }
+      alive.push(stat);
+    }
+
+    return alive;
+  }
+
+  private toPublicStream(stat: LiveStreamStat) {
+    return {
+      id: stat.id,
+      archiveId: stat.statsKey,
+      kind: stat.kind,
+      partIndex: stat.partIndex,
+      mbpsFromTelegram: round2(stat.mbpsFromTelegram),
+      mbpsToClient: round2(stat.mbpsToClient),
+      servedMb: round1(stat.servedBytes / 1_048_576),
+      downloadedMb: round1(stat.downloadedBytes / 1_048_576),
+      wastedMb: round1(stat.wastedBytes / 1_048_576),
+      elapsedSec: Math.round((Date.now() - stat.startedAt) / 1000),
+      // Where in the file this response is reading, as a 0..1 fraction.
+      rangeFrom: stat.totalSize > 0 ? round2(stat.rangeStart / stat.totalSize) : 0,
+      rangeTo: stat.totalSize > 0 ? round2((stat.rangeEnd + 1) / stat.totalSize) : 0,
+    };
+  }
+
+  /**
+   * The server-wide rate is sampled on one shared ticker instead of being
+   * derived from the per-stream samples: those are taken at different moments
+   * and miss the discarded read-ahead entirely.
+   */
+  private startGlobalTicker() {
+    if (this.globalTimer) return;
+
+    this.globalSampleAt = Date.now();
+    this.globalSampleBytes = this.totalBytesFromTelegram;
+    this.globalSampleWasted = this.totalWastedBytes;
+
+    this.globalTimer = setInterval(() => {
+      const now = Date.now();
+      const dt = (now - this.globalSampleAt) / 1000;
+
+      if (dt > 0) {
+        this.globalMbps =
+          (this.totalBytesFromTelegram - this.globalSampleBytes) / 1_048_576 / dt;
+        this.globalWastedMbps =
+          (this.totalWastedBytes - this.globalSampleWasted) / 1_048_576 / dt;
+        this.globalSampleAt = now;
+        this.globalSampleBytes = this.totalBytesFromTelegram;
+        this.globalSampleWasted = this.totalWastedBytes;
+      }
+
+      // Nothing left to measure: stop the ticker and settle back to zero.
+      if (this.liveStreams.size === 0 && this.globalMbps === 0) {
+        clearInterval(this.globalTimer!);
+        this.globalTimer = null;
+      }
+    }, SPEED_LOG_INTERVAL_MS);
+
+    this.globalTimer.unref();
   }
 
   constructor(
@@ -167,6 +303,8 @@ export class TelegramStreamService {
         messageId: part.messageId,
         totalSize,
         contentType: "video/mp4",
+        kind: "video",
+        partIndex,
       },
       req,
       res,
@@ -215,6 +353,8 @@ export class TelegramStreamService {
         messageId: session.telegramAudioMessageId,
         totalSize,
         contentType: "audio/mp4",
+        kind: "audio",
+        partIndex: null,
         cacheSeconds: 86_400,
       },
       req,
@@ -310,6 +450,40 @@ export class TelegramStreamService {
     let downloadedBytes = 0;
     let servedBytes = 0;
 
+    // Registered here, once the response is committed, and removed by
+    // finalize(); the panel reads these entries.
+    this.streamSeq += 1;
+    const stat: LiveStreamStat = {
+      id: this.streamSeq,
+      statsKey: source.statsKey,
+      cacheKey: source.cacheKey,
+      kind: source.kind,
+      partIndex: source.partIndex,
+      rangeStart: start,
+      rangeEnd: end,
+      totalSize,
+      startedAt,
+      downloadedBytes: 0,
+      wastedBytes: 0,
+      servedBytes: 0,
+      mbpsFromTelegram: 0,
+      mbpsToClient: 0,
+      updatedAt: startedAt,
+    };
+    this.liveStreams.set(stat.id, stat);
+    this.startGlobalTicker();
+
+    // Bytes that reached the response, and bytes the abandoned read-ahead
+    // workers pulled anyway — both hit the wire, so both feed the global rate.
+    const countUsed = (bytes: number) => {
+      this.totalBytesFromTelegram += bytes;
+    };
+    const countWasted = (bytes: number) => {
+      stat.wastedBytes += bytes;
+      this.totalBytesFromTelegram += bytes;
+      this.totalWastedBytes += bytes;
+    };
+
     async function* byteRange() {
       let position = start;
       let retries = 0;
@@ -341,39 +515,64 @@ export class TelegramStreamService {
         let skip = position - alignedStart;
         let chunkOffset = alignedStart;
 
+        // Never start more workers than the rest of the range actually needs.
+        // Six unconditional workers turned a browser's two-byte probe of the
+        // mp4 index into ~3 MB pulled over the shared connection, and those
+        // probes happen on every open and every seek.
+        const workers = Math.max(
+          1,
+          Math.min(parallelChunks, Math.ceil((end - alignedStart + 1) / CHUNK_SIZE)),
+        );
+
         // N interleaved iterators: worker j reads chunks j, j+N, j+2N, ...
         // Consuming them round-robin restores sequential order while keeping
         // N requests to Telegram in flight at any moment.
-        const iterators = Array.from({ length: parallelChunks }, (_, worker) =>
+        const iterators = Array.from({ length: workers }, (_, index) =>
           client
             .iterDownload({
               file: media as Api.TypeMessageMedia,
-              offset: returnBigInt(alignedStart + worker * CHUNK_SIZE),
+              offset: returnBigInt(alignedStart + index * CHUNK_SIZE),
               requestSize: CHUNK_SIZE,
-              stride: parallelChunks * CHUNK_SIZE,
+              stride: workers * CHUNK_SIZE,
             })
             [Symbol.asyncIterator](),
         );
 
-        const pending = iterators.map((iterator) => iterator.next());
+        // Offset each worker's outstanding request will come back with, so the
+        // read-ahead can still be cached if this response stops needing it.
+        const nextOffsets = iterators.map((_, index) => alignedStart + index * CHUNK_SIZE);
+        const pending: (Promise<IteratorResult<Buffer>> | null)[] = iterators.map((iterator) =>
+          iterator.next(),
+        );
         let worker = 0;
 
         try {
           for (;;) {
             const result = await pending[worker];
 
-            if (result.done) {
+            if (!result || result.done) {
               return;
             }
 
-            // Immediately re-arm this worker so its next chunk downloads
-            // while the other workers' chunks are being consumed.
-            pending[worker] = iterators[worker].next();
+            // Re-arm this worker so its next chunk downloads while the other
+            // workers' chunks are consumed — but only while that chunk is
+            // still inside the requested range. Re-arming unconditionally
+            // meant every response fetched one extra 512 KB per worker that
+            // it could never use.
+            const followingOffset = nextOffsets[worker] + workers * CHUNK_SIZE;
+
+            if (followingOffset <= end) {
+              pending[worker] = iterators[worker].next();
+              nextOffsets[worker] = followingOffset;
+            } else {
+              pending[worker] = null;
+            }
 
             const raw = Buffer.isBuffer(result.value)
               ? result.value
               : Buffer.from(result.value);
             downloadedBytes += raw.length;
+            countUsed(raw.length);
             cachePut(chunkOffset, raw);
             chunkOffset += raw.length;
 
@@ -382,7 +581,7 @@ export class TelegramStreamService {
             if (skip > 0) {
               if (buffer.length <= skip) {
                 skip -= buffer.length;
-                worker = (worker + 1) % parallelChunks;
+                worker = (worker + 1) % workers;
                 continue;
               }
               buffer = buffer.subarray(skip);
@@ -437,8 +636,29 @@ export class TelegramStreamService {
         } finally {
           // Swallow rejections of requests still in flight and close the
           // iterators; otherwise abandoned promises crash the process.
-          for (const request of pending) {
-            void Promise.resolve(request).catch(() => undefined);
+          //
+          // gramjs offers no way to cancel an outstanding request, so those
+          // bytes arrive whether we want them or not — park them in the chunk
+          // cache instead of dropping them. A seek lands in exactly this area
+          // moments later, and re-downloading it was the single biggest source
+          // of pointless Telegram traffic. Only what the cache refuses (cache
+          // disabled, or already present) counts as waste.
+          for (let index = 0; index < pending.length; index += 1) {
+            const offset = nextOffsets[index];
+            void Promise.resolve(pending[index])
+              .then((settled) => {
+                if (!settled || settled.done || !settled.value) return;
+                const buffer = Buffer.isBuffer(settled.value)
+                  ? settled.value
+                  : Buffer.from(settled.value);
+                if (buffer.length === 0) return;
+                if (cachePut(offset, buffer)) {
+                  countUsed(buffer.length);
+                } else {
+                  countWasted(buffer.length);
+                }
+              })
+              .catch(() => undefined);
           }
           for (const iterator of iterators) {
             try {
@@ -458,7 +678,6 @@ export class TelegramStreamService {
     let lastLogAt = startedAt;
     let lastDownloaded = 0;
     let lastServed = 0;
-    const liveStats = this.liveStats;
     let lastLoggedAt = startedAt;
     const speedTimer = setInterval(() => {
       const now = Date.now();
@@ -469,21 +688,23 @@ export class TelegramStreamService {
       lastLogAt = now;
       lastDownloaded = downloadedBytes;
       lastServed = servedBytes;
-      // Stay quiet while the player is paused / fully buffered.
-      if (dlDelta === 0 && servedDelta === 0) return;
 
       const mbpsFromTelegram = dlDelta / 1_048_576 / dt;
       const mbpsToClient = servedDelta / 1_048_576 / dt;
 
-      // Publish for the panel widget every interval...
-      liveStats.set(source.statsKey, {
-        mbpsFromTelegram,
-        mbpsToClient,
-        servedBytes,
-        updatedAt: now,
-      });
+      // Publish for the panel widget every interval — including the zeroes of
+      // a paused player, so the entry stays visible (and honest) instead of
+      // ageing out and making the stream look finished.
+      stat.mbpsFromTelegram = mbpsFromTelegram;
+      stat.mbpsToClient = mbpsToClient;
+      stat.downloadedBytes = downloadedBytes;
+      stat.servedBytes = servedBytes;
+      stat.updatedAt = now;
 
-      // ...but only write the (noisier) console line every ~6s.
+      // Stay quiet in the log while the player is paused / fully buffered.
+      if (dlDelta === 0 && servedDelta === 0) return;
+
+      // ...and only write the (noisier) console line every ~6s.
       if (now - lastLoggedAt >= 6_000) {
         lastLoggedAt = now;
         logger.log(
@@ -500,6 +721,7 @@ export class TelegramStreamService {
       if (finalized) return;
       finalized = true;
       clearInterval(speedTimer);
+      this.liveStreams.delete(stat.id);
       releaseSlot();
       if (servedBytes === 0) return;
       const elapsed = (Date.now() - startedAt) / 1000;
@@ -611,9 +833,10 @@ export class TelegramStreamService {
     return buffer;
   }
 
+  /** Returns true when the chunk was stored (false when it was not worth it). */
   private cachePut(key: string, buffer: Buffer) {
     const limit = this.getCacheLimitBytes();
-    if (limit <= 0 || buffer.length === 0 || this.chunkCache.has(key)) return;
+    if (limit <= 0 || buffer.length === 0 || this.chunkCache.has(key)) return false;
 
     this.chunkCache.set(key, buffer);
     this.chunkCacheBytes += buffer.length;
@@ -626,6 +849,8 @@ export class TelegramStreamService {
       this.chunkCache.delete(oldestKey);
       this.chunkCacheBytes -= oldest?.length ?? 0;
     }
+
+    return true;
   }
 
   private async resolveMedia(source: StreamSource, forceRefresh = false) {
@@ -662,4 +887,12 @@ export class TelegramStreamService {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function round1(value: number) {
+  return Number(value.toFixed(1));
+}
+
+function round2(value: number) {
+  return Number(value.toFixed(2));
 }

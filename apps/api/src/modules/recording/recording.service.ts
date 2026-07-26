@@ -30,6 +30,9 @@ type ActiveRecording = {
   // Audio-only capture: streamlink grabs the audio_only variant and the remux
   // produces an .m4a instead of an .mp4.
   audioOnly: boolean;
+  // Whether a standalone .m4a is wanted alongside the video. Captured at start
+  // so flipping the channel switch mid-recording cannot change the outcome.
+  extractAudio: boolean;
   stopRequested: boolean;
 };
 
@@ -321,6 +324,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         recordingPath: outputPath,
         playbackPath: outputPath,
         audioOnly: channel.audioOnly,
+        extractAudio: channel.recordAudio,
         previewImageUrl: liveStream.previewImageUrl,
         chatAvailable: false,
       },
@@ -368,6 +372,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       tsPath,
       outputPath,
       audioOnly: channel.audioOnly,
+      extractAudio: channel.recordAudio,
       stopRequested: false,
     };
 
@@ -457,7 +462,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async getArchiveList(page = 1, pageSize = 15) {
+  /**
+   * @param kind "video" and "audio" are paginated separately so the panel can
+   *   show them as two independent blocks: audio-only captures are a different
+   *   kind of artefact (they overlay a Twitch VOD) and got lost among the
+   *   video recordings when everything shared one list.
+   */
+  async getArchiveList(page = 1, pageSize = 15, kind: "all" | "video" | "audio" = "all") {
     const safePage = Math.max(1, page);
     const safePageSize = Math.min(100, Math.max(1, pageSize));
 
@@ -468,6 +479,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       status: {
         not: "recording",
       },
+      ...(kind === "all" ? {} : { audioOnly: kind === "audio" }),
     };
 
     const [total, items] = await this.prisma.$transaction([
@@ -568,6 +580,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       session.recordingPath,
       session.audioPath,
       session.chatPath,
+      session.thumbnailPath,
     ]) {
       if (storedPath) fileCandidates.add(resolve(storedPath));
     }
@@ -750,12 +763,21 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         finalStatus === "completed" && fileSizeBytes > 0
           ? activeRecording.audioOnly
             ? { path: activeRecording.outputPath, sizeBytes: fileSizeBytes }
-            : await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
+            : activeRecording.extractAudio
+              ? await this.extractAudioTrack(activeRecording.outputPath, logPrefix)
+              : null
           : null;
 
       const durationSec =
         finalStatus === "completed" && fileSizeBytes > 0
           ? await this.probeDurationSec(activeRecording.outputPath)
+          : null;
+
+      // Cover frame for the panel; Twitch's own preview 404s once the
+      // broadcast ends. Audio-only captures have no frame to grab.
+      const thumbnailPath =
+        finalStatus === "completed" && fileSizeBytes > 0 && !activeRecording.audioOnly
+          ? await this.captureThumbnail(activeRecording.outputPath, durationSec, logPrefix)
           : null;
 
       await this.prisma.streamSession.update({
@@ -776,6 +798,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : {}),
           ...(durationSec ? { durationSec } : {}),
           ...(captureEndedAt ? { captureEndedAt } : {}),
+          ...(thumbnailPath ? { thumbnailPath } : {}),
         },
       });
 
@@ -988,11 +1011,16 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
         const audio = session.audioOnly
           ? { path: outputPath, sizeBytes: fileSizeBytes }
-          : session.audioPath
+          : session.audioPath || !session.extractAudio
             ? null
             : await this.extractAudioTrack(outputPath, logPrefix);
 
         const durationSec = await this.probeDurationSec(outputPath);
+
+        const thumbnailPath =
+          session.audioOnly || session.thumbnailPath
+            ? null
+            : await this.captureThumbnail(outputPath, durationSec, logPrefix);
 
         await this.prisma.streamSession.update({
           where: { id: session.id },
@@ -1006,6 +1034,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             // markStaleRecordingsAsStopped — the .ts mtime is the truth.
             endedAt: captureEndedAt,
             ...(session.captureEndedAt ? {} : { captureEndedAt }),
+            ...(thumbnailPath ? { thumbnailPath } : {}),
             ...(audio
               ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
               : {}),
@@ -1038,6 +1067,85 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
    * to restore DMCA-muted sound. Best-effort: a failure here must never fail
    * the recording itself.
    */
+  /**
+   * Grab one frame from the finished recording to use as the archive cover.
+   * Taken a little way in (streams open on a "starting soon" screen) but never
+   * past the end of short recordings. Best-effort: a missing cover is cosmetic,
+   * so any failure just returns null.
+   */
+  private async captureThumbnail(
+    videoPath: string,
+    durationSec: number | null,
+    logPrefix: string,
+  ): Promise<string | null> {
+    const thumbnailPath = videoPath.replace(/\.mp4$/i, ".jpg");
+
+    if (thumbnailPath === videoPath) {
+      return null;
+    }
+
+    // 5% in, clamped to [10 s, 5 min]; for very short clips fall back to 1 s.
+    const total = durationSec ?? 0;
+    const seekSec =
+      total > 20 ? Math.min(300, Math.max(10, Math.floor(total * 0.05))) : 1;
+
+    try {
+      const ffmpegCommand = this.resolveFfmpegCommand();
+
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        const child = spawn(
+          ffmpegCommand.command,
+          [
+            ...ffmpegCommand.args,
+            "-y",
+            // -ss before -i seeks by keyframe: near-instant even on a 10 GB file.
+            "-ss",
+            String(seekSec),
+            "-i",
+            videoPath,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=640:-2",
+            "-q:v",
+            "4",
+            thumbnailPath,
+          ],
+          { stdio: ["ignore", "ignore", "pipe"] },
+        );
+
+        let stderrTail = "";
+        child.stderr?.on("data", (chunk) => {
+          stderrTail = `${stderrTail}${chunk.toString()}`.slice(-2000);
+        });
+
+        child.once("error", (error) => rejectPromise(error));
+        child.once("exit", (code) => {
+          if (code === 0) {
+            resolvePromise();
+          } else {
+            rejectPromise(
+              new Error(`ffmpeg exited with code ${String(code)}: ${stderrTail.trim()}`),
+            );
+          }
+        });
+      });
+
+      if (!existsSync(thumbnailPath) || statSync(thumbnailPath).size === 0) {
+        return null;
+      }
+
+      return thumbnailPath;
+    } catch (error) {
+      this.logger.warn(
+        `${logPrefix} could not grab a cover frame: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+  }
+
   private async extractAudioTrack(videoPath: string, logPrefix: string) {
     const settings = await this.prisma.appSettings.upsert({
       where: { id: "default" },
@@ -1367,7 +1475,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   private serializeSession(
     session: StreamSession & { telegramParts?: TelegramUploadPart[] },
-    channel: Pick<Channel, "displayName" | "twitchLogin">,
+    channel: Pick<Channel, "displayName" | "twitchLogin" | "profileImageUrl">,
   ) {
     const playback = resolveSessionPlaybackState(session);
 
@@ -1395,6 +1503,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       channelId: session.channelId,
       channelLogin: channel.twitchLogin,
       channelDisplayName: channel.displayName ?? channel.twitchLogin,
+      channelProfileImageUrl: channel.profileImageUrl,
       title: session.title,
       categoryName: session.categoryName,
       status: session.status,
@@ -1422,6 +1531,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       recordingSource: session.recordingSource,
       errorMessage: session.errorMessage,
       previewImageUrl: session.previewImageUrl,
+      // Frame grabbed from the recording itself. Unlike previewImageUrl it
+      // does not expire when the broadcast ends.
+      thumbnailUrl: session.thumbnailPath ? `/api/archives/${session.id}/thumbnail` : null,
+      audioSizeBytes: session.audioSizeBytes,
       videoUrl:
         playback.videoUrl ??
         (telegramPlayable

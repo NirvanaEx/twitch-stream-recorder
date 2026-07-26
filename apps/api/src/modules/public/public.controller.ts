@@ -116,6 +116,11 @@ export class PublicStreamsController {
             profileImageUrl: session.channel.profileImageUrl,
           },
           previewImageUrl: session.previewImageUrl,
+          // Frame from the recording itself; Twitch's preview 404s after the
+          // broadcast ends, so the list used to show broken covers.
+          thumbnailUrl: session.thumbnailPath
+            ? `/api/public/streams/${session.id}/thumbnail`
+            : null,
           startedAt: session.startedAt?.toISOString() ?? null,
           endedAt: session.endedAt?.toISOString() ?? null,
           fileSizeBytes: playback.fileSizeBytes,
@@ -387,6 +392,41 @@ export class PublicStreamsController {
     };
   }
 
+  /** Cover frame of a recording (see the admin twin for why it exists). */
+  @Get(":id/thumbnail")
+  async streamThumbnail(@Param("id") id: string, @Req() req: any, @Res() res: any) {
+    const session = await this.prisma.streamSession.findUnique({
+      where: { id },
+      select: { thumbnailPath: true, videoStatus: true },
+    });
+
+    if (!session?.thumbnailPath || session.videoStatus !== "ready") {
+      throw new NotFoundException("Обложка не найдена.");
+    }
+
+    const absolutePath = resolve(session.thumbnailPath);
+
+    if (!existsSync(absolutePath)) {
+      throw new NotFoundException("Обложка не найдена.");
+    }
+
+    const stat = statSync(absolutePath);
+    const cache = buildMediaCacheHeaders(stat, 86_400);
+
+    if (req.headers["if-none-match"] === cache.etag) {
+      res.writeHead(304, cache.headers);
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Length": stat.size,
+      "Content-Type": "image/jpeg",
+      ...cache.headers,
+    });
+    createReadStream(absolutePath).pipe(res);
+  }
+
   @Get(":id/audio")
   async streamAudio(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
@@ -499,6 +539,9 @@ export class PublicStreamsController {
           profileImageUrl: session.channel.profileImageUrl,
         },
         previewImageUrl: session.previewImageUrl,
+        thumbnailUrl: session.thumbnailPath
+          ? `/api/public/streams/${session.id}/thumbnail`
+          : null,
         startedAt: session.startedAt?.toISOString() ?? null,
         endedAt: session.endedAt?.toISOString() ?? null,
         fileSizeBytes: playback.fileSizeBytes,
