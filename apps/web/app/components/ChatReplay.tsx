@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "../lib/api";
 import { useLanguage } from "../providers";
+import { SettingsIcon } from "./icons";
 
 type ChatMessage = {
   id: string;
@@ -70,6 +71,7 @@ export function ChatReplay({
   const [loadError, setLoadError] = useState(false);
   const [offset, setOffset] = useState(defaultOffsetSec);
   const [showDeleted, setShowDeleted] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
@@ -247,49 +249,71 @@ export function ChatReplay({
 
   return (
     <div className="chat-replay">
-      <div className="chat-heading">
-        <strong>{copy.title}</strong>
-        <span>{data?.messages.length ? `${data.messages.length} ${copy.messages}` : ""}</span>
+      {/* One compact row instead of a heading plus a permanently expanded
+          settings block: the offset is tuned once per archive, if ever, and it
+          used to cost a fifth of the panel's height every session. */}
+      <div className="chat-bar">
+        <strong className="chat-bar__title">{copy.title}</strong>
+        {data?.messages.length ? (
+          <span className="chat-bar__count">{data.messages.length}</span>
+        ) : null}
+        {offset !== 0 ? (
+          <span className="chat-bar__offset" title={copy.offset}>
+            {offset > 0 ? `+${offset}` : offset}s
+          </span>
+        ) : null}
+        <button
+          type="button"
+          className={`chat-bar__gear${settingsOpen ? " is-active" : ""}`}
+          onClick={() => setSettingsOpen((value) => !value)}
+          title={copy.settings}
+          aria-expanded={settingsOpen}
+        >
+          <SettingsIcon size={14} />
+        </button>
       </div>
-      <div className="chat-controls">
-        <div className="chat-offset-row">
-          <span className="chat-offset-label">{copy.offset}</span>
-          <button type="button" onClick={() => setOffset((o) => o - 5)} title="-5s">
-            −5
-          </button>
-          <button type="button" onClick={() => setOffset((o) => o - 1)} title="-1s">
-            −1
-          </button>
-          <input
-            type="number"
-            className="offset-input"
-            value={offset}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              setOffset(Number.isFinite(value) ? value : 0);
-            }}
-            aria-label={copy.offsetAria}
-          />
-          <span style={{ color: "var(--text-faint)" }}>s</span>
-          <button type="button" onClick={() => setOffset((o) => o + 1)} title="+1s">
-            +1
-          </button>
-          <button type="button" onClick={() => setOffset((o) => o + 5)} title="+5s">
-            +5
-          </button>
-          <button type="button" onClick={() => setOffset(0)} title="reset">
-            ↺
-          </button>
+
+      {settingsOpen ? (
+        <div className="chat-settings">
+          <div className="chat-offset-row">
+            <span className="chat-offset-label">{copy.offset}</span>
+            <button type="button" onClick={() => setOffset((o) => o - 5)} title="-5s">
+              −5
+            </button>
+            <button type="button" onClick={() => setOffset((o) => o - 1)} title="-1s">
+              −1
+            </button>
+            <input
+              type="number"
+              className="offset-input"
+              value={offset}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                setOffset(Number.isFinite(value) ? value : 0);
+              }}
+              aria-label={copy.offsetAria}
+            />
+            <span style={{ color: "var(--text-faint)" }}>s</span>
+            <button type="button" onClick={() => setOffset((o) => o + 1)} title="+1s">
+              +1
+            </button>
+            <button type="button" onClick={() => setOffset((o) => o + 5)} title="+5s">
+              +5
+            </button>
+            <button type="button" onClick={() => setOffset(0)} title="reset">
+              ↺
+            </button>
+          </div>
+          <label className="chat-toggle">
+            <input
+              type="checkbox"
+              checked={showDeleted}
+              onChange={(event) => setShowDeleted(event.target.checked)}
+            />
+            <span>{copy.showDeleted}</span>
+          </label>
         </div>
-        <label className="chat-toggle">
-          <input
-            type="checkbox"
-            checked={showDeleted}
-            onChange={(event) => setShowDeleted(event.target.checked)}
-          />
-          <span>{copy.showDeleted}</span>
-        </label>
-      </div>
+      ) : null}
 
       <div className="chat-list-wrap">
         <div ref={listRef} className="chat-list" onScroll={handleScroll}>
@@ -514,9 +538,10 @@ function ChatBadges({ raw }: { raw?: string | null }) {
 
 const CHAT_COPY = {
   ru: {
-    title: "Чат записи",
+    title: "Чат",
     messages: "сообщ.",
     offset: "Сдвиг",
+    settings: "Настройки чата",
     offsetAria: "Сдвиг чата в секундах",
     showDeleted: "Показывать удалённые",
     loading: "Загружаю чат…",
@@ -526,9 +551,10 @@ const CHAT_COPY = {
     paused: "Прокрутка чата остановлена — к новым ↓",
   },
   en: {
-    title: "Recorded chat",
+    title: "Chat",
     messages: "messages",
     offset: "Offset",
+    settings: "Chat settings",
     offsetAria: "Chat offset in seconds",
     showDeleted: "Show deleted",
     loading: "Loading chat…",
