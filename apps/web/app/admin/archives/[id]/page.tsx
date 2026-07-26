@@ -357,6 +357,10 @@ export default function ArchiveReplayPage() {
   const stageClass = [
     "replay-stage",
     `replay-stage--${mode}`,
+    // One-screen stage, same as the public watch page: video and chat divide
+    // the viewport, nothing dangles below. The admin shell reacts via
+    // .app-frame:has(.replay-stage--fit) and hands the height down.
+    "replay-stage--fit",
     hasChat ? "has-chat" : "",
   ]
     .filter(Boolean)
