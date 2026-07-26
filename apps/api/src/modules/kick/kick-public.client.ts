@@ -33,6 +33,8 @@ export type KickPublicChannel = {
   livestreamId: number | null;
   title: string | null;
   category: string | null;
+  /** Kick has shipped this as both viewer_count and viewers; helper normalizes. */
+  viewers: number | null;
   startedAt: string | null;
   thumbnail: string | null;
 };
@@ -167,6 +169,7 @@ export class KickPublicClient {
       livestreamId: payload.livestreamId ?? null,
       title: payload.title ?? null,
       category: payload.category ?? null,
+      viewers: typeof payload.viewers === "number" ? payload.viewers : null,
       // Kick returns "2026-07-25 21:28:33" (UTC, no zone marker); make it a
       // real ISO instant so `new Date(...)` does not read it as local time.
       startedAt: normalizeKickTimestamp(payload.startedAt),

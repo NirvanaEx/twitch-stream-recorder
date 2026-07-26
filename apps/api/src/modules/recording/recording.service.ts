@@ -36,6 +36,12 @@ type ActiveRecording = {
   // so flipping the channel switch mid-recording cannot change the outcome.
   extractAudio: boolean;
   stopRequested: boolean;
+  // Same instant chat capture is anchored to, so metadata points and messages
+  // land on one timeline.
+  captureAnchor: Date;
+  // Last metadata sample, kept in memory so the 15s poll does not read the
+  // table back just to decide whether anything changed.
+  lastMeta: { title: string | null; categoryName: string | null; atSec: number } | null;
 };
 
 // How many consecutive "offline" polls we tolerate before stopping an active
@@ -48,6 +54,10 @@ const OFFLINE_MISS_THRESHOLD = 3;
 // keeps failing instantly, while still allowing the recorder to resume the
 // stream after a crash, restart, or transient failure.
 const RESTART_COOLDOWN_MS = 60_000;
+
+// Metadata is polled every 15s with the live check, but only stored this often
+// unless the title or category actually changed.
+const META_SAMPLE_INTERVAL_SEC = 60;
 
 @Injectable()
 export class RecordingService implements OnModuleInit, OnModuleDestroy {
@@ -159,6 +169,14 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     if (liveStream) {
       this.offlineMisses.delete(channel.id);
+
+      // Sample the broadcast's metadata while it is being recorded, so the
+      // replay can show viewers, title and category as they were at each
+      // moment instead of only what they happened to be at the start.
+      const active = this.activeRecordings.get(channel.id);
+      if (active) {
+        void this.recordMetaPoint(active, liveStream);
+      }
     }
 
     if (
@@ -373,6 +391,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       );
     });
 
+    // One anchor for chat and for the metadata series: they are replayed on
+    // the same timeline, so they must be measured from the same instant.
+    const captureAnchor = new Date();
+
     const activeRecording: ActiveRecording = {
       channelId: channel.id,
       sessionId: session.id,
@@ -383,6 +405,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       audioOnly: channel.audioOnly,
       extractAudio: channel.recordAudio,
       stopRequested: false,
+      captureAnchor,
+      lastMeta: null,
     };
 
     this.activeRecordings.set(channel.id, activeRecording);
@@ -397,7 +421,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         channelId: channel.id,
         sessionId: session.id,
         channelLogin: channel.twitchLogin,
-        captureAnchor: new Date(),
+        captureAnchor,
       });
     } else {
       // The anchor is "now" (when streamlink actually started writing video),
@@ -408,9 +432,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         channelId: channel.id,
         sessionId: session.id,
         channelLogin: channel.twitchLogin,
-        captureAnchor: new Date(),
+        captureAnchor,
       });
     }
+
+    // First metadata point: whatever the stream looked like at second zero.
+    void this.recordMetaPoint(activeRecording, liveStream);
 
     // 7TV serves Kick too — the same v3 endpoint, keyed by the platform's own
     // user id, which twitchUserId holds for both. Best-effort, in background.
@@ -623,6 +650,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       where: { streamSessionId: id },
     });
     await this.prisma.emoteSnapshot.deleteMany({
+      where: { streamSessionId: id },
+    });
+    await this.prisma.streamMetaPoint.deleteMany({
       where: { streamSessionId: id },
     });
 
@@ -1368,6 +1398,61 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   private resolveFfmpegCommand() {
     return { command: "ffmpeg", args: [] };
+  }
+
+  /**
+   * One point on the broadcast's metadata timeline.
+   *
+   * Written on every change of title or category, and otherwise once a minute
+   * so the viewer curve has shape without a row per 15s poll — a six hour
+   * stream costs a few hundred rows instead of well over a thousand.
+   */
+  private async recordMetaPoint(
+    recording: ActiveRecording,
+    liveStream: { title: string | null; gameName: string | null; viewerCount?: number | null },
+  ) {
+    try {
+      const atSec = Math.max(
+        0,
+        Math.floor((Date.now() - recording.captureAnchor.getTime()) / 1000),
+      );
+      const title = liveStream.title ?? null;
+      const categoryName = liveStream.gameName ?? null;
+      const last = recording.lastMeta;
+
+      const changed = !last || last.title !== title || last.categoryName !== categoryName;
+      const due = !last || atSec - last.atSec >= META_SAMPLE_INTERVAL_SEC;
+
+      if (!changed && !due) {
+        return;
+      }
+
+      await this.prisma.streamMetaPoint.create({
+        data: {
+          streamSessionId: recording.sessionId,
+          relativeTimeSec: atSec,
+          viewerCount: liveStream.viewerCount ?? null,
+          title,
+          categoryName,
+        },
+      });
+
+      recording.lastMeta = { title, categoryName, atSec };
+
+      if (changed && last) {
+        this.logger.log(
+          `Stream metadata changed for session ${recording.sessionId} at ${atSec}s: ` +
+            `${last.categoryName ?? "—"} -> ${categoryName ?? "—"}.`,
+        );
+      }
+    } catch (error) {
+      // Never let bookkeeping interrupt a recording.
+      this.logger.warn(
+        `Failed to store a metadata point for session ${recording.sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async captureEmoteSnapshot(

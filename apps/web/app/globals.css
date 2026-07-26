@@ -2638,6 +2638,113 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- Broadcast metadata strip ----------
+   Viewers / title / category at the point the recording has reached. Clipped
+   to "so far" by default so the category bar does not announce what the
+   streamer switches to later. */
+
+.stream-meta {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.stream-meta__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.stream-meta__viewers {
+  color: var(--live);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stream-meta__peak {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.stream-meta__reveal {
+  margin-left: auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 5px;
+}
+
+.stream-meta__reveal:hover {
+  border-color: var(--border);
+}
+
+.stream-meta__reveal.is-active {
+  background: var(--accent-soft);
+}
+
+.stream-meta__now {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stream-meta__category {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.stream-meta__title {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-meta__bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.stream-meta__segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+/* The part not played yet: a flat neutral block, deliberately carrying no
+   information about which categories are still to come. */
+.stream-meta__unknown {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--border) 0 3px,
+    var(--border-strong) 3px 6px
+  );
+  opacity: 0.6;
+}
+
 /* ---------- Per-user history card ----------
    Docked inside the chat panel rather than beside it: the column is ~340px on
    desktop and narrower on mobile, so there is no room for a second one. */

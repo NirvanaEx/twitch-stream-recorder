@@ -189,6 +189,8 @@ export class KickService {
       title: channel.stream_title ?? null,
       startedAt: channel.stream.start_time ?? null,
       previewImageUrl: channel.stream.thumbnail ?? null,
+      viewerCount:
+        typeof channel.stream.viewer_count === "number" ? channel.stream.viewer_count : null,
       source: "api" as const,
     };
   }
@@ -214,6 +216,7 @@ export class KickService {
       title: channel.title,
       startedAt: channel.startedAt,
       previewImageUrl: channel.thumbnail,
+      viewerCount: channel.viewers,
       source: "public" as const,
     };
   }

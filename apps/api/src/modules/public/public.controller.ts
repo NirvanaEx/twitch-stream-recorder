@@ -20,6 +20,7 @@ import {
 } from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
+import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
@@ -623,6 +624,18 @@ export class PublicStreamsController {
       })),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
+  }
+
+  /** Viewers / title / category over the course of the broadcast. */
+  @Get(":id/timeline")
+  async getTimeline(@Param("id") id: string) {
+    const points = await this.prisma.streamMetaPoint.findMany({
+      where: { streamSessionId: id },
+      orderBy: { relativeTimeSec: "asc" },
+      select: { relativeTimeSec: true, viewerCount: true, title: true, categoryName: true },
+    });
+
+    return buildStreamTimeline(points);
   }
 
   /**

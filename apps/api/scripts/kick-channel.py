@@ -10,7 +10,7 @@ Prints a single JSON object on stdout:
 
     {"ok": true, "id": 668, "userId": 676, "slug": "xqc", "chatroomId": 668,
      "displayName": "xQc", "avatar": "https://...", "isLive": true,
-     "livestreamId": 119125610, "title": "...", "category": "Just Chatting",
+     "livestreamId": 119125610, "title": "...", "category": "Just Chatting", "viewers": 1234,
      "startedAt": "2026-07-26 09:00:00", "thumbnail": "https://..."}
 
 or {"ok": false, "error": "..."} — never a traceback, so the caller only has to
@@ -99,6 +99,11 @@ def main():
                 "livestreamId": (livestream or {}).get("id"),
                 "title": (livestream or {}).get("session_title"),
                 "category": (categories[0] or {}).get("name") if categories else None,
+                # Kick has used both spellings for this field; take whichever
+                # is present so the viewer graph is not silently empty.
+                "viewers": (livestream or {}).get("viewer_count")
+                if (livestream or {}).get("viewer_count") is not None
+                else (livestream or {}).get("viewers"),
                 "startedAt": (livestream or {}).get("start_time"),
                 "thumbnail": ((livestream or {}).get("thumbnail") or {}).get("url")
                 if isinstance((livestream or {}).get("thumbnail"), dict)

@@ -21,6 +21,7 @@ import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
+import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
@@ -135,6 +136,22 @@ export class ArchivesController {
   @Get(":id/emotes/live")
   async getArchiveLiveEmotes(@Param("id") id: string) {
     return { emotes: await this.liveEmotesService.forSession(id) };
+  }
+
+  /**
+   * Viewers / title / category over the course of the broadcast. Served whole;
+   * hiding what has not been reached yet is a viewing preference the player
+   * applies, not something the archive should decide.
+   */
+  @Get(":id/timeline")
+  async getArchiveTimeline(@Param("id") id: string) {
+    const points = await this.prisma.streamMetaPoint.findMany({
+      where: { streamSessionId: id },
+      orderBy: { relativeTimeSec: "asc" },
+      select: { relativeTimeSec: true, viewerCount: true, title: true, categoryName: true },
+    });
+
+    return buildStreamTimeline(points);
   }
 
   @Get(":id/bundle")
