@@ -1,50 +1,31 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { apiGet, buildApiUrl } from "../lib/api";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { apiGet } from "../lib/api";
+import { CHAT_COPY, ROLE_LABELS, type ChatCopy } from "../lib/chat-copy";
+import { readableAuthorColor, splitList, useChatPrefs, type ChatRole } from "../lib/chat-prefs";
+import {
+  formatRenderTime,
+  messageRoles,
+  parseActionMessage,
+  type ChatMessage,
+  type ChatResponse,
+  type EmoteEntry,
+  type EmotePayload,
+} from "../lib/chat-render";
 import { useLanguage } from "../providers";
+import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { ChatText } from "./ChatText";
+import { ChatUserCard } from "./ChatUserCard";
 import { SettingsIcon } from "./icons";
-
-type ChatMessage = {
-  id: string;
-  authorLogin: string;
-  authorDisplayName: string | null;
-  authorColor: string | null;
-  textRaw: string;
-  badges?: string | null;
-  emotes?: string | null;
-  relativeTimeSec: number;
-  messageTimestamp: string;
-  isDeleted: boolean;
-  /** Timeout seconds behind the deletion; 0 = permanent ban; null = plain delete. */
-  banDurationSec?: number | null;
-  /** The author's first message ever in this channel (Twitch first-msg tag). */
-  isFirstMessage?: boolean;
-};
-
-type EmoteEntry = {
-  id: string;
-  name: string;
-  /** Original 7TV CDN url — the fallback when our own copy is unavailable. */
-  url: string;
-  /**
-   * Our mirrored copy: an API-relative path for an online archive, or a
-   * self-contained data: URI inside a downloaded .tsr.json bundle.
-   */
-  localUrl?: string;
-  animated: boolean;
-};
-
-type EmotePayload = {
-  provider: string;
-  fetchedAt: string;
-  emotes: EmoteEntry[];
-};
-
-type ChatResponse = {
-  messages: ChatMessage[];
-  emotes: EmotePayload | null;
-};
 
 type ChatReplayProps = {
   archiveId?: string;
@@ -84,82 +65,21 @@ export function ChatReplay({
 }: ChatReplayProps) {
   const { locale } = useLanguage();
   const copy = CHAT_COPY[locale];
+  const { prefs, update, toggleRole, reset } = useChatPrefs();
+
   const [data, setData] = useState<ChatResponse | null>(staticData ?? null);
   const [loading, setLoading] = useState(!staticData);
   const [loadError, setLoadError] = useState(false);
   const [offset, setOffset] = useState(defaultOffsetSec);
-  // Deleted messages are shown by default — with strikethrough and the ban
-  // length, hiding them turned out to be the rarer wish. The toggle persists.
-  const [showDeleted, setShowDeleted] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // The recorded snapshot is the default on purpose: it is what the chat
-  // actually saw. "Current" is the opt-in for recordings whose snapshot is
-  // missing (every Kick stream captured before 7TV was wired up) or older
-  // than the channel's set. The choice persists across archives.
-  const [useLiveEmotes, setUseLiveEmotes] = useState(false);
+  const [search, setSearch] = useState("");
+  const [activeUser, setActiveUser] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
   const [liveEmotes, setLiveEmotes] = useState<EmotePayload | null>(null);
   const [liveEmotesState, setLiveEmotesState] = useState<"idle" | "loading" | "error">("idle");
-
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem("tsr-chat-show-deleted") === "0") {
-        setShowDeleted(false);
-      }
-      if (window.localStorage.getItem("tsr-chat-live-emotes") === "1") {
-        setUseLiveEmotes(true);
-      }
-    } catch {
-      // Ignore broken localStorage.
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("tsr-chat-live-emotes", useLiveEmotes ? "1" : "0");
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [useLiveEmotes]);
-
-  // Fetched lazily — the snapshot mode must not pay for a 7TV round-trip.
-  useEffect(() => {
-    if (!useLiveEmotes || !liveEmotesUrl || liveEmotes) return undefined;
-
-    let cancelled = false;
-    setLiveEmotesState("loading");
-
-    void (async () => {
-      try {
-        const response = await apiGet<{ emotes: EmotePayload | null }>(liveEmotesUrl);
-        if (cancelled) return;
-        setLiveEmotes(response.emotes);
-        setLiveEmotesState("idle");
-      } catch {
-        if (!cancelled) setLiveEmotesState("error");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [useLiveEmotes, liveEmotesUrl, liveEmotes]);
-
-  // A different archive may be a different channel — drop the cached set.
-  useEffect(() => {
-    setLiveEmotes(null);
-    setLiveEmotesState("idle");
-  }, [liveEmotesUrl]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem("tsr-chat-show-deleted", showDeleted ? "1" : "0");
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [showDeleted]);
-  const [currentTime, setCurrentTime] = useState(0);
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
   // If static data provided (offline mode), sync it.
   useEffect(() => {
@@ -206,39 +126,44 @@ export function ChatReplay({
     };
   }, [endpoint, staticData]);
 
-  // Do not carry a manually adjusted offset into another archive when the
-  // same client component instance is reused during navigation.
+  // A different archive may be a different channel — drop the cached set.
   useEffect(() => {
-    setOffset(defaultOffsetSec);
-  }, [endpoint, defaultOffsetSec]);
+    setLiveEmotes(null);
+    setLiveEmotesState("idle");
+  }, [liveEmotesUrl]);
 
-  // Re-fetch every 10s if still recording, to pick up new messages.
+  // Fetched lazily — the snapshot mode must not pay for a 7TV round-trip.
   useEffect(() => {
-    if (!isLive || !endpoint || staticData) return undefined;
+    if (!prefs.useLiveEmotes || !liveEmotesUrl || liveEmotes) return undefined;
 
-    const timer = window.setInterval(() => {
-      void apiGet<ChatResponse>(endpoint)
-        .then((response) => {
-          setData(response);
-          setLoadError(false);
-        })
-        .catch(() => undefined);
-    }, 10_000);
+    let cancelled = false;
+    setLiveEmotesState("loading");
 
-    return () => window.clearInterval(timer);
-  }, [endpoint, isLive, staticData]);
+    void (async () => {
+      try {
+        const response = await apiGet<{ emotes: EmotePayload | null }>(liveEmotesUrl);
+        if (cancelled) return;
+        setLiveEmotes(response.emotes);
+        setLiveEmotesState("idle");
+      } catch {
+        if (!cancelled) setLiveEmotesState("error");
+      }
+    })();
 
-  // Track video time. `timeupdate` fires ~4x/sec; chat only needs 1s
-  // granularity, so we quantise to whole seconds and skip the state update
-  // (and the whole re-render) when the second hasn't changed. This alone cuts
-  // chat re-renders ~75% and stops the chat from competing with video decode.
+    return () => {
+      cancelled = true;
+    };
+  }, [prefs.useLiveEmotes, liveEmotesUrl, liveEmotes]);
+
+  // Follow the player clock, once a second.
   useEffect(() => {
     if (!videoElement) return undefined;
 
     const handler = () => {
       const next = Math.floor(videoElement.currentTime);
-      setCurrentTime((prev) => (prev === next ? prev : next));
+      setCurrentTime((previous) => (previous === next ? previous : next));
     };
+
     videoElement.addEventListener("timeupdate", handler);
     videoElement.addEventListener("seeked", handler);
     handler();
@@ -252,20 +177,44 @@ export function ChatReplay({
   const emoteMap = useMemo(() => {
     // One source or the other, never a blend: mixing them would silently
     // present today's emotes as part of the record.
-    const source = useLiveEmotes && liveEmotes ? liveEmotes : data?.emotes;
+    const source = prefs.useLiveEmotes && liveEmotes ? liveEmotes : data?.emotes;
     const map = new Map<string, EmoteEntry>();
     for (const emote of source?.emotes ?? []) {
       map.set(emote.name, emote);
     }
     return map;
-  }, [data?.emotes, useLiveEmotes, liveEmotes]);
+  }, [data?.emotes, prefs.useLiveEmotes, liveEmotes]);
 
-  // The deleted-filtered, time-sorted message list. Recomputed only when the
-  // data or the "show deleted" toggle changes — NOT on every timeupdate.
+  const keywords = useMemo(() => splitList(prefs.keywords), [prefs.keywords]);
+  // Whatever the viewer listed as keywords is almost always their own name, so
+  // a mention of it gets marked harder than a mention of anyone else.
+  const selfNames = useMemo(() => new Set(keywords), [keywords]);
+  const hiddenUsers = useMemo(() => new Set(splitList(prefs.hiddenUsers)), [prefs.hiddenUsers]);
+  const highlightRoles = useMemo(() => new Set(prefs.highlightRoles), [prefs.highlightRoles]);
+  const searchTerm = search.trim().toLowerCase();
+
+  // Everything that removes messages, applied once. Recomputed only when the
+  // data or a filter changes — NOT on every timeupdate.
   const timeline = useMemo(() => {
     const all = data?.messages ?? [];
-    return showDeleted ? all : all.filter((message) => !message.isDeleted);
-  }, [data, showDeleted]);
+
+    return all.filter((message) => {
+      if (!prefs.showDeleted && message.isDeleted) return false;
+      if (hiddenUsers.has(message.authorLogin.toLowerCase())) return false;
+      if (prefs.hideCommands && message.textRaw.trimStart().startsWith("!")) return false;
+
+      if (searchTerm) {
+        const haystack = `${message.authorLogin} ${message.authorDisplayName ?? ""} ${
+          message.textRaw
+        }`.toLowerCase();
+        if (!haystack.includes(searchTerm)) return false;
+      }
+
+      return true;
+    });
+  }, [data, prefs.showDeleted, prefs.hideCommands, hiddenUsers, searchTerm]);
+
+  const hiddenCount = (data?.messages.length ?? 0) - timeline.length;
 
   // Twitch-style: show only messages whose render_time has been reached, keep
   // the last MAX_VISIBLE so the chat doesn't grow unbounded. Messages arrive
@@ -335,8 +284,63 @@ export function ChatReplay({
     setPinnedToBottom(true);
   };
 
+  const toRenderTime = useCallback(
+    (relativeTimeSec: number) => relativeTimeSec - baseOffsetSec + offset,
+    [baseOffsetSec, offset],
+  );
+
+  const canSeek = useCallback(
+    (relativeTimeSec: number) => {
+      if (!videoElement || isLive) return false;
+      const target = toRenderTime(relativeTimeSec);
+      // A split archive only holds one part at a time; anything outside it
+      // would silently jump to the wrong moment.
+      const duration = Number.isFinite(videoElement.duration) ? videoElement.duration : null;
+      return target >= 0 && (duration === null || target <= duration);
+    },
+    [videoElement, isLive, toRenderTime],
+  );
+
+  const seekTo = useCallback(
+    (relativeTimeSec: number) => {
+      if (!videoElement || !canSeek(relativeTimeSec)) return;
+      videoElement.currentTime = Math.max(0, toRenderTime(relativeTimeSec));
+    },
+    [videoElement, canSeek, toRenderTime],
+  );
+
+  // The user card needs the unfiltered history: hiding bots or searching must
+  // not silently shorten someone's record when you open their card.
+  const allMessages = data?.messages ?? [];
+  const userThreshold = isLive
+    ? Number.POSITIVE_INFINITY
+    : currentTime + baseOffsetSec - offset;
+
+  const liveEmotesNote =
+    liveEmotesState === "loading"
+      ? copy.liveEmotesLoading
+      : liveEmotesState === "error"
+        ? copy.liveEmotesError
+        : prefs.useLiveEmotes && liveEmotes === null
+          ? copy.liveEmotesNone
+          : null;
+
+  const rootStyle = {
+    "--chat-font": `${prefs.fontPx}px`,
+    "--chat-emote": `${prefs.emotePx}px`,
+  } as CSSProperties;
+
+  const rootClass = [
+    "chat-replay",
+    prefs.compact ? "is-compact" : "",
+    prefs.stripes ? "has-stripes" : "",
+    prefs.showTimestamps ? "" : "no-time",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="chat-replay">
+    <div className={rootClass} style={rootStyle}>
       {/* One compact row instead of a heading plus a permanently expanded
           settings block: the offset is tuned once per archive, if ever, and it
           used to cost a fifth of the panel's height every session. */}
@@ -344,6 +348,11 @@ export function ChatReplay({
         <strong className="chat-bar__title">{copy.title}</strong>
         {data?.messages.length ? (
           <span className="chat-bar__count">{data.messages.length}</span>
+        ) : null}
+        {hiddenCount > 0 ? (
+          <span className="chat-bar__filtered" title={copy.filtered}>
+            −{hiddenCount}
+          </span>
         ) : null}
         {offset !== 0 ? (
           <span className="chat-bar__offset" title={copy.offset}>
@@ -362,62 +371,20 @@ export function ChatReplay({
       </div>
 
       {settingsOpen ? (
-        <div className="chat-settings">
-          <div className="chat-offset-row">
-            <span className="chat-offset-label">{copy.offset}</span>
-            <button type="button" onClick={() => setOffset((o) => o - 5)} title="-5s">
-              −5
-            </button>
-            <button type="button" onClick={() => setOffset((o) => o - 1)} title="-1s">
-              −1
-            </button>
-            <input
-              type="number"
-              className="offset-input"
-              value={offset}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setOffset(Number.isFinite(value) ? value : 0);
-              }}
-              aria-label={copy.offsetAria}
-            />
-            <span style={{ color: "var(--text-faint)" }}>s</span>
-            <button type="button" onClick={() => setOffset((o) => o + 1)} title="+1s">
-              +1
-            </button>
-            <button type="button" onClick={() => setOffset((o) => o + 5)} title="+5s">
-              +5
-            </button>
-            <button type="button" onClick={() => setOffset(0)} title="reset">
-              ↺
-            </button>
-          </div>
-          <label className="chat-toggle">
-            <input
-              type="checkbox"
-              checked={showDeleted}
-              onChange={(event) => setShowDeleted(event.target.checked)}
-            />
-            <span>{copy.showDeleted}</span>
-          </label>
-          {liveEmotesUrl ? (
-            <label className="chat-toggle" title={copy.liveEmotesHint}>
-              <input
-                type="checkbox"
-                checked={useLiveEmotes}
-                onChange={(event) => setUseLiveEmotes(event.target.checked)}
-              />
-              <span>
-                {copy.liveEmotes}
-                {useLiveEmotes && liveEmotesState === "loading" ? ` — ${copy.liveEmotesLoading}` : ""}
-                {useLiveEmotes && liveEmotesState === "error" ? ` — ${copy.liveEmotesError}` : ""}
-                {useLiveEmotes && liveEmotesState === "idle" && liveEmotes === null
-                  ? ` — ${copy.liveEmotesNone}`
-                  : ""}
-              </span>
-            </label>
-          ) : null}
-        </div>
+        <ChatSettingsPanel
+          prefs={prefs}
+          update={update}
+          toggleRole={toggleRole}
+          reset={reset}
+          copy={copy}
+          locale={locale}
+          offset={offset}
+          setOffset={setOffset}
+          search={search}
+          setSearch={setSearch}
+          liveEmotesUrl={liveEmotesUrl}
+          liveEmotesNote={liveEmotesNote}
+        />
       ) : null}
 
       <div className="chat-list-wrap">
@@ -428,131 +395,146 @@ export function ChatReplay({
             <div className="chat-empty chat-empty--error">{copy.loadError}</div>
           ) : visibleMessages.length === 0 ? (
             <div className="chat-empty">
-              {data?.messages.length === 0
-                ? copy.empty
-                : copy.waiting}
+              {data?.messages.length === 0 ? copy.empty : copy.waiting}
             </div>
           ) : (
             visibleMessages.map((entry) => (
-              <ChatMessageItem
+              <ChatMessageRow
                 key={entry.message.id}
                 message={entry.message}
                 renderTime={entry.renderTime}
                 emoteMap={emoteMap}
+                emotePx={prefs.emotePx}
+                readableColors={prefs.readableColors}
+                highlightRoles={highlightRoles}
+                highlightFirstMessage={prefs.highlightFirstMessage}
+                keywords={keywords}
+                selfNames={selfNames}
+                isActiveUser={activeUser === entry.message.authorLogin}
+                onAuthorClick={setActiveUser}
                 locale={locale}
+                copy={copy}
               />
             ))
           )}
         </div>
-        {!pinnedToBottom && visibleMessages.length > 0 ? (
-          <button
-            type="button"
-            className="chat-jump-pill"
-            onClick={jumpToLatest}
-            title="Jump to latest"
-          >
+
+        {!pinnedToBottom ? (
+          <button type="button" className="chat-jump-pill" onClick={jumpToLatest}>
             {copy.paused}
           </button>
+        ) : null}
+
+        {activeUser ? (
+          <ChatUserCard
+            login={activeUser}
+            messages={allMessages}
+            thresholdSec={userThreshold}
+            emoteMap={emoteMap}
+            emotePx={prefs.emotePx}
+            readableColors={prefs.readableColors}
+            copy={copy}
+            locale={locale}
+            onClose={() => setActiveUser(null)}
+            onSeek={seekTo}
+            canSeek={canSeek}
+            toRenderTime={toRenderTime}
+          />
         ) : null}
       </div>
     </div>
   );
 }
 
-function formatRenderTime(seconds: number) {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  return hours > 0
-    ? `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-    : `${minutes}:${secs.toString().padStart(2, "0")}`;
-}
-
-/** "10 мин" / "1 ч" / "30 сек"; 0 means the ban had no end. */
-function formatBanDuration(seconds: number, locale: "ru" | "en") {
-  if (seconds <= 0) return locale === "ru" ? "бан" : "ban";
-  if (seconds < 60) return `${seconds} ${locale === "ru" ? "сек" : "s"}`;
-  if (seconds < 3600) {
-    return `${Math.round(seconds / 60)} ${locale === "ru" ? "мин" : "min"}`;
-  }
-  const hours = Math.round((seconds / 3600) * 10) / 10;
-  return `${hours} ${locale === "ru" ? "ч" : "h"}`;
-}
-
-const ChatMessageItem = memo(function ChatMessageItem({
+const ChatMessageRow = memo(function ChatMessageRow({
   message,
   renderTime,
   emoteMap,
+  emotePx,
+  readableColors,
+  highlightRoles,
+  highlightFirstMessage,
+  keywords,
+  selfNames,
+  isActiveUser,
+  onAuthorClick,
   locale,
+  copy,
 }: {
   message: ChatMessage;
   renderTime: number;
   emoteMap: Map<string, EmoteEntry>;
+  emotePx: number;
+  readableColors: boolean;
+  highlightRoles: Set<ChatRole>;
+  highlightFirstMessage: boolean;
+  keywords: string[];
+  selfNames: Set<string>;
+  isActiveUser: boolean;
+  onAuthorClick: (login: string) => void;
   locale: "ru" | "en";
+  copy: ChatCopy;
 }) {
-  const display = useMemo(() => parseActionMessage(message.textRaw), [message.textRaw]);
-  const tokens = useMemo(() => renderTokens(display.text, emoteMap, message.emotes), [
-    display.text,
-    message.textRaw,
-    message.emotes,
-    emoteMap,
-  ]);
+  const display = parseActionMessage(message.textRaw);
+  const roles = messageRoles(message);
+
+  // The strongest role wins the row tint — messageRoles is rank-ordered, so
+  // the broadcaster does not get painted as a plain subscriber.
+  const role = roles.find((entry) => highlightRoles.has(entry));
+  const matchesKeyword =
+    keywords.length > 0 &&
+    keywords.some((word) => display.text.toLowerCase().includes(word));
 
   const className = [
     "chat-message",
     message.isDeleted ? "is-deleted" : "",
     display.isAction ? "is-action" : "",
-    message.isFirstMessage ? "is-first" : "",
+    highlightFirstMessage && message.isFirstMessage ? "is-first" : "",
+    role ? `is-role is-role--${role}` : "",
+    matchesKeyword ? "is-keyword" : "",
+    isActiveUser ? "is-active-user" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
-  const copy = CHAT_COPY[locale];
   // null = the message was deleted on its own; a number = a timeout/ban took
   // the author's whole history with it, and the length is worth showing.
   const ban = message.isDeleted ? message.banDurationSec ?? null : null;
+  const color = readableColors ? readableAuthorColor(message.authorColor) : message.authorColor;
 
   return (
     <div className={className}>
       <span className="chat-time" title="Time in video">
         {formatRenderTime(renderTime)}
       </span>
-      <ChatBadges raw={message.badges} />
-      <span
+      {roles.length > 0 ? (
+        <span className="chat-badges">
+          {roles.map((entry) => (
+            <span key={entry} className={`chat-badge chat-badge--${entry}`} title={ROLE_LABELS[entry][locale]}>
+              {ROLE_LABELS[entry].badge}
+            </span>
+          ))}
+        </span>
+      ) : null}
+      <button
+        type="button"
         className="chat-author"
-        style={{ color: message.authorColor || "#9ca3af" }}
+        style={{ color: color || "#9ca3af" }}
+        onClick={() => onAuthorClick(message.authorLogin)}
+        title={copy.userCardTitle}
       >
         {message.authorDisplayName ?? message.authorLogin}
-      </span>
+      </button>
       <span className="chat-separator">{display.isAction ? " " : ": "}</span>
       <span className="chat-text">
-        {tokens.map((token, index) =>
-          token.type === "emote" ? (
-            <img
-              key={`${token.name}-${index}`}
-              src={token.url}
-              alt={token.name}
-              className="chat-emote"
-              loading="lazy"
-              onError={
-                token.fallbackUrl
-                  ? (event) => {
-                      // Our copy is missing (recorded before the mirror, or the
-                      // file was lost) — retry against 7TV once, then stop, so a
-                      // dead url cannot loop.
-                      const image = event.currentTarget;
-                      if (token.fallbackUrl && image.src !== token.fallbackUrl) {
-                        image.src = token.fallbackUrl;
-                      }
-                    }
-                  : undefined
-              }
-            />
-          ) : (
-            <span key={`text-${index}`}>{token.value}</span>
-          ),
-        )}
+        <ChatText
+          text={display.text}
+          emoteMap={emoteMap}
+          twitchEmotes={message.emotes}
+          inlineEmotes={message.inlineEmotes}
+          emotePx={emotePx}
+          selfNames={selfNames}
+        />
       </span>
       {ban !== null ? (
         <span
@@ -566,186 +548,18 @@ const ChatMessageItem = memo(function ChatMessageItem({
   );
 });
 
-type Token =
-  | { type: "text"; value: string }
-  | { type: "emote"; name: string; url: string; fallbackUrl?: string };
-
-function renderTokens(
-  text: string,
-  emoteMap: Map<string, EmoteEntry>,
-  twitchEmotes?: string | null,
-): Token[] {
-  const ranges = parseTwitchEmoteRanges(twitchEmotes);
-  if (ranges.length === 0) {
-    return renderPlainTokens(text, emoteMap);
+/** "10 мин" / "1 ч" / "30 сек"; 0 means the ban had no end. */
+function formatBanDuration(seconds: number, locale: "ru" | "en") {
+  if (seconds <= 0) return locale === "ru" ? "бан" : "ban";
+  if (seconds < 60) return locale === "ru" ? `${seconds} сек` : `${seconds}s`;
+  if (seconds < 3600) {
+    const minutes = Math.round(seconds / 60);
+    return locale === "ru" ? `${minutes} мин` : `${minutes}m`;
   }
-
-  const codePoints = Array.from(text);
-  const tokens: Token[] = [];
-  let cursor = 0;
-
-  for (const range of ranges) {
-    if (range.start < cursor || range.end >= codePoints.length) continue;
-    tokens.push(...renderPlainTokens(codePoints.slice(cursor, range.start).join(""), emoteMap));
-    const name = codePoints.slice(range.start, range.end + 1).join("");
-    tokens.push({
-      type: "emote",
-      name,
-      url: `https://static-cdn.jtvnw.net/emoticons/v2/${range.id}/default/dark/2.0`,
-    });
-    cursor = range.end + 1;
+  if (seconds < 86400) {
+    const hours = Math.round(seconds / 3600);
+    return locale === "ru" ? `${hours} ч` : `${hours}h`;
   }
-
-  tokens.push(...renderPlainTokens(codePoints.slice(cursor).join(""), emoteMap));
-  return tokens;
+  const days = Math.round(seconds / 86400);
+  return locale === "ru" ? `${days} дн` : `${days}d`;
 }
-
-/**
- * Prefer our mirrored copy, keep the 7TV CDN as the fallback.
- *
- * A snapshot freezes which emotes a stream had, but not the pictures — those
- * lived only on cdn.7tv.app, so an emote deleted there turned every old replay
- * into broken boxes. Recordings made after the mirror landed carry `localUrl`;
- * older ones have only `url` and keep working exactly as before.
- *
- * A data: URI (offline bundle) is already self-contained; anything else is an
- * API-relative path that has to go through the configured API base.
- */
-function resolveEmoteSrc(emote: EmoteEntry): { url: string; fallbackUrl?: string } {
-  if (!emote.localUrl) {
-    return { url: emote.url };
-  }
-
-  if (emote.localUrl.startsWith("data:")) {
-    return { url: emote.localUrl };
-  }
-
-  return { url: buildApiUrl(emote.localUrl), fallbackUrl: emote.url };
-}
-
-function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Token[] {
-  if (!text) return [];
-  if (emoteMap.size === 0) return [{ type: "text", value: text }];
-
-  const parts = text.split(/(\s+)/);
-  const tokens: Token[] = [];
-
-  for (const part of parts) {
-    const emote = emoteMap.get(part);
-
-    if (emote) {
-      tokens.push({ type: "emote", name: emote.name, ...resolveEmoteSrc(emote) });
-    } else {
-      const last = tokens[tokens.length - 1];
-      if (last?.type === "text") {
-        last.value += part;
-      } else {
-        tokens.push({ type: "text", value: part });
-      }
-    }
-  }
-
-  return tokens;
-}
-
-function parseTwitchEmoteRanges(tag?: string | null) {
-  const ranges: Array<{ id: string; start: number; end: number }> = [];
-  for (const group of tag?.split("/") ?? []) {
-    const separator = group.indexOf(":");
-    if (separator <= 0) continue;
-    const id = group.slice(0, separator);
-    for (const pair of group.slice(separator + 1).split(",")) {
-      const [rawStart, rawEnd] = pair.split("-");
-      const start = Number.parseInt(rawStart, 10);
-      const end = Number.parseInt(rawEnd, 10);
-      if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-        ranges.push({ id, start, end });
-      }
-    }
-  }
-  return ranges.sort((a, b) => a.start - b.start);
-}
-
-function parseActionMessage(raw: string) {
-  if (!raw.startsWith("\u0001ACTION ")) return { text: raw, isAction: false };
-  const withoutPrefix = raw.slice(8);
-  return {
-    text: withoutPrefix.endsWith("\u0001") ? withoutPrefix.slice(0, -1) : withoutPrefix,
-    isAction: true,
-  };
-}
-
-const BADGE_LABELS: Record<string, string> = {
-  broadcaster: "СТР",
-  moderator: "MOD",
-  vip: "VIP",
-  subscriber: "SUB",
-  staff: "STAFF",
-  admin: "ADMIN",
-  global_mod: "GM",
-  partner: "✓",
-  turbo: "T",
-};
-
-function ChatBadges({ raw }: { raw?: string | null }) {
-  if (!raw) return null;
-  const badges = raw
-    .split(",")
-    .map((entry) => entry.split("/")[0])
-    .filter((kind) => BADGE_LABELS[kind]);
-  if (badges.length === 0) return null;
-  return (
-    <span className="chat-badges">
-      {badges.map((kind) => (
-        <span key={kind} className={`chat-badge chat-badge--${kind}`} title={kind}>
-          {BADGE_LABELS[kind]}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const CHAT_COPY = {
-  ru: {
-    title: "Чат",
-    messages: "сообщ.",
-    offset: "Сдвиг",
-    settings: "Настройки чата",
-    offsetAria: "Сдвиг чата в секундах",
-    showDeleted: "Показывать удалённые",
-    liveEmotes: "Текущие эмоуты канала",
-    liveEmotesHint:
-      "По умолчанию показываются эмоуты на момент записи. Здесь — набор канала на 7TV прямо сейчас: пригодится, если снапшот не снялся или набор с тех пор пополнился.",
-    liveEmotesLoading: "загружаю…",
-    liveEmotesError: "не удалось загрузить",
-    liveEmotesNone: "у канала нет 7TV",
-    banPermanent: "Пользователь забанен навсегда",
-    banTimeout: "Пользователь получил таймаут",
-    loading: "Загружаю чат…",
-    loadError: "Не удалось загрузить чат. Проверьте соединение с сервером.",
-    empty: "Для этого стрима сообщения чата не записались.",
-    waiting: "Ожидаю сообщения для текущего момента видео…",
-    paused: "Прокрутка чата остановлена — к новым ↓",
-  },
-  en: {
-    title: "Chat",
-    messages: "messages",
-    offset: "Offset",
-    settings: "Chat settings",
-    offsetAria: "Chat offset in seconds",
-    showDeleted: "Show deleted",
-    liveEmotes: "Channel's current emotes",
-    liveEmotesHint:
-      "By default the emotes are the ones from the time of recording. This shows the channel's 7TV set as it is now — useful when no snapshot was taken, or the set has grown since.",
-    liveEmotesLoading: "loading…",
-    liveEmotesError: "could not load",
-    liveEmotesNone: "channel has no 7TV",
-    banPermanent: "User was banned permanently",
-    banTimeout: "User was timed out",
-    loading: "Loading chat…",
-    loadError: "Could not load chat. Check the server connection.",
-    empty: "No chat messages were captured for this stream.",
-    waiting: "Waiting for messages at this video time…",
-    paused: "Chat paused — jump to latest ↓",
-  },
-} as const;

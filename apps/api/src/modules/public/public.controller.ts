@@ -12,6 +12,7 @@ import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { AllowAnonymous } from "../auth/auth.decorators";
+import { extractChatRoles, extractInlineEmotes } from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -603,7 +604,9 @@ export class PublicStreamsController {
         authorColor: message.authorColor,
         textRaw: message.textRaw,
         badges: parseStoredJsonString(message.badgesJson),
+        roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
+        inlineEmotes: extractInlineEmotes(message.emotesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
@@ -678,6 +681,7 @@ export class PublicStreamsController {
         // indexed — the userscript renders these from the Twitch CDN.
         emotes: message.emotesJson ? parseStoredJsonString(message.emotesJson) : null,
         badges: parseStoredJsonString(message.badgesJson),
+        roles: extractChatRoles(message.badgesJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,

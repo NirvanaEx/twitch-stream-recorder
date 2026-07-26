@@ -14,6 +14,16 @@ test("inline emote tokens are unwrapped into readable text", () => {
   assert.equal(text.slice(emotes[0].start, emotes[0].end + 1), "catJAM");
 });
 
+test("leading whitespace does not shift the recorded emote positions", () => {
+  // The text used to be trimmed after the positions were recorded, so every
+  // index was off by however many spaces the trim removed and the renderer
+  // pasted the image a few characters into the wrong word.
+  const { text, emotes } = extractEmotes("   hi [emote:5:PogU] there   ");
+
+  assert.equal(text, "hi PogU there");
+  assert.equal(text.slice(emotes[0].start, emotes[0].end + 1), "PogU");
+});
+
 test("several emotes keep their positions after earlier ones are rewritten", () => {
   const { text, emotes } = extractEmotes("[emote:1:aa] mid [emote:22:bbbb] end");
 
