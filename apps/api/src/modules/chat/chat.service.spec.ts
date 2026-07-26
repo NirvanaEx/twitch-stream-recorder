@@ -11,6 +11,24 @@ test("decodes Twitch IRCv3 tag escaping", () => {
   assert.equal(parsed?.tags["display-name"], "Some Name");
 });
 
+test("CLEARCHAT carries the banned login in trailing, not in params", () => {
+  // The old handler read params[1] — for a real CLEARCHAT line that is
+  // undefined, so timeouts and bans never marked any messages as deleted.
+  const parsed = parseIrcLine(
+    "@ban-duration=600;room-id=1;tmi-sent-ts=123 :tmi.twitch.tv CLEARCHAT #channel :baduser",
+  );
+
+  assert.equal(parsed?.command, "CLEARCHAT");
+  assert.deepEqual(parsed?.params, ["#channel"]);
+  assert.equal(parsed?.trailing, "baduser");
+  assert.equal(parsed?.tags["ban-duration"], "600");
+
+  // A permanent ban is the same line without ban-duration.
+  const permanent = parseIrcLine(":tmi.twitch.tv CLEARCHAT #channel :baduser");
+  assert.equal(permanent?.trailing, "baduser");
+  assert.equal(permanent?.tags["ban-duration"], undefined);
+});
+
 test("ROOMSTATE confirms a successful chat join", () => {
   const service = new ChatService({} as never, {} as never);
   const capture = {

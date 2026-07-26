@@ -316,6 +316,33 @@ export class KickChatService {
       const payload = this.parseNested<{ id?: string; message?: { id?: string } }>(frame.data);
       const messageId = payload?.message?.id ?? payload?.id ?? null;
       if (messageId) await this.markDeleted(capture, messageId);
+      return;
+    }
+
+    if (name.endsWith("UserBannedEvent")) {
+      const payload = this.parseNested<{
+        user?: { username?: string; slug?: string };
+        permanent?: boolean;
+        // Timeout length in minutes; permanent bans carry no duration.
+        duration?: number;
+        expires_at?: string;
+      }>(frame.data);
+      const login = payload?.user?.slug ?? payload?.user?.username ?? null;
+      if (!login) return;
+
+      let banDurationSec = 0; // permanent unless a length is given
+      if (!payload?.permanent) {
+        if (typeof payload?.duration === "number" && payload.duration > 0) {
+          banDurationSec = Math.round(payload.duration * 60);
+        } else if (payload?.expires_at) {
+          const expires = new Date(payload.expires_at).getTime();
+          if (Number.isFinite(expires) && expires > Date.now()) {
+            banDurationSec = Math.round((expires - Date.now()) / 1000);
+          }
+        }
+      }
+
+      await this.markBanned(capture, login, banDurationSec);
     }
   }
 
@@ -441,11 +468,31 @@ export class KickChatService {
     try {
       await this.prisma.chatMessage.updateMany({
         where: { streamSessionId: capture.sessionId, providerMessageId },
-        data: { isDeleted: true },
+        data: { isDeleted: true, deletedAt: new Date() },
       });
     } catch (error) {
       this.logger.warn(
         `[kick-chat:${capture.channelLogin}] failed to mark a message deleted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /** A timeout/ban wipes every message of the user; keep how long for the replay. */
+  private async markBanned(capture: ActiveCapture, login: string, banDurationSec: number) {
+    try {
+      await this.prisma.chatMessage.updateMany({
+        where: {
+          streamSessionId: capture.sessionId,
+          authorLogin: login.toLowerCase(),
+          isDeleted: false,
+        },
+        data: { isDeleted: true, deletedAt: new Date(), banDurationSec },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[kick-chat:${capture.channelLogin}] failed to mark a ban: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
