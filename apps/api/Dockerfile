@@ -19,6 +19,8 @@ COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
+# Credential-free Kick lookups borrow streamlink's HTTP session (see the script).
+COPY --from=build /app/scripts ./scripts
 
 EXPOSE 3001
 # Retry the schema sync instead of dying: when postgres is still warming up

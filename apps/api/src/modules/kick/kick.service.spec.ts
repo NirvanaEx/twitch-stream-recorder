@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
+import { KickPublicClient } from "./kick-public.client";
 import { KickService } from "./kick.service";
 import { PlatformsService } from "../platforms/platforms.service";
 import { TwitchService } from "../twitch/twitch.service";
+
+// Every test here exercises the credentialled path; the public fallback has a
+// stub so an accidental call is obvious instead of spawning Python.
+function makeService(publicChannel: unknown = null) {
+  const publicClient = {
+    getChannel: async () => publicChannel,
+  } as unknown as KickPublicClient;
+  return new KickService(publicClient);
+}
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { id: process.env.KICK_CLIENT_ID, secret: process.env.KICK_CLIENT_SECRET };
@@ -37,7 +47,7 @@ afterEach(() => {
 });
 
 test("accepts kick URLs, @slugs and bare slugs, including hyphens", () => {
-  const service = new KickService();
+  const service = makeService();
 
   assert.equal(service.normalizeChannelInput("https://kick.com/xQc"), "xqc");
   assert.equal(service.normalizeChannelInput("https://www.kick.com/xqc?foo=1"), "xqc");
@@ -48,17 +58,57 @@ test("accepts kick URLs, @slugs and bare slugs, including hyphens", () => {
   assert.throws(() => service.normalizeChannelInput("bad slug!"), /Invalid Kick channel/);
 });
 
-test("refuses to work without app credentials instead of guessing", async () => {
+test("works without app credentials by falling back to the public client", async () => {
   delete process.env.KICK_CLIENT_ID;
   delete process.env.KICK_CLIENT_SECRET;
 
-  const service = new KickService();
+  // Any HTTP call would mean the credentialled path was taken by mistake.
+  stubFetch(() => {
+    throw new Error("the official API must not be called without credentials");
+  });
+
+  const service = makeService({
+    id: 668,
+    userId: 676,
+    slug: "xqc",
+    chatroomId: 668,
+    displayName: "xQc",
+    avatar: "https://files.kick.com/avatar.webp",
+    isLive: true,
+    livestreamId: 119125610,
+    title: "Live now",
+    category: "Just Chatting",
+    startedAt: "2026-07-25T21:28:33Z",
+    thumbnail: "https://kick.com/thumb.jpg",
+  });
+
   assert.equal(service.isApiConfigured(), false);
   assert.deepEqual(service.getConfigurationState().missing, [
     "KICK_CLIENT_ID",
     "KICK_CLIENT_SECRET",
   ]);
-  await assert.rejects(() => service.resolveChannel("xqc"), /not configured/);
+
+  const resolved = await service.resolveChannel("https://kick.com/xqc");
+  assert.equal(resolved.login, "xqc");
+  assert.equal(resolved.displayName, "xQc");
+  assert.equal(resolved.profileImageUrl, "https://files.kick.com/avatar.webp");
+  assert.equal(resolved.source, "public");
+
+  const live = await service.getLiveStream({ login: "xqc" });
+  assert.ok(live);
+  // The public payload carries a real broadcast id, unlike the official one.
+  assert.equal(live!.id, "119125610");
+  assert.equal(live!.gameName, "Just Chatting");
+
+  // Chat capture needs this and only the public client can supply it.
+  assert.equal(await service.getChatroomId("xqc"), 668);
+});
+
+test("a missing channel is reported as such, not as a crash", async () => {
+  delete process.env.KICK_CLIENT_ID;
+  delete process.env.KICK_CLIENT_SECRET;
+
+  await assert.rejects(() => makeService(null).resolveChannel("nobody-here"), /not found/);
 });
 
 test("maps a live channel payload onto the shared snapshot shape", async () => {
@@ -84,7 +134,7 @@ test("maps a live channel payload onto the shared snapshot shape", async () => {
     };
   });
 
-  const snapshot = await new KickService().getLiveStream({ login: "xqc" });
+  const snapshot = await makeService().getLiveStream({ login: "xqc" });
 
   assert.ok(snapshot);
   assert.equal(snapshot!.userId, "123");
@@ -113,7 +163,7 @@ test("an offline channel reports null, not an empty snapshot", async () => {
       : { data: [{ broadcaster_user_id: 1, slug: "xqc", stream: { is_live: false } }] },
   );
 
-  assert.equal(await new KickService().getLiveStream({ login: "xqc" }), null);
+  assert.equal(await makeService().getLiveStream({ login: "xqc" }), null);
 });
 
 test("the app token is fetched once and reused across polls", async () => {
@@ -123,7 +173,7 @@ test("the app token is fetched once and reused across polls", async () => {
       : { data: [{ broadcaster_user_id: 1, slug: "xqc", stream: { is_live: false } }] },
   );
 
-  const service = new KickService();
+  const service = makeService();
   await service.getLiveStream({ login: "xqc" });
   await service.getLiveStream({ login: "xqc" });
   await service.getLiveStream({ login: "xqc" });
@@ -132,7 +182,7 @@ test("the app token is fetched once and reused across polls", async () => {
 });
 
 test("capture quality differs per platform because Kick has no audio_only variant", () => {
-  const platforms = new PlatformsService(new TwitchService(), new KickService());
+  const platforms = new PlatformsService(new TwitchService(), makeService());
 
   // Twitch publishes a real audio-only rendition: no video is downloaded.
   assert.equal(
@@ -157,7 +207,7 @@ test("capture quality differs per platform because Kick has no audio_only varian
 });
 
 test("streamlink is pointed at the right site, and unknown platforms fall back to Twitch", () => {
-  const platforms = new PlatformsService(new TwitchService(), new KickService());
+  const platforms = new PlatformsService(new TwitchService(), makeService());
 
   assert.equal(platforms.channelUrl("kick", "xqc"), "https://kick.com/xqc");
   assert.equal(platforms.channelUrl("twitch", "xqc"), "https://www.twitch.tv/xqc");

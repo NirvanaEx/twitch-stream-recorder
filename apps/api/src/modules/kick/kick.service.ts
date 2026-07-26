@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { KickPublicClient } from "./kick-public.client";
 
 /**
  * Kick.com support, deliberately built on the OFFICIAL public API
@@ -12,8 +13,12 @@ import { BadRequestException, Injectable, Logger } from "@nestjs/common";
  * a channel, poll whether it is live — has to go through the documented API.
  *
  * Credentials come from a Kick developer app (KICK_CLIENT_ID / KICK_CLIENT_SECRET),
- * the same shape as the Twitch ones. Without them Kick channels cannot be added:
- * unlike Twitch there is no anonymous fallback that works from a server.
+ * the same shape as the Twitch ones. They are OPTIONAL: without them everything
+ * falls back to KickPublicClient, which borrows streamlink's Cloudflare-passing
+ * HTTP session. The official API is preferred when configured because it is
+ * documented, cheap (no subprocess) and not going to be tightened without
+ * notice — but it does not expose the chatroom id, so chat capture always goes
+ * through the public client.
  */
 
 const TOKEN_URL = "https://id.kick.com/oauth/token";
@@ -71,6 +76,8 @@ export class KickService {
   private cachedToken: AppToken | null = null;
   private tokenPromise: Promise<AppToken> | null = null;
 
+  constructor(private readonly publicClient: KickPublicClient) {}
+
   /** Accepts a kick.com URL, "@slug" or a bare slug. */
   normalizeChannelInput(input: string) {
     const trimmed = input.trim();
@@ -112,6 +119,23 @@ export class KickService {
 
   async resolveChannel(input: string) {
     const slug = this.normalizeChannelInput(input);
+
+    if (!this.isApiConfigured()) {
+      const publicChannel = await this.publicClient.getChannel(slug);
+
+      if (!publicChannel) {
+        throw new BadRequestException("Kick channel was not found.");
+      }
+
+      return {
+        id: publicChannel.userId ? String(publicChannel.userId) : null,
+        login: publicChannel.slug,
+        displayName: publicChannel.displayName ?? publicChannel.slug,
+        profileImageUrl: publicChannel.avatar,
+        source: "public" as const,
+      };
+    }
+
     const channel = await this.getChannelBySlug(slug);
 
     if (!channel) {
@@ -135,6 +159,10 @@ export class KickService {
    * is live, null when it is not.
    */
   async getLiveStream(input: { userId?: string | null; login?: string | null }) {
+    if (!this.isApiConfigured()) {
+      return this.getLiveStreamWithoutCredentials(input.login);
+    }
+
     const channel = input.login
       ? await this.getChannelBySlug(this.normalizeChannelInput(input.login))
       : input.userId
@@ -163,6 +191,40 @@ export class KickService {
       previewImageUrl: channel.stream.thumbnail ?? null,
       source: "api" as const,
     };
+  }
+
+  /** Live snapshot built from the public client (no credentials involved). */
+  private async getLiveStreamWithoutCredentials(login: string | null | undefined) {
+    if (!login) {
+      return null;
+    }
+
+    const channel = await this.publicClient.getChannel(this.normalizeChannelInput(login));
+
+    if (!channel?.isLive) {
+      return null;
+    }
+
+    return {
+      id: channel.livestreamId ? String(channel.livestreamId) : null,
+      userId: channel.userId ? String(channel.userId) : null,
+      userLogin: channel.slug,
+      userName: channel.displayName,
+      gameName: channel.category,
+      title: channel.title,
+      startedAt: channel.startedAt,
+      previewImageUrl: channel.thumbnail,
+      source: "public" as const,
+    };
+  }
+
+  /**
+   * Pusher channel id for chat capture. Only the public client can answer this:
+   * the documented API has no equivalent field.
+   */
+  async getChatroomId(login: string) {
+    const channel = await this.publicClient.getChannel(this.normalizeChannelInput(login));
+    return channel?.chatroomId ?? null;
   }
 
   private async getChannelBySlug(slug: string) {
