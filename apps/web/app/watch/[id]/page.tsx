@@ -317,122 +317,124 @@ export default function PublicWatchPage({
   return (
     <div className={mode === "theater" ? "replay-page-host" : "public-shell"}>
       <div className={stageClass}>
-        <header className="replay-stage__header">
-          <Link
-            href="/"
-            className="auth-back"
-            style={{ display: "inline-block", marginBottom: 12 }}
-          >
-            {t.publicSite.backToList}
-          </Link>
+        <div className="replay-stage__main">
+          <header className="replay-stage__header">
+            <Link
+              href="/"
+              className="auth-back"
+              style={{ display: "inline-block", marginBottom: 12 }}
+            >
+              {t.publicSite.backToList}
+            </Link>
 
-          <div className="watch-channel-row" style={{ marginBottom: 8 }}>
-            {data.channel.profileImageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={data.channel.profileImageUrl}
-                alt={data.channel.displayName}
-                className="stream-card-avatar"
-              />
-            ) : (
-              <span className="stream-card-avatar fallback">
-                {data.channel.displayName.slice(0, 1).toUpperCase()}
-              </span>
-            )}
-            <div>
-              <h2 className="page-title" style={{ margin: 0 }}>
-                {playerTitle}
-              </h2>
-              <div style={{ color: "var(--text-faint)", fontSize: 12 }}>
-                {data.channel.displayName} · @{data.channel.login}
-                {data.categoryName ? ` · ${data.categoryName}` : ""}
+            <div className="watch-channel-row" style={{ marginBottom: 8 }}>
+              {data.channel.profileImageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={data.channel.profileImageUrl}
+                  alt={data.channel.displayName}
+                  className="stream-card-avatar"
+                />
+              ) : (
+                <span className="stream-card-avatar fallback">
+                  {data.channel.displayName.slice(0, 1).toUpperCase()}
+                </span>
+              )}
+              <div>
+                <h2 className="page-title" style={{ margin: 0 }}>
+                  {playerTitle}
+                </h2>
+                <div style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                  {data.channel.displayName} · @{data.channel.login}
+                  {data.categoryName ? ` · ${data.categoryName}` : ""}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="replay-meta">
-            <span>
-              {t.archives.recordedAt}: <strong>{formatDate(data.startedAt)}</strong>
-            </span>
-            {data.startedAt && data.endedAt ? (
+            <div className="replay-meta">
               <span>
-                {t.publicSite.durationLabel}:{" "}
-                <strong>{formatPeriod(data.startedAt, data.endedAt)}</strong>
+                {t.archives.recordedAt}: <strong>{formatDate(data.startedAt)}</strong>
               </span>
-            ) : null}
-            {data.fileSizeBytes ? (
-              <span>
-                {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
-              </span>
-            ) : null}
-            {data.videoSource ? (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                {data.videoSource === "telegram" ? (
-                  <SendIcon size={13} />
-                ) : (
-                  <HardDriveIcon size={13} />
+              {data.startedAt && data.endedAt ? (
+                <span>
+                  {t.publicSite.durationLabel}:{" "}
+                  <strong>{formatPeriod(data.startedAt, data.endedAt)}</strong>
+                </span>
+              ) : null}
+              {data.fileSizeBytes ? (
+                <span>
+                  {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
+                </span>
+              ) : null}
+              {data.videoSource ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  {data.videoSource === "telegram" ? (
+                    <SendIcon size={13} />
+                  ) : (
+                    <HardDriveIcon size={13} />
+                  )}
+                  {t.replay.sourceLabel}:{" "}
+                  <strong>
+                    {data.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
+                  </strong>
+                </span>
+              ) : null}
+              <a
+                className="icon-btn"
+                href={buildApiUrl(
+                  activePart
+                    ? `public/streams/${id}/video?part=${activePart.partIndex}&download=1`
+                    : `public/streams/${id}/video?download=1`,
                 )}
-                {t.replay.sourceLabel}:{" "}
-                <strong>
-                  {data.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
-                </strong>
-              </span>
-            ) : null}
-            <a
-              className="icon-btn"
-              href={buildApiUrl(
-                activePart
-                  ? `public/streams/${id}/video?part=${activePart.partIndex}&download=1`
-                  : `public/streams/${id}/video?download=1`,
-              )}
-              title={t.localReplay.downloadVideo}
-              download
-            >
-              <DownloadIcon />
-            </a>
-          </div>
-        </header>
-
-        {!playlist && mode === "normal" && telegramParts.length > 1 ? (
-          <div className="action-row" style={{ margin: "8px 0" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-              {t.archives.telegramPart}
-              <select
-                className="input"
-                style={{ width: "auto", padding: "4px 8px" }}
-                value={currentPart}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (next === currentPart) return;
-                  setPendingAutoplay(true);
-                  setCurrentPart(next);
-                }}
+                title={t.localReplay.downloadVideo}
+                download
               >
-                {telegramParts.map((part) => (
-                  <option key={part.partIndex} value={part.partIndex}>
-                    {part.partIndex} / {part.partCount}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        ) : null}
+                <DownloadIcon />
+              </a>
+            </div>
+          </header>
 
-        <div className="replay-stage__player">
-          <VideoPlayer
-            src={videoSrc}
-            playlist={playlist ?? undefined}
-            initialSegment={initialSegmentRef.current}
-            onSegmentChange={handleSegmentChange}
-            poster={posterSrc}
-            mode={mode}
-            onModeChange={setMode}
-            chatVisible={chatVisible}
-            showChatButton
-            onChatToggle={() => setChatVisible((value) => !value)}
-            onVideoElement={setVideoElement}
-            title={mode !== "normal" ? playerTitle : undefined}
-          />
+          {!playlist && mode === "normal" && telegramParts.length > 1 ? (
+            <div className="action-row" style={{ margin: "8px 0" }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                {t.archives.telegramPart}
+                <select
+                  className="input"
+                  style={{ width: "auto", padding: "4px 8px" }}
+                  value={currentPart}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (next === currentPart) return;
+                    setPendingAutoplay(true);
+                    setCurrentPart(next);
+                  }}
+                >
+                  {telegramParts.map((part) => (
+                    <option key={part.partIndex} value={part.partIndex}>
+                      {part.partIndex} / {part.partCount}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+
+          <div className="replay-stage__player">
+            <VideoPlayer
+              src={videoSrc}
+              playlist={playlist ?? undefined}
+              initialSegment={initialSegmentRef.current}
+              onSegmentChange={handleSegmentChange}
+              poster={posterSrc}
+              mode={mode}
+              onModeChange={setMode}
+              chatVisible={chatVisible}
+              showChatButton
+              onChatToggle={() => setChatVisible((value) => !value)}
+              onVideoElement={setVideoElement}
+              title={mode !== "normal" ? playerTitle : undefined}
+            />
+          </div>
         </div>
 
         {chatVisible ? (
