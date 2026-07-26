@@ -22,7 +22,7 @@ type AudioTrack = {
 
 type AudioSettings = {
   audioTrackEnabled: boolean;
-  audioKeepDays: number;
+  audioKeepLocalDays: number;
 };
 
 function formatDuration(sec: number | null): string {
@@ -278,9 +278,16 @@ export default function TwitchAudioPage() {
             {t.twitchAudio.tracksTitle}
           </h3>
 
-          {settings && settings.audioKeepDays > 0 ? (
+          {/* Tracks are never lost — only their local copy expires, after which
+              the same URL is served from Telegram. */}
+          {settings && settings.audioKeepLocalDays >= 0 ? (
             <p className="page-copy" style={{ fontSize: 12, marginBottom: 10 }}>
-              {t.twitchAudio.expireNote.replace("{days}", String(settings.audioKeepDays))}
+              {settings.audioKeepLocalDays === 0
+                ? t.twitchAudio.localCacheNow
+                : t.twitchAudio.localCacheDays.replace(
+                    "{days}",
+                    String(settings.audioKeepLocalDays),
+                  )}
             </p>
           ) : null}
 

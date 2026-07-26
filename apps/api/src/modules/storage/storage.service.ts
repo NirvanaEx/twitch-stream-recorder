@@ -103,7 +103,11 @@ export class StorageService {
           status: session.status,
           field,
           path: rel.startsWith("..") ? abs : rel.split(sep).join("/"),
-          expected: field === "video" && Boolean(session.localFileDeletedAt),
+          // A local copy dropped by the retention cleanup is not a loss: the
+          // Telegram copy is still there and playback falls back to it.
+          expected:
+            (field === "video" && Boolean(session.localFileDeletedAt)) ||
+            (field === "audio" && Boolean(session.audioLocalDeletedAt)),
         });
       }
     }
@@ -322,6 +326,7 @@ export class StorageService {
         audioPath: true,
         chatPath: true,
         localFileDeletedAt: true,
+        audioLocalDeletedAt: true,
         channel: { select: { twitchLogin: true } },
       },
     });

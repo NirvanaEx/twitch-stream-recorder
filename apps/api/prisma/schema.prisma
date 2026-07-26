@@ -100,9 +100,12 @@ model StreamSession {
   telegramAudioMessageId  String?
   telegramAudioFileId     String?
   telegramAudioUploadedAt DateTime?
-  // Set when the audio track was auto-removed (local file and the Telegram
-  // message) after audioKeepDays — Twitch VODs expire, so audio is temporary.
+  // Set when the audio track was removed everywhere (local file and the
+  // Telegram message) — only by an explicit "delete audio" request.
   audioDeletedAt     DateTime?
+  // Set when only the local .m4a was dropped by the local-retention cleanup:
+  // the Telegram copy is still there and playback falls back to it.
+  audioLocalDeletedAt DateTime?
   // The moment the capture process (streamlink) exited — BEFORE the remux,
   // unlike endedAt which lands minutes later. captureEndedAt - durationSec is
   // the most precise "where the recording starts on the VOD timeline" anchor:
@@ -165,7 +168,12 @@ model EmoteSnapshot {
 
 model AppSettings {
   id                    String   @id @default("default")
+  // DEPRECATED, unused: archive expiry was never enforced, and Telegram is
+  // now the permanent archive. Columns are kept (not dropped) because the
+  // container starts with a plain `prisma db push`, which refuses to drop
+  // data without --accept-data-loss.
   retentionDays         Int      @default(30)
+  // DEPRECATED, unused: the disk quota was never enforced either.
   storageLimitGb        Int      @default(80)
   recordChat            Boolean  @default(true)
   keepDeletedMessages   Boolean  @default(true)
@@ -174,7 +182,7 @@ model AppSettings {
   telegramEnabled       Boolean  @default(false)
   // Target chat: "-100..." channel id or "@channelusername".
   telegramChatId        String   @default("")
-  // How long the local file is kept after a successful Telegram upload.
+  // DEPRECATED: superseded by videoKeepLocalDays (see the block below).
   telegramKeepLocalDays Int      @default(7)
   // MTProto credentials, editable from the admin panel. When empty, the
   // TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_BOT_TOKEN env vars are
@@ -184,9 +192,16 @@ model AppSettings {
   telegramBotToken      String   @default("")
   // Extract a standalone audio track (.m4a) from every finished recording.
   audioTrackEnabled     Boolean  @default(true)
-  // Audio tracks are temporary (matched to Twitch VOD lifetime): both the
-  // local file and the Telegram copy are deleted after this many days.
+  // DEPRECATED: superseded by audioKeepLocalDays. Nothing is ever deleted
+  // from Telegram automatically any more.
   audioKeepDays         Int      @default(30)
+  // Local retention. Telegram is the permanent archive and the disk is only a
+  // cache in front of it: -1 keeps the local copy forever, 0 removes it as
+  // soon as the Telegram upload succeeded, N removes it N days after the
+  // upload. A local file is NEVER removed while it has no Telegram copy, so
+  // the setting can only cost disk cache, never the recording itself.
+  videoKeepLocalDays    Int      @default(0)
+  audioKeepLocalDays    Int      @default(0)
   updatedAt             DateTime @updatedAt
 }
 

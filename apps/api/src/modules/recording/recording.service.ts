@@ -667,6 +667,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         telegramAudioFileId: null,
         telegramAudioUploadedAt: null,
         audioDeletedAt: new Date(),
+        audioLocalDeletedAt: null,
       },
     });
 
