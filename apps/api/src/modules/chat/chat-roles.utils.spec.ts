@@ -4,6 +4,7 @@ import {
   deletionOffsetSec,
   extractChatRoles,
   extractInlineEmotes,
+  extractPredictionBet,
   resolveCaptureAnchorMs,
 } from "./chat-roles.utils";
 
@@ -111,4 +112,46 @@ test("Kick inline emotes are exposed; the Twitch tag is left to its own path", (
     ],
   });
   assert.deepEqual(extractInlineEmotes(broken), [{ id: "1", name: "ok", start: 0, end: 1 }]);
+});
+
+/**
+ * The badge pairs below are verbatim from a live channel that had a
+ * ten-outcome prediction running, captured off Twitch IRC.
+ */
+test("the outcome someone bet on is read from the two badge tags together", () => {
+  const bet = extractPredictionBet(
+    JSON.stringify("predictions/blue-1,subscriber/0,bits/100"),
+    JSON.stringify("predictions/PETERBOT POLLO,subscriber/1"),
+  );
+
+  assert.deepEqual(bet, { badgeVersion: "blue-1", outcomeTitle: "PETERBOT POLLO" });
+});
+
+test("an outcome title containing a slash is not truncated at it", () => {
+  // Only the first slash separates the badge from its value; titles like
+  // "HIGGS/CURVE" are common and splitting on every slash would eat them.
+  const bet = extractPredictionBet(
+    JSON.stringify("predictions/blue-7,subscriber/0"),
+    JSON.stringify("predictions/HIGGS/CURVE,subscriber/1"),
+  );
+
+  assert.equal(bet?.outcomeTitle, "HIGGS/CURVE");
+});
+
+test("a bet with no stored badge-info keeps its colour but loses its label", () => {
+  // Messages recorded before badge-info was captured — the chip still shows,
+  // it just cannot say what the outcome was called.
+  const bet = extractPredictionBet(JSON.stringify("predictions/pink-2,moments/1"), null);
+
+  assert.deepEqual(bet, { badgeVersion: "pink-2", outcomeTitle: null });
+});
+
+test("messages from someone who did not bet carry no chip", () => {
+  assert.equal(extractPredictionBet(JSON.stringify("subscriber/12,vip/1"), null), null);
+  assert.equal(extractPredictionBet(null, null), null);
+  // Kick badges parse to an object and have no predictions at all.
+  assert.equal(
+    extractPredictionBet(JSON.stringify({ provider: "kick", badges: [{ type: "moderator" }] }), null),
+    null,
+  );
 });

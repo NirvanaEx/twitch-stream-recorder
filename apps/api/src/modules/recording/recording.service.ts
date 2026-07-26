@@ -21,6 +21,7 @@ import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
 import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
+import { TwitchEventsService } from "../stream-events/twitch-events.service";
 
 type ActiveRecording = {
   channelId: string;
@@ -78,6 +79,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     private readonly sevenTvService: SevenTvService,
     private readonly emoteMirrorService: EmoteMirrorService,
     private readonly telegramService: TelegramService,
+    private readonly twitchEventsService: TwitchEventsService,
   ) {}
 
   async onModuleInit() {
@@ -434,6 +436,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         channelLogin: channel.twitchLogin,
         captureAnchor,
       });
+
+      // Predictions and polls ride a separate socket (PubSub, not IRC). Kick
+      // needs no equivalent call — its polls arrive on the chat socket that
+      // KickChatService already holds open.
+      this.twitchEventsService.startCapture({
+        channelId: channel.id,
+        sessionId: session.id,
+        channelLogin: channel.twitchLogin,
+        twitchUserId: channel.twitchUserId,
+        captureAnchor,
+      });
     }
 
     // First metadata point: whatever the stream looked like at second zero.
@@ -487,6 +500,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     this.chatService.stopCapture(channelId);
     this.kickChatService.stopCapture(channelId);
+    this.twitchEventsService.stopCapture(channelId);
 
     await this.prisma.streamSession.update({
       where: { id: activeRecording.sessionId },
@@ -656,6 +670,19 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       where: { streamSessionId: id },
     });
 
+    // Event points hang off the event, not the session, so they have to go
+    // first — otherwise deleting the events orphans them permanently.
+    const events = await this.prisma.streamEvent.findMany({
+      where: { streamSessionId: id },
+      select: { id: true },
+    });
+    if (events.length > 0) {
+      await this.prisma.streamEventPoint.deleteMany({
+        where: { streamEventId: { in: events.map((event) => event.id) } },
+      });
+      await this.prisma.streamEvent.deleteMany({ where: { streamSessionId: id } });
+    }
+
     await this.prisma.streamSession.delete({
       where: { id },
     });
@@ -782,6 +809,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.activeRecordings.delete(channel.id);
       this.chatService.stopCapture(channel.id);
       this.kickChatService.stopCapture(channel.id);
+      this.twitchEventsService.stopCapture(channel.id);
 
       const fileExists = existsSync(activeRecording.outputPath);
       const fileSizeBytes = fileExists ? statSync(activeRecording.outputPath).size : 0;

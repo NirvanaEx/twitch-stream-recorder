@@ -147,6 +147,11 @@ model ChatMessage {
   authorDisplayName String?
   authorColor       String?
   badgesJson        String?
+  // Twitch's badge-info tag, which carries the value behind a badge: the
+  // outcome someone bet on ("predictions/PETERBOT POLLO") and how many months
+  // a subscriber has been subscribed. Nullable and additive — old rows simply
+  // never had it.
+  badgeInfoJson     String?
   textRaw           String
   emotesJson        String?
   messageTimestamp  DateTime
@@ -190,6 +195,56 @@ model StreamMetaPoint {
   createdAt       DateTime @default(now())
 
   @@index([streamSessionId, relativeTimeSec])
+}
+
+// A prediction ("ставка") or a poll, as it ran during the broadcast.
+//
+// One row per event holds everything that never changes — the title, the list
+// of outcomes, when it opened, locked and resolved. The numbers that DO change
+// live in StreamEventPoint, because a prediction pushes an update every second
+// or two while betting is open and folding those into this row would either
+// lose the history or multiply it by a thousand.
+model StreamEvent {
+  id              String   @id @default(cuid())
+  streamSessionId String
+  platform        String
+  /** "prediction" | "poll" */
+  kind            String
+  /** The provider's own id, so repeated updates land on one row. */
+  providerEventId String
+  title           String
+  /** "active" | "locked" | "resolved" | "cancelled" */
+  status          String
+  // Seconds from the same capture anchor chat and metadata use. Negative when
+  // the event was already running before the recording started — kept as-is
+  // rather than clamped, so the player can say "already open" honestly.
+  startedAtSec    Int
+  lockedAtSec     Int?
+  endedAtSec      Int?
+  /** Outcome/choice definitions: id, title, colour, chat badge version. */
+  outcomesJson    String
+  /** Set once the streamer picks a winner; null for polls and open events. */
+  winningOutcomeId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([streamSessionId, providerEventId])
+  @@index([streamSessionId, startedAtSec])
+}
+
+// The vote/points totals of one event at one instant, so the replay can grow
+// the bars the way they grew live instead of jumping to the final figures.
+// Deliberately tiny: an array of numbers per outcome, no titles repeated.
+model StreamEventPoint {
+  id              String   @id @default(cuid())
+  streamEventId   String
+  relativeTimeSec Int
+  status          String
+  /** [{ id, points, users }] in the outcome order of the parent event. */
+  totalsJson      String
+  createdAt       DateTime @default(now())
+
+  @@index([streamEventId, relativeTimeSec])
 }
 
 model AppSettings {

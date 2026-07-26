@@ -15,6 +15,7 @@ import {
   deletionOffsetSec,
   extractChatRoles,
   extractInlineEmotes,
+  extractPredictionBet,
   resolveCaptureAnchorMs,
 } from "../chat/chat-roles.utils";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
@@ -30,6 +31,7 @@ import {
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { ThumbnailService } from "../recording/thumbnail.service";
+import { StreamEventsService } from "../stream-events/stream-events.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
 @RequirePermissions("view_archives")
@@ -42,6 +44,7 @@ export class ArchivesController {
     private readonly thumbnailService: ThumbnailService,
     private readonly emoteMirrorService: EmoteMirrorService,
     private readonly liveEmotesService: LiveEmotesService,
+    private readonly streamEventsService: StreamEventsService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -117,6 +120,7 @@ export class ArchivesController {
         roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
         inlineEmotes: extractInlineEmotes(message.emotesJson),
+        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
@@ -152,6 +156,16 @@ export class ArchivesController {
     });
 
     return buildStreamTimeline(points);
+  }
+
+  /**
+   * Predictions and polls that ran during the broadcast, with their totals
+   * sampled over time. Served whole for the same reason as the timeline — the
+   * player decides what the viewer has reached.
+   */
+  @Get(":id/events")
+  async getArchiveEvents(@Param("id") id: string) {
+    return { events: await this.streamEventsService.forSession(id) };
   }
 
   @Get(":id/bundle")
@@ -202,6 +216,7 @@ export class ArchivesController {
         roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
         inlineEmotes: extractInlineEmotes(message.emotesJson),
+        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,

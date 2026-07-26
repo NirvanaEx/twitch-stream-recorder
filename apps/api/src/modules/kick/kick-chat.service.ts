@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { StreamEventsService } from "../stream-events/stream-events.service";
+import { parseKickPoll } from "../stream-events/stream-events.utils";
 import { KickRecentMessage } from "./kick-public.client";
 import { KickService } from "./kick.service";
 
@@ -41,6 +43,9 @@ const RECONNECT_MAX_MS = 60_000;
 // the handlers also accept a suffix match in case Kick changes the escaping.
 const EVENT_MESSAGE = "App\\Events\\ChatMessageEvent";
 const EVENT_DELETED = "App\\Events\\MessageDeletedEvent";
+// Kick puts polls on the same chatroom channel, so they cost no extra socket.
+const EVENT_POLL_UPDATE = "App\\Events\\PollUpdateEvent";
+const EVENT_POLL_DELETE = "App\\Events\\PollDeleteEvent";
 
 type KickSender = {
   id?: number;
@@ -83,6 +88,13 @@ type ActiveCapture = {
   joined: boolean;
   messageCount: number;
   seenProviderIds: Set<string>;
+  /**
+   * The poll currently on screen. Kick sends no poll id at all — only the poll
+   * as it stands — so identity is synthesized from the second it first
+   * appeared: unique within a session, and stable if the socket reconnects
+   * mid-poll, which a counter would not be.
+   */
+  activePoll: { key: string; title: string } | null;
 };
 
 @Injectable()
@@ -94,6 +106,7 @@ export class KickChatService {
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly kickService: KickService,
+    private readonly streamEvents: StreamEventsService,
   ) {}
 
   async startCapture(input: {
@@ -146,6 +159,7 @@ export class KickChatService {
       joined: false,
       messageCount: 0,
       seenProviderIds: new Set(),
+      activePoll: null,
     };
 
     this.captures.set(channelId, capture);
@@ -211,6 +225,9 @@ export class KickChatService {
     }
 
     capture.stopped = true;
+    // A poll still on screen when the recording ends would otherwise stay
+    // marked open in the archive forever.
+    void this.closePoll(capture);
     this.clearTimers(capture);
 
     try {
@@ -220,6 +237,7 @@ export class KickChatService {
     }
 
     this.captures.delete(channelId);
+    this.streamEvents.forget(capture.sessionId);
 
     // Backfilled-only sessions (socket never joined) still hold messages and
     // must finalize the same way, or they would stay "recording" forever.
@@ -316,6 +334,18 @@ export class KickChatService {
       const payload = this.parseNested<{ id?: string; message?: { id?: string } }>(frame.data);
       const messageId = payload?.message?.id ?? payload?.id ?? null;
       if (messageId) await this.markDeleted(capture, messageId);
+      return;
+    }
+
+    if (name === EVENT_POLL_UPDATE || name.endsWith("PollUpdateEvent")) {
+      await this.handlePollUpdate(capture, this.parseNested(frame.data));
+      return;
+    }
+
+    if (name === EVENT_POLL_DELETE || name.endsWith("PollDeleteEvent")) {
+      // Kick removes the widget without a final payload, so the last totals we
+      // already hold become the result.
+      await this.closePoll(capture);
       return;
     }
 
@@ -473,6 +503,80 @@ export class KickChatService {
     } catch (error) {
       this.logger.warn(
         `[kick-chat:${capture.channelLogin}] failed to mark a message deleted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * A Kick poll, live.
+   *
+   * Kick re-sends the whole poll on every vote with `remaining` counting down,
+   * and never sends an id. A title change is the only signal that one poll
+   * ended and another began without a delete in between, so it is treated as a
+   * boundary.
+   */
+  private async handlePollUpdate(capture: ActiveCapture, payload: unknown) {
+    const title = (payload as { poll?: { title?: unknown } })?.poll?.title;
+    const pollTitle = typeof title === "string" ? title : "";
+
+    if (capture.activePoll && capture.activePoll.title !== pollTitle) {
+      await this.closePoll(capture);
+    }
+
+    if (!capture.activePoll) {
+      const startedSec = Math.max(0, Math.round((Date.now() - capture.startedAt) / 1000));
+      capture.activePoll = { key: `kick-poll:${startedSec}`, title: pollTitle };
+    }
+
+    const event = parseKickPoll(payload, {
+      providerEventId: capture.activePoll.key,
+      nowMs: Date.now(),
+    });
+
+    if (!event) return;
+
+    await this.streamEvents.record({
+      sessionId: capture.sessionId,
+      anchorMs: capture.startedAt,
+      event,
+    });
+
+    // A poll whose countdown reached zero is finished; Kick keeps the results
+    // on screen for a while before deleting the widget.
+    if (event.status !== "active") {
+      capture.activePoll = null;
+    }
+  }
+
+  /** Mark the open poll finished, keeping whatever totals it ended on. */
+  private async closePoll(capture: ActiveCapture) {
+    const poll = capture.activePoll;
+    if (!poll) return;
+
+    capture.activePoll = null;
+
+    try {
+      await this.prisma.streamEvent.updateMany({
+        where: { streamSessionId: capture.sessionId, providerEventId: poll.key },
+        data: { status: "resolved" },
+      });
+
+      // Only if the scheduled end is not already known. A poll that ran its
+      // course ended when the countdown hit zero, not when Kick got round to
+      // removing the widget ~15s later while the results were still on screen.
+      await this.prisma.streamEvent.updateMany({
+        where: {
+          streamSessionId: capture.sessionId,
+          providerEventId: poll.key,
+          endedAtSec: null,
+        },
+        data: { endedAtSec: Math.max(0, Math.round((Date.now() - capture.startedAt) / 1000)) },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[kick-chat:${capture.channelLogin}] failed to close a poll: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

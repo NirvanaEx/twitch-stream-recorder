@@ -63,6 +63,10 @@ export type ChatPrefs = {
    * recording to discover.
    */
   revealTimeline: boolean;
+  /** Replay the prediction/poll cards above the chat. */
+  showEvents: boolean;
+  /** Show the "bet on X" chip before a nick while a prediction was open. */
+  showBets: boolean;
 };
 
 export const DEFAULT_CHAT_PREFS: ChatPrefs = {
@@ -80,6 +84,8 @@ export const DEFAULT_CHAT_PREFS: ChatPrefs = {
   hideCommands: false,
   hiddenUsers: "",
   revealTimeline: false,
+  showEvents: true,
+  showBets: true,
 };
 
 export const CHAT_PREFS_LIMITS = {

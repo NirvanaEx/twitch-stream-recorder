@@ -16,11 +16,13 @@ import {
   deletionOffsetSec,
   extractChatRoles,
   extractInlineEmotes,
+  extractPredictionBet,
   resolveCaptureAnchorMs,
 } from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
+import { StreamEventsService } from "../stream-events/stream-events.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
@@ -66,6 +68,7 @@ export class PublicStreamsController {
     private readonly telegramStreamService: TelegramStreamService,
     private readonly thumbnailService: ThumbnailService,
     private readonly liveEmotesService: LiveEmotesService,
+    private readonly streamEventsService: StreamEventsService,
   ) {}
 
   @Get()
@@ -615,6 +618,7 @@ export class PublicStreamsController {
         roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
         inlineEmotes: extractInlineEmotes(message.emotesJson),
+        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
@@ -636,6 +640,12 @@ export class PublicStreamsController {
     });
 
     return buildStreamTimeline(points);
+  }
+
+  /** Predictions and polls that ran during the broadcast, with their totals. */
+  @Get(":id/events")
+  async getEvents(@Param("id") id: string) {
+    return { events: await this.streamEventsService.forSession(id) };
   }
 
   /**

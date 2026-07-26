@@ -563,6 +563,7 @@ export default function ArchiveReplayPage() {
               archiveId={data!.item.id}
               liveEmotesUrl={`archives/${data!.item.id}/emotes/live`}
               timelineUrl={`archives/${data!.item.id}/timeline`}
+              eventsUrl={`archives/${data!.item.id}/events`}
               videoElement={videoElement}
               isLive={isLive}
               defaultOffsetSec={data!.item.chatOffsetSec ?? 0}

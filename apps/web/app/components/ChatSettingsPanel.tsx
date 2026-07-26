@@ -186,6 +186,24 @@ export function ChatSettingsPanel({
         <span>{copy.hideCommands}</span>
       </label>
 
+      <label className="chat-toggle" title={copy.eventsHint}>
+        <input
+          type="checkbox"
+          checked={prefs.showEvents}
+          onChange={(event) => update("showEvents", event.target.checked)}
+        />
+        <span>{copy.eventsShow}</span>
+      </label>
+
+      <label className="chat-toggle" title={copy.eventsHint}>
+        <input
+          type="checkbox"
+          checked={prefs.showBets}
+          onChange={(event) => update("showBets", event.target.checked)}
+        />
+        <span>{copy.eventBetOn}</span>
+      </label>
+
       <label className="chat-field">
         <span>{copy.hiddenUsers}</span>
         <input
