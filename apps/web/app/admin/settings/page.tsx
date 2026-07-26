@@ -5,17 +5,15 @@ import { apiGet, apiSend } from "../../lib/api";
 import { useLanguage } from "../../providers";
 
 type SettingsResponse = {
-  retentionDays: number;
-  storageLimitGb: number;
   recordChat: boolean;
   keepDeletedMessages: boolean;
   support7tv: boolean;
   defaultChatOffsetSec: number;
   telegramEnabled: boolean;
   telegramChatId: string;
-  telegramKeepLocalDays: number;
   audioTrackEnabled: boolean;
-  audioKeepDays: number;
+  videoKeepLocalDays: number;
+  audioKeepLocalDays: number;
   telegramApiIdSet: boolean;
   telegramApiHashSet: boolean;
   telegramBotTokenSet: boolean;
@@ -38,27 +36,30 @@ const EMPTY_SECRETS = {
 type TelegramStatusResponse = {
   enabled: boolean;
   chatId: string;
-  keepLocalDays: number;
+  videoKeepLocalDays: number;
   tokenConfigured: boolean;
   botUsername: string | null;
   chatTitle: string | null;
   error: string | null;
 };
 
+type TabId = "recording" | "telegram" | "storage";
+
+const TABS: TabId[] = ["recording", "telegram", "storage"];
+
 export default function SettingsPage() {
   const { t } = useLanguage();
+  const [tab, setTab] = useState<TabId>("recording");
   const [form, setForm] = useState<SettingsForm>({
-    retentionDays: 30,
-    storageLimitGb: 80,
     recordChat: true,
     keepDeletedMessages: true,
     support7tv: true,
     defaultChatOffsetSec: 0,
     telegramEnabled: false,
     telegramChatId: "",
-    telegramKeepLocalDays: 7,
     audioTrackEnabled: true,
-    audioKeepDays: 30,
+    videoKeepLocalDays: 0,
+    audioKeepLocalDays: 0,
     telegramApiIdSet: false,
     telegramApiHashSet: false,
     telegramBotTokenSet: false,
@@ -137,6 +138,210 @@ export default function SettingsPage() {
     );
   }
 
+  function renderRecordingTab() {
+    return (
+      <>
+        <label className="toggle-row">
+          <div className="toggle-copy">
+            <strong>{t.settings.recordChat}</strong>
+          </div>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={form.recordChat}
+              onChange={(event) => setForm((c) => ({ ...c, recordChat: event.target.checked }))}
+            />
+            <span className="slider" />
+          </span>
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-copy">
+            <strong>{t.settings.keepDeletedMessages}</strong>
+          </div>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={form.keepDeletedMessages}
+              onChange={(event) =>
+                setForm((c) => ({ ...c, keepDeletedMessages: event.target.checked }))
+              }
+            />
+            <span className="slider" />
+          </span>
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-copy">
+            <strong>{t.settings.support7tv}</strong>
+          </div>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={form.support7tv}
+              onChange={(event) => setForm((c) => ({ ...c, support7tv: event.target.checked }))}
+            />
+            <span className="slider" />
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field-label">{t.settings.defaultChatOffsetSec}</span>
+          <input
+            className="input"
+            type="number"
+            value={form.defaultChatOffsetSec}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, defaultChatOffsetSec: Number(event.target.value) }))
+            }
+          />
+        </label>
+
+        <div className="settings-group">
+          <h3 className="settings-group-title">{t.settings.audioTitle}</h3>
+          <p className="page-copy" style={{ fontSize: 12 }}>
+            {t.settings.audioHint}
+          </p>
+
+          <label className="toggle-row">
+            <div className="toggle-copy">
+              <strong>{t.settings.audioTrackEnabled}</strong>
+            </div>
+            <span className="switch">
+              <input
+                type="checkbox"
+                checked={form.audioTrackEnabled}
+                onChange={(event) =>
+                  setForm((c) => ({ ...c, audioTrackEnabled: event.target.checked }))
+                }
+              />
+              <span className="slider" />
+            </span>
+          </label>
+        </div>
+      </>
+    );
+  }
+
+  function renderTelegramTab() {
+    return (
+      <>
+        {renderTelegramConnection()}
+
+        <label className="toggle-row">
+          <div className="toggle-copy">
+            <strong>{t.settings.telegramEnabled}</strong>
+          </div>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={form.telegramEnabled}
+              onChange={(event) =>
+                setForm((c) => ({ ...c, telegramEnabled: event.target.checked }))
+              }
+            />
+            <span className="slider" />
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field-label">{t.settings.telegramApiId}</span>
+          <input
+            className="input"
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder={form.telegramApiIdSet ? t.settings.telegramSecretSet : "12345678"}
+            value={form.telegramApiId}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, telegramApiId: event.target.value.trim() }))
+            }
+          />
+        </label>
+
+        <label className="field">
+          <span className="field-label">{t.settings.telegramApiHash}</span>
+          <input
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            placeholder={form.telegramApiHashSet ? t.settings.telegramSecretSet : ""}
+            value={form.telegramApiHash}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, telegramApiHash: event.target.value.trim() }))
+            }
+          />
+        </label>
+
+        <label className="field">
+          <span className="field-label">{t.settings.telegramBotToken}</span>
+          <input
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            placeholder={form.telegramBotTokenSet ? t.settings.telegramSecretSet : ""}
+            value={form.telegramBotToken}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, telegramBotToken: event.target.value.trim() }))
+            }
+          />
+          <span className="page-copy" style={{ fontSize: 12 }}>
+            {t.settings.telegramSecretsHint}
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field-label">{t.settings.telegramChatId}</span>
+          <input
+            className="input"
+            type="text"
+            placeholder="-1001234567890"
+            value={form.telegramChatId}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, telegramChatId: event.target.value.trim() }))
+            }
+          />
+          <span className="page-copy" style={{ fontSize: 12 }}>
+            {t.settings.telegramChatIdHint}
+          </span>
+        </label>
+
+        <p className="page-copy" style={{ fontSize: 12 }}>
+          {t.settings.telegramPermanentHint}
+        </p>
+      </>
+    );
+  }
+
+  function renderStorageTab() {
+    return (
+      <>
+        <p className="page-copy" style={{ fontSize: 12 }}>
+          {t.settings.storageHint}
+        </p>
+
+        <KeepLocalField
+          label={t.settings.videoKeepLocal}
+          value={form.videoKeepLocalDays}
+          onChange={(value) => setForm((c) => ({ ...c, videoKeepLocalDays: value }))}
+          labels={t.settings}
+        />
+
+        <KeepLocalField
+          label={t.settings.audioKeepLocal}
+          hint={t.settings.audioKeepLocalHint}
+          value={form.audioKeepLocalDays}
+          onChange={(value) => setForm((c) => ({ ...c, audioKeepLocalDays: value }))}
+          labels={t.settings}
+        />
+
+        {telegramStatus && !telegramStatus.tokenConfigured ? (
+          <div className="notice info">{t.settings.storageNoTelegramNote}</div>
+        ) : null}
+      </>
+    );
+  }
+
   return (
     <main className="page-shell">
       <section className="page-header">
@@ -153,236 +358,28 @@ export default function SettingsPage() {
         <div className="empty-state">{t.common.loading}</div>
       ) : (
         <section className="panel">
+          <div className="tab-bar" role="tablist">
+            {TABS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className={`tab-btn${tab === id ? " active" : ""}`}
+                onClick={() => setTab(id)}
+              >
+                {t.settings.tabs[id]}
+              </button>
+            ))}
+          </div>
+
           <div className="panel-body">
+            {/* One form across all tabs: switching a tab only swaps the visible
+                fields, the state (and the save) always covers everything. */}
             <form className="settings-form" onSubmit={handleSubmit}>
-              <label className="field">
-                <span className="field-label">{t.settings.retentionDays}</span>
-                <input
-                  className="input"
-                  type="number"
-                  value={form.retentionDays}
-                  onChange={(event) =>
-                    setForm((c) => ({ ...c, retentionDays: Number(event.target.value) }))
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span className="field-label">{t.settings.storageLimitGb}</span>
-                <input
-                  className="input"
-                  type="number"
-                  value={form.storageLimitGb}
-                  onChange={(event) =>
-                    setForm((c) => ({ ...c, storageLimitGb: Number(event.target.value) }))
-                  }
-                />
-              </label>
-
-              <label className="field">
-                <span className="field-label">{t.settings.defaultChatOffsetSec}</span>
-                <input
-                  className="input"
-                  type="number"
-                  value={form.defaultChatOffsetSec}
-                  onChange={(event) =>
-                    setForm((c) => ({ ...c, defaultChatOffsetSec: Number(event.target.value) }))
-                  }
-                />
-              </label>
-
-              <div>
-                <label className="toggle-row">
-                  <div className="toggle-copy">
-                    <strong>{t.settings.recordChat}</strong>
-                  </div>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      checked={form.recordChat}
-                      onChange={(event) =>
-                        setForm((c) => ({ ...c, recordChat: event.target.checked }))
-                      }
-                    />
-                    <span className="slider" />
-                  </span>
-                </label>
-
-                <label className="toggle-row">
-                  <div className="toggle-copy">
-                    <strong>{t.settings.keepDeletedMessages}</strong>
-                  </div>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      checked={form.keepDeletedMessages}
-                      onChange={(event) =>
-                        setForm((c) => ({ ...c, keepDeletedMessages: event.target.checked }))
-                      }
-                    />
-                    <span className="slider" />
-                  </span>
-                </label>
-
-                <label className="toggle-row">
-                  <div className="toggle-copy">
-                    <strong>{t.settings.support7tv}</strong>
-                  </div>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      checked={form.support7tv}
-                      onChange={(event) =>
-                        setForm((c) => ({ ...c, support7tv: event.target.checked }))
-                      }
-                    />
-                    <span className="slider" />
-                  </span>
-                </label>
-              </div>
-
-              <div>
-                <h3 className="page-title" style={{ fontSize: 16, marginBottom: 8 }}>
-                  {t.settings.telegramTitle}
-                </h3>
-
-                {renderTelegramConnection()}
-
-                <label className="toggle-row">
-                  <div className="toggle-copy">
-                    <strong>{t.settings.telegramEnabled}</strong>
-                  </div>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      checked={form.telegramEnabled}
-                      onChange={(event) =>
-                        setForm((c) => ({ ...c, telegramEnabled: event.target.checked }))
-                      }
-                    />
-                    <span className="slider" />
-                  </span>
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.telegramApiId}</span>
-                  <input
-                    className="input"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="off"
-                    placeholder={form.telegramApiIdSet ? t.settings.telegramSecretSet : "12345678"}
-                    value={form.telegramApiId}
-                    onChange={(event) =>
-                      setForm((c) => ({ ...c, telegramApiId: event.target.value.trim() }))
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.telegramApiHash}</span>
-                  <input
-                    className="input"
-                    type="password"
-                    autoComplete="new-password"
-                    placeholder={form.telegramApiHashSet ? t.settings.telegramSecretSet : ""}
-                    value={form.telegramApiHash}
-                    onChange={(event) =>
-                      setForm((c) => ({ ...c, telegramApiHash: event.target.value.trim() }))
-                    }
-                  />
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.telegramBotToken}</span>
-                  <input
-                    className="input"
-                    type="password"
-                    autoComplete="new-password"
-                    placeholder={form.telegramBotTokenSet ? t.settings.telegramSecretSet : ""}
-                    value={form.telegramBotToken}
-                    onChange={(event) =>
-                      setForm((c) => ({ ...c, telegramBotToken: event.target.value.trim() }))
-                    }
-                  />
-                  <span className="page-copy" style={{ fontSize: 12 }}>
-                    {t.settings.telegramSecretsHint}
-                  </span>
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.telegramChatId}</span>
-                  <input
-                    className="input"
-                    type="text"
-                    placeholder="-1001234567890"
-                    value={form.telegramChatId}
-                    onChange={(event) =>
-                      setForm((c) => ({ ...c, telegramChatId: event.target.value.trim() }))
-                    }
-                  />
-                  <span className="page-copy" style={{ fontSize: 12 }}>
-                    {t.settings.telegramChatIdHint}
-                  </span>
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.telegramKeepLocalDays}</span>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    value={form.telegramKeepLocalDays}
-                    onChange={(event) =>
-                      setForm((c) => ({
-                        ...c,
-                        telegramKeepLocalDays: Number(event.target.value),
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-
-              <div>
-                <h3 className="page-title" style={{ fontSize: 16, marginBottom: 8 }}>
-                  {t.settings.audioTitle}
-                </h3>
-                <p className="page-copy" style={{ fontSize: 12 }}>
-                  {t.settings.audioHint}
-                </p>
-
-                <label className="toggle-row">
-                  <div className="toggle-copy">
-                    <strong>{t.settings.audioTrackEnabled}</strong>
-                  </div>
-                  <span className="switch">
-                    <input
-                      type="checkbox"
-                      checked={form.audioTrackEnabled}
-                      onChange={(event) =>
-                        setForm((c) => ({ ...c, audioTrackEnabled: event.target.checked }))
-                      }
-                    />
-                    <span className="slider" />
-                  </span>
-                </label>
-
-                <label className="field">
-                  <span className="field-label">{t.settings.audioKeepDays}</span>
-                  <input
-                    className="input"
-                    type="number"
-                    min={0}
-                    value={form.audioKeepDays}
-                    onChange={(event) =>
-                      setForm((c) => ({ ...c, audioKeepDays: Number(event.target.value) }))
-                    }
-                  />
-                  <span className="page-copy" style={{ fontSize: 12 }}>
-                    {t.settings.audioKeepDaysHint}
-                  </span>
-                </label>
-              </div>
+              {tab === "recording" ? renderRecordingTab() : null}
+              {tab === "telegram" ? renderTelegramTab() : null}
+              {tab === "storage" ? renderStorageTab() : null}
 
               <div>
                 <button className="btn primary" type="submit">
@@ -394,5 +391,72 @@ export default function SettingsPage() {
         </section>
       )}
     </main>
+  );
+}
+
+/**
+ * Local retention of one media kind: -1 keep forever, 0 delete right after the
+ * Telegram upload, N delete N days later. The raw number would be cryptic, so
+ * the mode is a select and the day count only appears when it matters.
+ */
+function KeepLocalField({
+  label,
+  hint,
+  value,
+  onChange,
+  labels,
+}: {
+  label: string;
+  hint?: string;
+  value: number;
+  onChange: (value: number) => void;
+  labels: {
+    keepLocalImmediate: string;
+    keepLocalDays: string;
+    keepLocalForever: string;
+    keepLocalDaysUnit: string;
+  };
+}) {
+  const mode = value < 0 ? "forever" : value === 0 ? "immediate" : "days";
+
+  return (
+    <div className="field">
+      <span className="field-label">{label}</span>
+      <div className="input-row">
+        <select
+          className="input"
+          value={mode}
+          onChange={(event) => {
+            const next = event.target.value;
+            onChange(next === "forever" ? -1 : next === "immediate" ? 0 : Math.max(1, value));
+          }}
+        >
+          <option value="immediate">{labels.keepLocalImmediate}</option>
+          <option value="days">{labels.keepLocalDays}</option>
+          <option value="forever">{labels.keepLocalForever}</option>
+        </select>
+
+        {mode === "days" ? (
+          <label className="input-suffix">
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={3650}
+              value={value}
+              onChange={(event) =>
+                onChange(Math.min(3650, Math.max(1, Number(event.target.value) || 1)))
+              }
+            />
+            <span>{labels.keepLocalDaysUnit}</span>
+          </label>
+        ) : null}
+      </div>
+      {hint ? (
+        <span className="page-copy" style={{ fontSize: 12 }}>
+          {hint}
+        </span>
+      ) : null}
+    </div>
   );
 }

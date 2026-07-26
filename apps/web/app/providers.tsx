@@ -36,6 +36,8 @@ type Dictionary = {
     autoUploadOff: string;
     autoUploadOn: string;
     keepLocalNote: string;
+    keepLocalNow: string;
+    keepLocalForever: string;
     openSettings: string;
     diskTitle: string;
     diskSubtitle: string;
@@ -230,19 +232,21 @@ type Dictionary = {
   settings: {
     title: string;
     subtitle: string;
-    retentionDays: string;
-    storageLimitGb: string;
+    tabs: {
+      recording: string;
+      telegram: string;
+      storage: string;
+    };
     recordChat: string;
     keepDeletedMessages: string;
     support7tv: string;
     defaultChatOffsetSec: string;
     saveSettings: string;
     saved: string;
-    telegramTitle: string;
     telegramEnabled: string;
     telegramChatId: string;
     telegramChatIdHint: string;
-    telegramKeepLocalDays: string;
+    telegramPermanentHint: string;
     telegramConnection: string;
     telegramTokenMissing: string;
     telegramBot: string;
@@ -255,8 +259,15 @@ type Dictionary = {
     audioTitle: string;
     audioHint: string;
     audioTrackEnabled: string;
-    audioKeepDays: string;
-    audioKeepDaysHint: string;
+    storageHint: string;
+    storageNoTelegramNote: string;
+    videoKeepLocal: string;
+    audioKeepLocal: string;
+    audioKeepLocalHint: string;
+    keepLocalImmediate: string;
+    keepLocalDays: string;
+    keepLocalForever: string;
+    keepLocalDaysUnit: string;
   };
   twitchAudio: {
     title: string;
@@ -277,7 +288,8 @@ type Dictionary = {
     hideScript: string;
     tracksTitle: string;
     tracksEmpty: string;
-    expireNote: string;
+    localCacheNow: string;
+    localCacheDays: string;
     colChannel: string;
     colTitle: string;
     colDate: string;
@@ -420,6 +432,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       autoUploadOff: "Автовыгрузка выключена — записи выгружаются только вручную.",
       autoUploadOn: "Автовыгрузка включена",
       keepLocalNote: "Локальная копия хранится {days} дн. после выгрузки",
+      keepLocalNow: "Локальная копия удаляется сразу после выгрузки",
+      keepLocalForever: "Локальные копии не удаляются",
       openSettings: "Открыть настройки",
       diskTitle: "Файлы на диске",
       diskSubtitle:
@@ -624,20 +638,23 @@ const dictionaries: Record<Locale, Dictionary> = {
     },
     settings: {
       title: "Настройки",
-      subtitle: "Здесь оставлены только параметры хранения и поведения replay по умолчанию.",
-      retentionDays: "Сколько дней хранить архив",
-      storageLimitGb: "Лимит диска, GB",
+      subtitle: "Параметры записи, выгрузки в Telegram и локального хранения.",
+      tabs: {
+        recording: "Запись и чат",
+        telegram: "Telegram",
+        storage: "Хранение",
+      },
       recordChat: "Сохранять чат",
       keepDeletedMessages: "Хранить удаленные сообщения",
       support7tv: "Поддержка 7TV",
       defaultChatOffsetSec: "Смещение чата по умолчанию, сек",
       saveSettings: "Сохранить",
       saved: "Сохранено",
-      telegramTitle: "Telegram-хранилище",
       telegramEnabled: "Выгружать записи в Telegram-канал",
       telegramChatId: "ID канала/чата",
       telegramChatIdHint: "Например -1001234567890 или @имяканала. Бот должен быть админом канала.",
-      telegramKeepLocalDays: "Хранить локальный файл после выгрузки, дней",
+      telegramPermanentHint:
+        "Telegram — постоянный архив: автоматически оттуда ничего не удаляется. Записи пропадают из канала только если удалить архив вручную.",
       telegramConnection: "Подключение",
       telegramTokenMissing: "Укажите api_id, api_hash и токен бота ниже (или через .env).",
       telegramBot: "Бот",
@@ -652,9 +669,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       audioHint:
         "После записи звук сохраняется отдельным файлом (.m4a) и выгружается в Telegram. Его можно наложить на VOD в Twitch через скрипт со страницы «Twitch аудио».",
       audioTrackEnabled: "Извлекать аудиодорожку из записей",
-      audioKeepDays: "Автоудаление аудио через, дней",
-      audioKeepDaysHint:
-        "Удаляются и локальный файл, и копия в Telegram (VOD на Twitch живёт ограниченное время). 0 — не удалять автоматически.",
+      storageHint:
+        "Локальный диск — только кэш перед Telegram. Файл удаляется с диска лишь после того, как копия ушла в канал; из самого Telegram ничего не удаляется. Просмотр и скачивание после удаления идут напрямую из Telegram.",
+      storageNoTelegramNote:
+        "Telegram пока не настроен — до этого локальные файлы не удаляются, что бы здесь ни стояло.",
+      videoKeepLocal: "Видео на локальном диске",
+      audioKeepLocal: "Аудиодорожка на локальном диске",
+      audioKeepLocalHint:
+        "Дорожка для наложения на Twitch VOD. Из Telegram она отдаётся так же, как локальная, — просто чуть медленнее стартует.",
+      keepLocalImmediate: "Удалять сразу после выгрузки",
+      keepLocalDays: "Хранить после выгрузки",
+      keepLocalForever: "Хранить всегда",
+      keepLocalDaysUnit: "дн.",
     },
     twitchAudio: {
       title: "Twitch аудио",
@@ -680,7 +706,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
       tracksEmpty: "Аудиодорожек пока нет — они появятся после следующей завершённой записи.",
-      expireNote: "Аудиодорожки автоматически удаляются через {days} дн. после стрима.",
+      localCacheNow:
+        "Дорожки хранятся в Telegram постоянно. Локальная копия удаляется сразу после выгрузки — дальше файл отдаётся из Telegram по той же ссылке.",
+      localCacheDays:
+        "Дорожки хранятся в Telegram постоянно. Локальная копия удаляется через {days} дн. после выгрузки — дальше файл отдаётся из Telegram по той же ссылке.",
       colChannel: "Канал",
       colTitle: "Название",
       colDate: "Дата",
@@ -823,6 +852,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       autoUploadOff: "Auto-upload is off — recordings are uploaded manually only.",
       autoUploadOn: "Auto-upload is on",
       keepLocalNote: "Local copies are kept for {days} day(s) after upload",
+      keepLocalNow: "Local copies are removed right after the upload",
+      keepLocalForever: "Local copies are never removed",
       openSettings: "Open settings",
       diskTitle: "Files on disk",
       diskSubtitle:
@@ -1027,20 +1058,23 @@ const dictionaries: Record<Locale, Dictionary> = {
     },
     settings: {
       title: "Settings",
-      subtitle: "Only retention and replay defaults stay here.",
-      retentionDays: "Retention days",
-      storageLimitGb: "Storage limit, GB",
+      subtitle: "Recording, Telegram offload and local retention.",
+      tabs: {
+        recording: "Recording & chat",
+        telegram: "Telegram",
+        storage: "Retention",
+      },
       recordChat: "Record chat",
       keepDeletedMessages: "Keep deleted messages",
       support7tv: "Enable 7TV",
       defaultChatOffsetSec: "Default chat offset, sec",
       saveSettings: "Save",
       saved: "Saved",
-      telegramTitle: "Telegram storage",
       telegramEnabled: "Upload recordings to a Telegram channel",
       telegramChatId: "Channel/chat id",
       telegramChatIdHint: "E.g. -1001234567890 or @channelname. The bot must be an admin of the channel.",
-      telegramKeepLocalDays: "Keep local file after upload, days",
+      telegramPermanentHint:
+        "Telegram is the permanent archive: nothing is ever deleted from it automatically. A recording only leaves the channel when the archive is deleted by hand.",
       telegramConnection: "Connection",
       telegramTokenMissing: "Set api_id, api_hash and the bot token below (or via .env).",
       telegramBot: "Bot",
@@ -1055,9 +1089,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       audioHint:
         "After each recording the sound is saved as a standalone .m4a and uploaded to Telegram. The userscript from the \"Twitch audio\" page overlays it on the Twitch VOD.",
       audioTrackEnabled: "Extract an audio track from recordings",
-      audioKeepDays: "Auto-delete audio after, days",
-      audioKeepDaysHint:
-        "Removes both the local file and the Telegram copy (Twitch VODs expire anyway). 0 disables auto-deletion.",
+      storageHint:
+        "The local disk is only a cache in front of Telegram. A file is removed from disk after its copy reached the channel; nothing is ever removed from Telegram itself. Playback and downloads then come straight from Telegram.",
+      storageNoTelegramNote:
+        "Telegram is not configured yet — until it is, local files are kept no matter what is selected here.",
+      videoKeepLocal: "Video on the local disk",
+      audioKeepLocal: "Audio track on the local disk",
+      audioKeepLocalHint:
+        "The track overlaid on Twitch VODs. Served from Telegram exactly like the local copy, it just takes a moment longer to start.",
+      keepLocalImmediate: "Delete right after the upload",
+      keepLocalDays: "Keep after the upload",
+      keepLocalForever: "Keep forever",
+      keepLocalDaysUnit: "days",
     },
     twitchAudio: {
       title: "Twitch audio",
@@ -1083,7 +1126,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",
       tracksEmpty: "No audio tracks yet — they appear after the next finished recording.",
-      expireNote: "Audio tracks are deleted automatically {days} day(s) after the stream.",
+      localCacheNow:
+        "Tracks stay in Telegram permanently. The local copy is dropped right after the upload — the same URL then streams from Telegram.",
+      localCacheDays:
+        "Tracks stay in Telegram permanently. The local copy is dropped {days} day(s) after the upload — the same URL then streams from Telegram.",
       colChannel: "Channel",
       colTitle: "Title",
       colDate: "Date",

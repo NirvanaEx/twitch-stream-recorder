@@ -135,7 +135,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       enabled: settings.telegramEnabled,
       configured,
       chatId: settings.telegramChatId,
-      keepLocalDays: settings.telegramKeepLocalDays,
+      videoKeepLocalDays: settings.videoKeepLocalDays,
+      audioKeepLocalDays: settings.audioKeepLocalDays,
       uploadedCount,
       telegramBytes: String(sumBytes(parts)),
       freedBytes: String(sumBytes(freedSessions)),
@@ -165,7 +166,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const status: {
       enabled: boolean;
       chatId: string;
-      keepLocalDays: number;
+      videoKeepLocalDays: number;
       tokenConfigured: boolean;
       botUsername: string | null;
       chatTitle: string | null;
@@ -173,7 +174,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     } = {
       enabled: settings.telegramEnabled,
       chatId: settings.telegramChatId,
-      keepLocalDays: settings.telegramKeepLocalDays,
+      videoKeepLocalDays: settings.videoKeepLocalDays,
       tokenConfigured: configured,
       botUsername: null,
       chatTitle: null,
@@ -256,19 +257,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const settings = await this.getSettings();
       const configured = await this.telegramClientService.isConfigured();
 
-      // Audio tracks expire on their own schedule, regardless of whether the
-      // Telegram offload itself is configured or enabled.
-      await this.cleanupExpiredAudio(settings, configured);
+      // Local copies expire on their own schedule — the offload does not have
+      // to be enabled for the disk cache of already uploaded files to shrink.
+      await this.cleanupLocalCopies(settings);
 
       if (!configured || !settings.telegramChatId) {
         return;
       }
 
       await this.processUploads(settings);
-
-      if (settings.telegramEnabled) {
-        await this.cleanupUploadedLocalFiles(settings.telegramKeepLocalDays);
-      }
     } catch (error) {
       this.logger.warn(
         `Telegram tick failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -304,6 +301,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       await this.yieldToPlayback();
       await this.uploadSession(session, settings.telegramChatId);
+      // Free the disk between sessions: with a zero-day local retention a
+      // queue of finished recordings would otherwise pile up in full before
+      // the first byte is released.
+      await this.cleanupLocalCopies(settings);
     }
   }
 
@@ -796,76 +797,35 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Audio tracks are temporary by design — they exist to fix the sound of the
-   * matching Twitch VOD, which itself expires. After audioKeepDays both the
-   * local .m4a and the Telegram message are removed. A value of 0 disables
-   * the auto-deletion.
+   * Local storage is only a cache in front of Telegram: the channel keeps the
+   * recording forever, the disk keeps it for as long as the retention setting
+   * says. Nothing is ever deleted from Telegram here, and nothing is deleted
+   * locally before Telegram confirmed a copy — so the setting can cost disk
+   * cache, never a recording.
    */
-  private async cleanupExpiredAudio(settings: AppSettings, telegramConfigured: boolean) {
-    if (settings.audioKeepDays <= 0) {
-      return;
-    }
-
-    const cutoff = new Date(Date.now() - settings.audioKeepDays * 24 * 60 * 60 * 1000);
-
-    const sessions = await this.prisma.streamSession.findMany({
-      where: {
-        audioDeletedAt: null,
-        // An audio-only session's audio IS the recording — it lives by the
-        // archive lifecycle, never by the temporary-audio expiry.
-        audioOnly: false,
-        endedAt: { lte: cutoff },
-        OR: [{ audioPath: { not: null } }, { telegramAudioMessageId: { not: null } }],
-      },
-      take: 20,
-    });
-
-    for (const session of sessions) {
-      try {
-        if (session.telegramAudioMessageId && session.telegramAudioChatId) {
-          // Without a working client the Telegram message cannot be revoked
-          // yet; skip and retry on a later tick instead of orphaning it.
-          if (!telegramConfigured) {
-            continue;
-          }
-
-          const client = await this.telegramClientService.getClient();
-          const entity = await this.telegramClientService.resolveChat(
-            session.telegramAudioChatId,
-          );
-          await client.deleteMessages(entity, [Number(session.telegramAudioMessageId)], {
-            revoke: true,
-          });
-        }
-
-        if (session.audioPath) {
-          const audioPath = resolve(session.audioPath);
-
-          if (existsSync(audioPath)) {
-            rmSync(audioPath, { force: true });
-          }
-        }
-
-        await this.prisma.streamSession.update({
-          where: { id: session.id },
-          data: { audioDeletedAt: new Date() },
-        });
-
-        this.logger.log(
-          `Deleted expired audio track for session ${session.id}: older than ${settings.audioKeepDays} day(s).`,
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Failed to delete expired audio for session ${session.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
+  private async cleanupLocalCopies(settings: AppSettings) {
+    await this.cleanupLocalVideo(settings.videoKeepLocalDays);
+    await this.cleanupLocalAudio(settings.audioKeepLocalDays);
   }
 
-  private async cleanupUploadedLocalFiles(keepLocalDays: number) {
-    const cutoff = new Date(Date.now() - keepLocalDays * 24 * 60 * 60 * 1000);
+  /**
+   * "Uploaded at least keepDays ago" boundary. A negative value means "keep
+   * the local copy forever" and is reported as null.
+   */
+  private keepLocalCutoff(keepDays: number): Date | null {
+    if (keepDays < 0) {
+      return null;
+    }
+
+    return new Date(Date.now() - keepDays * 24 * 60 * 60 * 1000);
+  }
+
+  private async cleanupLocalVideo(keepDays: number) {
+    const cutoff = this.keepLocalCutoff(keepDays);
+
+    if (!cutoff) {
+      return;
+    }
 
     const sessions = await this.prisma.streamSession.findMany({
       where: {
@@ -891,11 +851,64 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
         this.emitTelegramUpdate(session.id, "uploaded");
         this.logger.log(
-          `Deleted local file for session ${session.id}: it has been in Telegram for over ${keepLocalDays} day(s).`,
+          `Deleted the local video of session ${session.id}: the Telegram copy is ${keepDays} day(s) old.`,
         );
       } catch (error) {
         this.logger.warn(
-          `Failed to delete local file for session ${session.id}: ${
+          `Failed to delete the local video of session ${session.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Same rule for the standalone .m4a track. The Telegram audio message stays
+   * put — playback (and the Twitch userscript) falls back to it once the local
+   * file is gone.
+   */
+  private async cleanupLocalAudio(keepDays: number) {
+    const cutoff = this.keepLocalCutoff(keepDays);
+
+    if (!cutoff) {
+      return;
+    }
+
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        // An audio-only session's .m4a IS the recording, so it follows the
+        // video rule above (it is the playbackPath) — not this one.
+        audioOnly: false,
+        audioPath: { not: null },
+        audioDeletedAt: null,
+        audioLocalDeletedAt: null,
+        // Never drop a local track Telegram does not hold yet.
+        telegramAudioMessageId: { not: null },
+        telegramAudioUploadedAt: { lte: cutoff },
+      },
+      take: 50,
+    });
+
+    for (const session of sessions) {
+      try {
+        const audioPath = resolve(session.audioPath!);
+
+        if (existsSync(audioPath)) {
+          rmSync(audioPath, { force: true });
+        }
+
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: { audioLocalDeletedAt: new Date() },
+        });
+
+        this.logger.log(
+          `Deleted the local audio track of session ${session.id}: the Telegram copy is ${keepDays} day(s) old.`,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to delete the local audio track of session ${session.id}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );

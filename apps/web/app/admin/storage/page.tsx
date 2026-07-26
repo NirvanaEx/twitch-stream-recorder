@@ -26,7 +26,8 @@ type StorageOverview = {
   enabled: boolean;
   configured: boolean;
   chatId: string;
-  keepLocalDays: number;
+  videoKeepLocalDays: number;
+  audioKeepLocalDays: number;
   uploadedCount: number;
   telegramBytes: string;
   freedBytes: string;
@@ -114,7 +115,11 @@ export default function StoragePage() {
         <div className="notice info">
           {data.enabled ? t.storage.autoUploadOn : t.storage.autoUploadOff}
           {" · "}
-          {t.storage.keepLocalNote.replace("{days}", String(data.keepLocalDays))}
+          {data.videoKeepLocalDays < 0
+            ? t.storage.keepLocalForever
+            : data.videoKeepLocalDays === 0
+              ? t.storage.keepLocalNow
+              : t.storage.keepLocalNote.replace("{days}", String(data.videoKeepLocalDays))}
         </div>
       ) : null}
 

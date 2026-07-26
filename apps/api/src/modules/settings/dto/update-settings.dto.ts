@@ -3,20 +3,6 @@ import { IsBoolean, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } 
 
 export class UpdateSettingsDto {
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(3650)
-  retentionDays?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(4096)
-  storageLimitGb?: number;
-
-  @IsOptional()
   @IsBoolean()
   recordChat?: boolean;
 
@@ -47,23 +33,24 @@ export class UpdateSettingsDto {
   telegramChatId?: string;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(3650)
-  telegramKeepLocalDays?: number;
-
-  @IsOptional()
   @IsBoolean()
   audioTrackEnabled?: boolean;
 
-  // 0 disables the auto-deletion of audio tracks.
+  // Local retention, in days: -1 keep forever, 0 delete right after the
+  // Telegram upload, N delete N days after it.
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(0)
+  @Min(-1)
   @Max(3650)
-  audioKeepDays?: number;
+  videoKeepLocalDays?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(-1)
+  @Max(3650)
+  audioKeepLocalDays?: number;
 
   // Secrets: an empty string means "keep the stored value" so the settings
   // form can always submit the whole object without wiping them.

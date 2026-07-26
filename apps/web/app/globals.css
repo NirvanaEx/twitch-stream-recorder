@@ -2075,6 +2075,73 @@ textarea {
   max-width: 640px;
 }
 
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-group-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Tab bar of a panel: sits between the panel edge and its body. */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab-btn {
+  border: none;
+  /* Overlaps the bar's own 1px border, so the active underline replaces it. */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--text-dim);
+  padding: 8px 12px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text);
+}
+
+.tab-btn.active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+/* Number input with a trailing unit ("30 дн.") inside an .input-row. */
+.input-suffix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.input-suffix input {
+  width: 90px;
+  flex: 0 0 auto;
+}
+
+.input-suffix span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* ---------- Tooltips (basic) ---------- */
 
 [title] {
