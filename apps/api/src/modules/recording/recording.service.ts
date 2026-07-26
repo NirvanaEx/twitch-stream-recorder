@@ -74,6 +74,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     await this.checkRecordingDependencies();
     void this.recoverInterruptedRemuxes();
     void this.backfillRestartFragmentAnchors();
+    void this.cleanupStoredThumbnails();
     await this.syncAllChannels();
 
     this.monitorTimer = setInterval(() => {
@@ -794,13 +795,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           ? await this.probeDurationSec(activeRecording.outputPath)
           : null;
 
-      // Cover frame for the panel; Twitch's own preview 404s once the
-      // broadcast ends. Audio-only captures have no frame to grab.
-      const thumbnailPath =
-        finalStatus === "completed" && fileSizeBytes > 0 && !activeRecording.audioOnly
-          ? await this.captureThumbnail(activeRecording.outputPath, durationSec, logPrefix)
-          : null;
-
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
@@ -819,7 +813,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : {}),
           ...(durationSec ? { durationSec } : {}),
           ...(captureEndedAt ? { captureEndedAt } : {}),
-          ...(thumbnailPath ? { thumbnailPath } : {}),
         },
       });
 
@@ -1038,11 +1031,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
         const durationSec = await this.probeDurationSec(outputPath);
 
-        const thumbnailPath =
-          session.audioOnly || session.thumbnailPath
-            ? null
-            : await this.captureThumbnail(outputPath, durationSec, logPrefix);
-
         await this.prisma.streamSession.update({
           where: { id: session.id },
           data: {
@@ -1055,7 +1043,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             // markStaleRecordingsAsStopped — the .ts mtime is the truth.
             endedAt: captureEndedAt,
             ...(session.captureEndedAt ? {} : { captureEndedAt }),
-            ...(thumbnailPath ? { thumbnailPath } : {}),
             ...(audio
               ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
               : {}),
@@ -1083,90 +1070,57 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Covers are rendered on demand by ThumbnailService now; the .jpg files the
+   * old pipeline wrote next to each recording are dead weight the panel never
+   * reads again. Remove them once and forget the column ever pointed anywhere.
+   */
+  private async cleanupStoredThumbnails() {
+    try {
+      const sessions = await this.prisma.streamSession.findMany({
+        where: { thumbnailPath: { not: null } },
+        select: { id: true, thumbnailPath: true },
+      });
+
+      if (sessions.length === 0) return;
+
+      let removed = 0;
+
+      for (const session of sessions) {
+        // Only ever delete what the old pipeline could have written: a .jpg
+        // sitting next to the video.
+        if (!session.thumbnailPath?.toLowerCase().endsWith(".jpg")) continue;
+        const absolutePath = resolve(session.thumbnailPath);
+        if (existsSync(absolutePath)) {
+          try {
+            rmSync(absolutePath, { force: true });
+            removed += 1;
+          } catch {
+            // Best-effort; a stuck file is harmless.
+          }
+        }
+      }
+
+      await this.prisma.streamSession.updateMany({
+        where: { thumbnailPath: { not: null } },
+        data: { thumbnailPath: null },
+      });
+
+      this.logger.log(
+        `Stored covers migrated to on-demand rendering: ${removed} .jpg file(s) removed for ${sessions.length} session(s).`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Stored-cover cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
    * Pull the AAC track out of a finished recording into a standalone .m4a
    * (stream copy, no re-encode). The Twitch userscript overlays it on the VOD
    * to restore DMCA-muted sound. Best-effort: a failure here must never fail
    * the recording itself.
    */
-  /**
-   * Grab one frame from the finished recording to use as the archive cover.
-   * Taken a little way in (streams open on a "starting soon" screen) but never
-   * past the end of short recordings. Best-effort: a missing cover is cosmetic,
-   * so any failure just returns null.
-   */
-  private async captureThumbnail(
-    videoPath: string,
-    durationSec: number | null,
-    logPrefix: string,
-  ): Promise<string | null> {
-    const thumbnailPath = videoPath.replace(/\.mp4$/i, ".jpg");
-
-    if (thumbnailPath === videoPath) {
-      return null;
-    }
-
-    // 5% in, clamped to [10 s, 5 min]; for very short clips fall back to 1 s.
-    const total = durationSec ?? 0;
-    const seekSec =
-      total > 20 ? Math.min(300, Math.max(10, Math.floor(total * 0.05))) : 1;
-
-    try {
-      const ffmpegCommand = this.resolveFfmpegCommand();
-
-      await new Promise<void>((resolvePromise, rejectPromise) => {
-        const child = spawn(
-          ffmpegCommand.command,
-          [
-            ...ffmpegCommand.args,
-            "-y",
-            // -ss before -i seeks by keyframe: near-instant even on a 10 GB file.
-            "-ss",
-            String(seekSec),
-            "-i",
-            videoPath,
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=640:-2",
-            "-q:v",
-            "4",
-            thumbnailPath,
-          ],
-          { stdio: ["ignore", "ignore", "pipe"] },
-        );
-
-        let stderrTail = "";
-        child.stderr?.on("data", (chunk) => {
-          stderrTail = `${stderrTail}${chunk.toString()}`.slice(-2000);
-        });
-
-        child.once("error", (error) => rejectPromise(error));
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolvePromise();
-          } else {
-            rejectPromise(
-              new Error(`ffmpeg exited with code ${String(code)}: ${stderrTail.trim()}`),
-            );
-          }
-        });
-      });
-
-      if (!existsSync(thumbnailPath) || statSync(thumbnailPath).size === 0) {
-        return null;
-      }
-
-      return thumbnailPath;
-    } catch (error) {
-      this.logger.warn(
-        `${logPrefix} could not grab a cover frame: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
-    }
-  }
-
   private async extractAudioTrack(videoPath: string, logPrefix: string) {
     const settings = await this.prisma.appSettings.upsert({
       where: { id: "default" },
@@ -1553,9 +1507,25 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       recordingSource: session.recordingSource,
       errorMessage: session.errorMessage,
       previewImageUrl: session.previewImageUrl,
-      // Frame grabbed from the recording itself. Unlike previewImageUrl it
-      // does not expire when the broadcast ends.
-      thumbnailUrl: session.thumbnailPath ? `/api/archives/${session.id}/thumbnail` : null,
+      // Frame rendered from the recording itself on demand (local file or the
+      // Telegram copy). Unlike previewImageUrl it does not expire when the
+      // broadcast ends, and unlike the old stored .jpg it lives nowhere.
+      thumbnailUrl:
+        !session.audioOnly && (playback.videoReady || telegramPlayable)
+          ? `/api/archives/${session.id}/thumbnail`
+          : null,
+      // Real-world moment of the video's first frame. captureEndedAt minus
+      // the probed length is exact (immune to the --hls-live-restart rewind);
+      // createdAt is the honest approximation for live and legacy sessions.
+      mediaStartedAt:
+        session.captureEndedAt && session.durationSec
+          ? new Date(session.captureEndedAt.getTime() - session.durationSec * 1000)
+          : session.createdAt,
+      // Probed length WITHOUT the stream-span fallback of durationSec above:
+      // mediaStartedAt + recordingDurationSec is the recorded wall-clock
+      // window, and a fallback here would silently stretch it to the whole
+      // broadcast.
+      recordingDurationSec: session.durationSec,
       audioSizeBytes: session.audioSizeBytes,
       videoUrl:
         playback.videoUrl ??

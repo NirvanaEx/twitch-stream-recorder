@@ -8,6 +8,7 @@ import {
   buildAuthenticatedMediaUrl,
   formatFileSize,
   formatPeriod,
+  formatSeconds,
   withAuthToken,
 } from "../../../lib/media";
 import { useRealtimeRefresh } from "../../../lib/use-realtime-refresh";
@@ -58,6 +59,10 @@ type ArchiveDetailResponse = {
     telegramStatus: string;
     telegramParts: TelegramPart[];
     localFileDeletedAt: string | null;
+    /** Wall-clock moment of the video's first frame (see serializeSession). */
+    mediaStartedAt: string | null;
+    /** Probed length of the recorded file — NOT the whole-broadcast span. */
+    recordingDurationSec: number | null;
   };
   videoUrl: string | null;
   videoReady: boolean;
@@ -369,6 +374,25 @@ export default function ArchiveReplayPage() {
   const playerTitle =
     data?.item.title ?? data?.item.channelDisplayName ?? "Replay";
 
+  // Wall-clock window the recording actually covers. The old
+  // formatPeriod(startedAt, endedAt) span measured go-live -> capture end,
+  // which showed "4h 44m" for a 3-minute capture that joined mid-stream.
+  const mediaStartMs = data?.item.mediaStartedAt
+    ? new Date(data.item.mediaStartedAt).getTime()
+    : null;
+  const recordingWindow = (() => {
+    if (!mediaStartMs || !Number.isFinite(mediaStartMs)) return null;
+    const start = new Date(mediaStartMs);
+    const duration = data?.item.recordingDurationSec ?? null;
+    const startText = start.toLocaleTimeString();
+    if (!duration) return { text: startText, utc: start.toISOString() };
+    const end = new Date(mediaStartMs + duration * 1000);
+    return {
+      text: `${startText}–${end.toLocaleTimeString()} · ${formatSeconds(duration)}`,
+      utc: `${start.toISOString()} – ${end.toISOString()}`,
+    };
+  })();
+
   // We keep a single, stable DOM tree across modes so the <video>
   // element inside <VideoPlayer> never re-mounts and playback continues
   // smoothly when toggling between normal / theater / fullscreen.
@@ -455,6 +479,7 @@ export default function ArchiveReplayPage() {
                 autoPlay={false}
                 title={mode !== "normal" ? playerTitle : undefined}
                 emptyText={t.replay.videoPending}
+                timelineStartAt={mediaStartMs}
               />
             ) : (
               <div className="vp">
@@ -486,7 +511,13 @@ export default function ArchiveReplayPage() {
             <span title={t.archives.recordedAt}>
               {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "—"}
             </span>
-            <span>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</span>
+            {recordingWindow ? (
+              <span title={`${t.replay.recordingWindow} (UTC): ${recordingWindow.utc}`}>
+                {t.replay.recordingWindow}: {recordingWindow.text}
+              </span>
+            ) : (
+              <span>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</span>
+            )}
             <span>{formatFileSize(data?.item.fileSizeBytes)}</span>
 
             {data?.item.videoSource ? (

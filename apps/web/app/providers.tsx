@@ -219,6 +219,7 @@ type Dictionary = {
     closeOverlay: string;
     sourceLabel: string;
     sourceLocal: string;
+    recordingWindow: string;
     speedTitle: string;
     speedArchive: string;
     speedServer: string;
@@ -626,6 +627,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       closeOverlay: "Закрыть",
       sourceLabel: "Источник",
       sourceLocal: "Диск сервера",
+      recordingWindow: "Запись",
       speedTitle: "Скорость из Telegram",
       speedArchive: "Эта запись",
       speedServer: "Всего по серверу",
@@ -1046,6 +1048,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       closeOverlay: "Close",
       sourceLabel: "Source",
       sourceLocal: "Server disk",
+      recordingWindow: "Recorded",
       speedTitle: "Telegram throughput",
       speedArchive: "This recording",
       speedServer: "Server total",

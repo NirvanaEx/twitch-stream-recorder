@@ -42,6 +42,35 @@ function formatDate(iso: string | null) {
   return d.toLocaleString();
 }
 
+/**
+ * Covers are rendered on demand from the video, so a 404 is possible; walk
+ * down the source chain (rendered cover -> platform preview -> letter tile)
+ * instead of showing the browser's broken-image icon.
+ */
+function StreamCardCover({ item }: { item: PublicStreamCard }) {
+  const sources = [item.thumbnailUrl, item.previewImageUrl].filter(Boolean) as string[];
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const src = sources[sourceIndex];
+
+  if (!src) {
+    return (
+      <div className="stream-card-thumb-fallback">
+        {item.channel.displayName.slice(0, 1).toUpperCase()}
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={item.title ?? item.channel.displayName}
+      loading="lazy"
+      onError={() => setSourceIndex((index) => index + 1)}
+    />
+  );
+}
+
 export default function PublicHomePage() {
   const { t } = useLanguage();
   const { isAuthenticated, user } = useAuth();
@@ -149,18 +178,7 @@ export default function PublicHomePage() {
                 className="stream-card"
               >
                 <div className="stream-card-thumb">
-                  {item.thumbnailUrl ?? item.previewImageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={(item.thumbnailUrl ?? item.previewImageUrl) as string}
-                      alt={item.title ?? item.channel.displayName}
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="stream-card-thumb-fallback">
-                      {item.channel.displayName.slice(0, 1).toUpperCase()}
-                    </div>
-                  )}
+                  <StreamCardCover item={item} />
                   {item.startedAt && item.endedAt ? (
                     <span className="stream-card-duration">
                       {formatPeriod(item.startedAt, item.endedAt)}

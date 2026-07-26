@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
 import { waveformHeights } from "../lib/waveform";
@@ -63,9 +64,14 @@ export function ArchiveCard({
     : formatPeriod(archive.startedAt, archive.endedAt);
   const size = formatFileSize(isAudio ? archive.audioSizeBytes ?? archive.fileSizeBytes : archive.fileSizeBytes);
 
-  const cover = archive.thumbnailUrl
-    ? withAuthToken(buildApiUrl(archive.thumbnailUrl.replace(/^\/api\//, "")))
-    : null;
+  // Covers are rendered on demand from the video now, so a 404 is a real
+  // possibility (e.g. Telegram briefly unreachable) — fall back to the empty
+  // cover instead of the browser's broken-image icon.
+  const [coverFailed, setCoverFailed] = useState(false);
+  const cover =
+    !coverFailed && archive.thumbnailUrl
+      ? withAuthToken(buildApiUrl(archive.thumbnailUrl.replace(/^\/api\//, "")))
+      : null;
 
   function renderTelegram() {
     if (archive.telegramStatus === "uploaded") {
@@ -151,7 +157,7 @@ export function ArchiveCard({
           </div>
         ) : cover ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={cover} alt="" loading="lazy" />
+          <img src={cover} alt="" loading="lazy" onError={() => setCoverFailed(true)} />
         ) : (
           <div className="archive-cover-empty">{t.archives.noCover}</div>
         )}
