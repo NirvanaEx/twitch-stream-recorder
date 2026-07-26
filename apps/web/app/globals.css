@@ -1050,6 +1050,78 @@ textarea {
   }
 }
 
+/* ---- Screen-fit stage (public watch page) ---- */
+
+/* The stage takes exactly the viewport height and the two columns divide it:
+   video with its info on the left, chat on the right. Heights flow strictly
+   top-down (viewport -> stage -> row -> column -> list), so no column can be
+   sized by its own content and inflate the page — the page never scrolls, only
+   the lists inside do. Scoped to --fit so the admin replay keeps its in-page
+   layout. Theater mode is untouched: that stage is already position: fixed
+   with a definite 100% row. */
+.replay-stage--fit.replay-stage--normal {
+  height: calc(100vh - 2 * var(--shell-pad, 16px));
+  height: calc(100dvh - 2 * var(--shell-pad, 16px));
+  overflow: hidden;
+}
+
+.replay-stage--fit.replay-stage--normal.has-chat {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.replay-stage--fit.replay-stage--normal .replay-stage__main {
+  height: 100%;
+  min-height: 0;
+}
+
+/* The player absorbs whatever height the header and notices leave over. */
+.replay-stage--fit.replay-stage--normal .replay-stage__player {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Height now comes from the column, not from the width: without this the
+   16:9 aspect ratio dictated the height, and on a wide window the video alone
+   was taller than the screen. object-fit: contain letterboxes inside — the
+   same mechanism theater mode already uses. */
+.replay-stage--fit.replay-stage--normal .vp {
+  aspect-ratio: auto;
+  height: 100%;
+  max-height: none;
+}
+
+.replay-stage--fit.replay-stage--normal .replay-stage__chat {
+  min-height: 0;
+}
+
+/* One column on portrait: the video keeps its natural 16:9 height and the
+   chat gets everything below it, still inside the one-screen stage. */
+@media (max-width: 900px) and (orientation: portrait) {
+  .replay-stage--fit.replay-stage--normal.has-chat {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .replay-stage--fit.replay-stage--normal .replay-stage__main {
+    height: auto;
+  }
+
+  .replay-stage--fit.replay-stage--normal .replay-stage__player {
+    flex: none;
+    display: block;
+  }
+
+  .replay-stage--fit.replay-stage--normal .vp {
+    aspect-ratio: 16 / 9;
+    height: auto;
+  }
+
+  .replay-stage--fit.replay-stage--normal .replay-stage__chat {
+    height: auto;
+    min-height: 0;
+  }
+}
+
 
 /* ---------- VideoPlayer ---------- */
 
@@ -2363,6 +2435,21 @@ textarea {
 @media (max-width: 720px) {
   .public-shell {
     padding: 14px 12px 60px;
+  }
+}
+
+/* The watch page hosts a screen-fit stage: symmetric slim padding (the stage
+   height is computed from --shell-pad) and the full window width, because the
+   1280px cap wasted the player's room on wide screens. */
+.public-shell--watch {
+  --shell-pad: 16px;
+  max-width: none;
+  padding: var(--shell-pad);
+}
+
+@media (max-width: 720px) {
+  .public-shell--watch {
+    --shell-pad: 10px;
   }
 }
 
