@@ -271,12 +271,19 @@ export function VideoPlayer({
     };
     const onRate = () => setPlaybackRate(v.playbackRate);
     const onError = () => {
-      const isNetwork = v.error?.code === MediaError.MEDIA_ERR_NETWORK;
+      const code = v.error?.code;
+      // NETWORK is a playing stream that broke; SRC_NOT_SUPPORTED is the same
+      // server hiccup at load time — a 502 during the deploy window, a 500
+      // while the Telegram connection reconnects, or a 503 from the stream
+      // slot gate. The file itself is fine in all of those, so both codes
+      // deserve silent retries instead of the manual overlay.
+      const isTransient =
+        code === MediaError.MEDIA_ERR_NETWORK ||
+        code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
 
-      // Auto-recover from transient network drops (slow Telegram range, proxy
-      // timeout) without bothering the user. Reload and resume from the same
-      // spot, with a growing delay; reset happens on the next "playing".
-      if (isNetwork && autoRetryRef.current.count < MAX_AUTO_RETRIES) {
+      // Auto-recover without bothering the user: reload and resume from the
+      // same spot, with a growing delay; reset happens on the next "playing".
+      if (isTransient && autoRetryRef.current.count < MAX_AUTO_RETRIES) {
         autoRetryRef.current.count += 1;
         const attempt = autoRetryRef.current.count;
         const resumeAt = v.currentTime;
@@ -837,14 +844,6 @@ export function VideoPlayer({
       onMouseMove={handleMouseMove}
       onMouseLeave={() => {
         if (isPlaying && !audioOnly) setControlsVisible(false);
-      }}
-      onDoubleClick={(event) => {
-        // Avoid double-click toggling when clicking on controls. Touch
-        // double-taps are handled in onPointerUp (they seek, not fullscreen).
-        if (audioOnly) return;
-        if ((event.target as HTMLElement).closest(".vp__controls")) return;
-        if (Date.now() - lastTouchAtRef.current < 700) return;
-        toggleFullscreen();
       }}
     >
       {effectiveSrc && audioOnly ? (
