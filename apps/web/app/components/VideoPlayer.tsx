@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { waveformHeights } from "../lib/waveform";
 import {
   CloseIcon,
+  CompressorIcon,
   FullscreenExitIcon,
   FullscreenIcon,
   MessageIcon,
@@ -74,6 +75,11 @@ const SKIP_SECONDS = 5;
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const HIDE_DELAY_MS = 2500;
 const DOUBLE_TAP_MS = 350;
+// The volume slider goes past 100%: values above 1 are applied as Web Audio
+// gain on top of the element's full volume (quiet recordings happen).
+const MAX_VOLUME_BOOST = 3;
+// Where the 100% tick sits on the extended slider track.
+const VOLUME_TICK_PCT = 100 / MAX_VOLUME_BOOST;
 // Transient network errors (a dropped Telegram-backed range, a proxy timeout)
 // shouldn't dump the viewer onto a manual "retry" button. Silently reload and
 // resume from the same spot a few times first; only fall back to the manual
@@ -126,6 +132,11 @@ export function VideoPlayer({
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  // Gain above the element's 100% (1..MAX_VOLUME_BOOST) and the loudness
+  // compressor toggle — both realized through a Web Audio chain that is only
+  // materialized once either is actually used.
+  const [boost, setBoost] = useState(1);
+  const [compressorOn, setCompressorOn] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [showRateMenu, setShowRateMenu] = useState(false);
@@ -353,16 +364,25 @@ export function VideoPlayer({
     };
   }, [effectiveSrc, audioOnly]);
 
-  // Restore stored volume / muted across visits.
+  // Restore stored volume / muted / boost / compressor across visits.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
     try {
       const stored = window.localStorage.getItem("tsr-player-vol");
       if (!stored) return;
-      const parsed = JSON.parse(stored) as { volume?: number; muted?: boolean };
+      const parsed = JSON.parse(stored) as {
+        volume?: number;
+        muted?: boolean;
+        boost?: number;
+        compressor?: boolean;
+      };
       if (typeof parsed.volume === "number") v.volume = Math.max(0, Math.min(1, parsed.volume));
       if (typeof parsed.muted === "boolean") v.muted = parsed.muted;
+      if (typeof parsed.boost === "number") {
+        setBoost(Math.max(1, Math.min(MAX_VOLUME_BOOST, parsed.boost)));
+      }
+      if (typeof parsed.compressor === "boolean") setCompressorOn(parsed.compressor);
     } catch {
       // Ignore broken localStorage.
     }
@@ -370,11 +390,123 @@ export function VideoPlayer({
 
   useEffect(() => {
     try {
-      window.localStorage.setItem("tsr-player-vol", JSON.stringify({ volume, muted }));
+      window.localStorage.setItem(
+        "tsr-player-vol",
+        JSON.stringify({ volume, muted, boost, compressor: compressorOn }),
+      );
     } catch {
       // Ignore storage errors (e.g. private mode).
     }
-  }, [volume, muted]);
+  }, [volume, muted, boost, compressorOn]);
+
+  // ---- Web Audio: volume boost above 100% + loudness compressor ----------
+
+  const audioGraphRef = useRef<{
+    ctx: AudioContext;
+    element: HTMLMediaElement;
+    source: MediaElementAudioSourceNode;
+    compressor: DynamicsCompressorNode;
+    gain: GainNode;
+  } | null>(null);
+  const boostRef = useRef(1);
+  boostRef.current = boost;
+
+  // Once a media element is routed through a MediaElementSource its audio
+  // only ever flows through the graph, so the graph is created lazily (first
+  // actual use of boost/compressor) and then kept for the element's lifetime.
+  const ensureAudioGraph = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return null;
+
+    const current = audioGraphRef.current;
+    if (current && current.element === v && current.ctx.state !== "closed") return current;
+
+    try {
+      const ctx = current && current.ctx.state !== "closed" ? current.ctx : new AudioContext();
+
+      // The element changed under the same player (audio <-> video variants):
+      // silence the old chain, the old element is not coming back.
+      if (current) {
+        try {
+          current.source.disconnect();
+          current.gain.disconnect();
+          current.compressor.disconnect();
+        } catch {
+          // Already disconnected.
+        }
+      }
+
+      const source = ctx.createMediaElementSource(v);
+
+      // "Night mode": tame the loud parts so speech stays audible without
+      // riding the volume. Values are the usual broadcast-ish preset.
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -28;
+      compressor.knee.value = 24;
+      compressor.ratio.value = 8;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+
+      const gain = ctx.createGain();
+
+      // Safety limiter so a 300% boost saturates softly instead of clipping.
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -1;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.001;
+      limiter.release.value = 0.1;
+
+      compressor.connect(gain);
+      gain.connect(limiter);
+      limiter.connect(ctx.destination);
+      source.connect(gain);
+
+      const graph = { ctx, element: v, source, compressor, gain };
+      audioGraphRef.current = graph;
+      return graph;
+    } catch {
+      // No Web Audio (or the element is already claimed) — boost silently
+      // degrades to plain 100% volume.
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    const graph = audioGraphRef.current;
+
+    if (boost <= 1 && !compressorOn) {
+      // Nothing special requested. If the graph already exists it cannot be
+      // detached again, so it keeps running as a transparent pass-through.
+      if (graph) {
+        graph.gain.gain.value = 1;
+        try {
+          graph.source.disconnect();
+        } catch {
+          // Ignore.
+        }
+        graph.source.connect(graph.gain);
+      }
+      return;
+    }
+
+    // Creating an AudioContext needs a user gesture to start unmuted; the
+    // settings arrive either from a click on our controls or restored from
+    // storage — in the latter case wait until playback actually starts.
+    if (!graph && !isPlaying) return;
+
+    const active = ensureAudioGraph();
+    if (!active) return;
+
+    void active.ctx.resume().catch(() => undefined);
+    active.gain.gain.value = boost;
+    try {
+      active.source.disconnect();
+    } catch {
+      // Ignore.
+    }
+    active.source.connect(compressorOn ? active.compressor : active.gain);
+  }, [boost, compressorOn, isPlaying, ensureAudioGraph, effectiveSrc]);
 
   // ---- Player actions ---------------------------------------------------
 
@@ -459,10 +591,29 @@ export function VideoPlayer({
     [seekTo],
   );
 
+  // One continuous scale for the keyboard too: 0..100% element volume, then
+  // 100%..300% boost gain.
   const adjustVolume = useCallback((delta: number) => {
     const v = videoRef.current;
     if (!v) return;
     v.muted = false;
+
+    if (delta > 0) {
+      if (v.volume >= 1 - 1e-6) {
+        setBoost(
+          Math.min(MAX_VOLUME_BOOST, Math.round((boostRef.current + delta) * 100) / 100),
+        );
+      } else {
+        v.volume = Math.min(1, v.volume + delta);
+      }
+      return;
+    }
+
+    if (boostRef.current > 1) {
+      setBoost(Math.max(1, Math.round((boostRef.current + delta) * 100) / 100));
+      return;
+    }
+
     v.volume = Math.max(0, Math.min(1, v.volume + delta));
   }, []);
 
@@ -557,6 +708,9 @@ export function VideoPlayer({
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
     if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
+    // Free the audio rendering thread; a remount builds a fresh graph.
+    void audioGraphRef.current?.ctx.close().catch(() => undefined);
+    audioGraphRef.current = null;
   }, []);
 
   // ---- Touch gestures -----------------------------------------------------
@@ -820,6 +974,11 @@ export function VideoPlayer({
   const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const bufferedPct = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
 
+  // The slider models one continuous loudness scale: element volume up to
+  // 100%, Web Audio gain past it.
+  const volumeLevel = muted ? 0 : boost > 1 ? boost : volume;
+  const volumeLevelPct = (volumeLevel / MAX_VOLUME_BOOST) * 100;
+
   const VolumeIcon = useMemo(() => {
     if (muted || volume === 0) return VolumeMutedIcon;
     if (volume < 0.5) return VolumeLowIcon;
@@ -1031,27 +1190,46 @@ export function VideoPlayer({
               <input
                 type="range"
                 min={0}
-                max={1}
+                max={MAX_VOLUME_BOOST}
                 step={0.01}
-                value={muted ? 0 : volume}
+                value={volumeLevel}
                 onChange={(event) => {
                   const v = videoRef.current;
                   if (!v) return;
                   const next = Number(event.target.value);
-                  v.volume = Math.max(0, Math.min(1, next));
                   v.muted = next === 0;
+                  if (next <= 1) {
+                    v.volume = Math.max(0, Math.min(1, next));
+                    setBoost(1);
+                  } else {
+                    v.volume = 1;
+                    setBoost(Math.min(MAX_VOLUME_BOOST, Math.round(next * 100) / 100));
+                  }
                 }}
                 className="vp__volume-slider"
-                aria-label="Громкость"
+                aria-label="Громкость (до 300%)"
                 style={{
-                  background: `linear-gradient(to right, var(--text) 0%, var(--text) ${
-                    (muted ? 0 : volume) * 100
-                  }%, rgba(255,255,255,0.3) ${
-                    (muted ? 0 : volume) * 100
-                  }%, rgba(255,255,255,0.3) 100%)`,
+                  // Marker layer first (drawn on top): a tick at the 100%
+                  // point so the boost zone reads as "past normal".
+                  background: `linear-gradient(to right, transparent calc(${VOLUME_TICK_PCT}% - 1px), rgba(255,255,255,0.95) calc(${VOLUME_TICK_PCT}% - 1px), rgba(255,255,255,0.95) calc(${VOLUME_TICK_PCT}% + 1px), transparent calc(${VOLUME_TICK_PCT}% + 1px)), linear-gradient(to right, var(--text) 0%, var(--text) ${volumeLevelPct}%, rgba(255,255,255,0.3) ${volumeLevelPct}%, rgba(255,255,255,0.3) 100%)`,
                 }}
               />
+              <span
+                className={`vp__volume-pct${boost > 1 ? " vp__volume-pct--boost" : ""}`}
+                title="Громкость: выше 100% — программное усиление"
+              >
+                {Math.round(volumeLevel * 100)}%
+              </span>
             </div>
+
+            <button
+              type="button"
+              className={`vp__btn ${compressorOn ? "vp__btn--active" : ""}`}
+              onClick={() => setCompressorOn((value) => !value)}
+              title="Компрессор: выравнивает громкость (тихую речь слышно, крики не орут)"
+            >
+              <CompressorIcon size={18} />
+            </button>
 
             <div className="vp__time">
               {isLive ? <span className="vp__live-dot" /> : null}

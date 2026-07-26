@@ -368,6 +368,17 @@ export function SkipForward5Icon(props: IconProps) {
   );
 }
 
+export function CompressorIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M4 5h16" />
+      <path d="M4 19h16" />
+      <path d="M4 12h3l2-3 3 6 2-4 1 1h5" />
+    </svg>
+  );
+}
+
 export function VolumeHighIcon(props: IconProps) {
   const p = withDefaults(props);
   return (
