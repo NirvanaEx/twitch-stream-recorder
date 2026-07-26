@@ -12,6 +12,8 @@ import { RealtimeModule } from "./realtime/realtime.module";
 import { SettingsModule } from "./settings/settings.module";
 import { StorageModule } from "./storage/storage.module";
 import { TelegramModule } from "./telegram/telegram.module";
+import { KickModule } from "./kick/kick.module";
+import { PlatformsModule } from "./platforms/platforms.module";
 import { TwitchModule } from "./twitch/twitch.module";
 import { UsersModule } from "./users/users.module";
 
@@ -22,6 +24,8 @@ import { UsersModule } from "./users/users.module";
     AuthModule,
     UsersModule,
     TwitchModule,
+    KickModule,
+    PlatformsModule,
     ChatModule,
     RecordingModule,
     DashboardModule,

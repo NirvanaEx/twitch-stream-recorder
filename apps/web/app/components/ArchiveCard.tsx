@@ -4,6 +4,7 @@ import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
 import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "./IconButton";
+import { PlatformTag } from "./PlatformTag";
 import { DownloadIcon, HardDriveIcon, PlayIcon, SendIcon, TrashIcon } from "./icons";
 
 export type TelegramPart = {
@@ -17,6 +18,7 @@ export type ArchiveItem = {
   channelLogin: string;
   channelDisplayName: string;
   channelProfileImageUrl: string | null;
+  platform: "twitch" | "kick";
   title: string | null;
   categoryName: string | null;
   status: string;
@@ -189,7 +191,9 @@ export function ArchiveCard({
         </span>
 
         <span className="archive-card-meta">
-          <span>@{archive.channelLogin}</span>
+          <span>
+            <PlatformTag platform={archive.platform} />@{archive.channelLogin}
+          </span>
           {archive.categoryName ? <span>{archive.categoryName}</span> : null}
         </span>
 

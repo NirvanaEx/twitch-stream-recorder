@@ -122,6 +122,8 @@ type Dictionary = {
     addTitle: string;
     inputLabel: string;
     inputHint: string;
+    inputHintKick: string;
+    platformLabel: string;
     addButton: string;
     empty: string;
     liveSince: string;
@@ -508,6 +510,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       addTitle: "Добавить канал",
       inputLabel: "Ссылка или логин",
       inputHint: "Например: https://www.twitch.tv/skywhywalker или skywhywalker",
+      inputHintKick: "Например: https://kick.com/xqc или xqc",
+      platformLabel: "Платформа",
       addButton: "Добавить",
       empty: "Пока нет ни одного канала.",
       liveSince: "В эфире с",
@@ -909,6 +913,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       addTitle: "Add channel",
       inputLabel: "URL or login",
       inputHint: "Example: https://www.twitch.tv/skywhywalker or skywhywalker",
+      inputHintKick: "Example: https://kick.com/xqc or xqc",
+      platformLabel: "Platform",
       addButton: "Add",
       empty: "No channels yet.",
       liveSince: "Live since",

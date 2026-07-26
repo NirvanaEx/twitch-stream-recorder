@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { SAME_BROADCAST_TOLERANCE_MS } from "../public/vod-session-match";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
-import { TwitchService } from "../twitch/twitch.service";
+import { PlatformsService } from "../platforms/platforms.service";
 import { ChatService } from "../chat/chat.service";
 import { SevenTvService } from "../chat/seventv.service";
 import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
@@ -59,7 +59,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly twitchService: TwitchService,
+    private readonly platformsService: PlatformsService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly chatService: ChatService,
     private readonly sevenTvService: SevenTvService,
@@ -120,7 +120,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Channel ${channelId} was not found.`);
     }
 
-    const liveStream = await this.twitchService.getLiveStream({
+    const liveStream = await this.platformsService.getLiveStream(channel.platform, {
       userId: channel.twitchUserId,
       login: channel.twitchLogin,
     });
@@ -263,7 +263,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    const liveStream = await this.twitchService.getLiveStream({
+    const liveStream = await this.platformsService.getLiveStream(channel.platform, {
       userId: channel.twitchUserId,
       login: channel.twitchLogin,
     });
@@ -330,10 +330,14 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    // Twitch always exposes an audio_only HLS variant; recording it skips the
-    // video download entirely.
-    const quality = channel.audioOnly ? "audio_only" : channel.preferredQuality || "best";
-    const channelUrl = `https://www.twitch.tv/${channel.twitchLogin}`;
+    // Which HLS variant to pull depends on the platform: Twitch publishes a
+    // real audio_only rendition, Kick (Amazon IVS) does not — see
+    // PlatformsService.captureQuality.
+    const quality = this.platformsService.captureQuality(channel.platform, {
+      audioOnly: channel.audioOnly,
+      preferredQuality: channel.preferredQuality,
+    });
+    const channelUrl = this.platformsService.channelUrl(channel.platform, channel.twitchLogin);
 
     // Streamlink writes the live MPEG-TS directly to disk. We avoid stdin/stdout
     // pipes entirely (which are the typical source of EPIPE crashes on Windows)
@@ -379,19 +383,25 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.activeRecordings.set(channel.id, activeRecording);
     this.bindRecordingLifecycle(channel, session, activeRecording);
 
-    // Start chat capture in parallel. The anchor is "now" (when streamlink
-    // actually started writing video), NOT session.startedAt — Twitch reports
-    // the original go-live time, which can be hours before we joined the stream.
-    // We need chat relativeTime to align with the recorded video timeline.
-    void this.chatService.startCapture({
-      channelId: channel.id,
-      sessionId: session.id,
-      channelLogin: channel.twitchLogin,
-      captureAnchor: new Date(),
-    });
+    // Chat capture and the 7TV snapshot are Twitch-only: the chat client speaks
+    // Twitch IRC, and Kick delivers chat over a completely different transport.
+    // A Kick recording is still a full recording — it simply has no chat replay,
+    // which the session reports as "not_configured" rather than failing.
+    if (this.platformsService.resolvePlatform(channel.platform) === "twitch") {
+      // The anchor is "now" (when streamlink actually started writing video),
+      // NOT session.startedAt — Twitch reports the original go-live time, which
+      // can be hours before we joined the stream. We need chat relativeTime to
+      // align with the recorded video timeline.
+      void this.chatService.startCapture({
+        channelId: channel.id,
+        sessionId: session.id,
+        channelLogin: channel.twitchLogin,
+        captureAnchor: new Date(),
+      });
 
-    // Fetch a 7TV emote snapshot best-effort, in the background.
-    void this.captureEmoteSnapshot(session.id, channel.twitchUserId);
+      // Fetch a 7TV emote snapshot best-effort, in the background.
+      void this.captureEmoteSnapshot(session.id, channel.twitchUserId);
+    }
 
     await this.prisma.channel.update({
       where: { id: channel.id },
@@ -1475,7 +1485,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   private serializeSession(
     session: StreamSession & { telegramParts?: TelegramUploadPart[] },
-    channel: Pick<Channel, "displayName" | "twitchLogin" | "profileImageUrl">,
+    channel: Pick<Channel, "displayName" | "twitchLogin" | "profileImageUrl" | "platform">,
   ) {
     const playback = resolveSessionPlaybackState(session);
 
@@ -1504,6 +1514,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       channelLogin: channel.twitchLogin,
       channelDisplayName: channel.displayName ?? channel.twitchLogin,
       channelProfileImageUrl: channel.profileImageUrl,
+      platform: this.platformsService.resolvePlatform(channel.platform),
       title: session.title,
       categoryName: session.categoryName,
       status: session.status,

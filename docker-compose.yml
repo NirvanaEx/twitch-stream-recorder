@@ -68,6 +68,8 @@ services:
       SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-123}
       TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID}
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET}
+      KICK_CLIENT_ID: ${KICK_CLIENT_ID:-}
+      KICK_CLIENT_SECRET: ${KICK_CLIENT_SECRET:-}
       TWITCH_EVENTSUB_SECRET: ${TWITCH_EVENTSUB_SECRET}
       # Optional .env fallback for the Telegram storage credentials; they are
       # normally configured from the admin panel (Settings -> Telegram).

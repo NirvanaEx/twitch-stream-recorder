@@ -9,8 +9,13 @@ datasource db {
 
 model Channel {
   id               String    @id @default(cuid())
+  // "twitch" | "kick". The twitchUserId/twitchLogin columns hold the platform's
+  // own id and slug for both — they keep their original names because renaming
+  // a column through `prisma db push` drops its data, and the login of every
+  // tracked channel is not worth losing over cosmetics.
+  platform         String    @default("twitch")
   twitchUserId     String?
-  twitchLogin      String    @unique
+  twitchLogin      String
   displayName      String?
   profileImageUrl  String?
   isEnabled        Boolean   @default(true)
@@ -35,6 +40,9 @@ model Channel {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   streamSessions   StreamSession[]
+
+  // The same slug can exist on both platforms and mean different people.
+  @@unique([platform, twitchLogin])
 }
 
 model StreamSession {

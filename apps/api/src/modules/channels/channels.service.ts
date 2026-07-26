@@ -9,7 +9,7 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { RecordingService } from "../recording/recording.service";
 import { resolveSessionPlaybackState } from "../recording/playback.utils";
-import { TwitchService } from "../twitch/twitch.service";
+import { PlatformsService } from "../platforms/platforms.service";
 import { CreateChannelDto } from "./dto/create-channel.dto";
 import { UpdateChannelDto } from "./dto/update-channel.dto";
 
@@ -19,7 +19,7 @@ export class ChannelsService implements OnModuleInit {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly twitchService: TwitchService,
+    private readonly platformsService: PlatformsService,
     private readonly recordingService: RecordingService,
   ) {}
 
@@ -65,6 +65,7 @@ export class ChannelsService implements OnModuleInit {
 
         return {
           id: channel.id,
+          platform: channel.platform,
           twitchLogin: channel.twitchLogin,
           twitchUserId: channel.twitchUserId,
           displayName: channel.displayName,
@@ -99,23 +100,24 @@ export class ChannelsService implements OnModuleInit {
   }
 
   async createChannel(dto: CreateChannelDto) {
-    const user = await this.twitchService.resolveChannel(dto.channel);
+    const platform = this.platformsService.assertSupported(dto.platform);
+    const user = await this.platformsService.resolveChannel(platform, dto.channel);
 
     const existing = await this.prisma.channel.findUnique({
       where: {
-        twitchLogin: user.login,
+        platform_twitchLogin: { platform, twitchLogin: user.login },
       },
     });
 
     if (existing) {
-      throw new ConflictException("This Twitch channel is already in the list.");
+      throw new ConflictException("This channel is already in the list.");
     }
 
     let liveStream = null;
     let warning: string | null = null;
 
     try {
-      liveStream = await this.twitchService.getLiveStream({
+      liveStream = await this.platformsService.getLiveStream(platform, {
         userId: user.id,
         login: user.login,
       });
@@ -132,6 +134,7 @@ export class ChannelsService implements OnModuleInit {
 
     const channel = await this.prisma.channel.create({
       data: {
+        platform,
         twitchUserId: user.id,
         twitchLogin: user.login,
         displayName: user.displayName ?? user.login,
