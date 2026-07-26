@@ -1191,7 +1191,8 @@ textarea {
 
 /* Phones: hardware buttons control volume; the slider only wastes space. */
 @media (max-width: 720px) {
-  .vp__volume-slider {
+  .vp__volume-slider,
+  .vp__volume-pct {
     display: none;
   }
 }
@@ -1674,6 +1675,10 @@ textarea {
   outline: none;
   cursor: pointer;
   margin: 0;
+  /* Collapsed for real: without this the 12px thumb kept rendering next to
+     the icon as a lone white dot even though the track had zero width. */
+  opacity: 0;
+  visibility: hidden;
   background: rgba(255, 255, 255, 0.3);
   transition: width 0.2s, max-width 0.2s, margin 0.2s;
   vertical-align: middle;
@@ -1684,6 +1689,30 @@ textarea {
   width: 80px;
   max-width: 80px;
   margin: 0 8px 0 4px;
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Numeric loudness readout. Hidden until the group is hovered — except when
+   boosted past 100%, where it stays visible as a reminder that gain is on. */
+.vp__volume-pct {
+  display: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.vp__volume:hover .vp__volume-pct,
+.vp__volume:focus-within .vp__volume-pct,
+.vp__volume-pct--boost {
+  display: inline;
+}
+
+.vp__volume-pct--boost {
+  color: var(--warn, #fbbf24);
+  opacity: 1;
 }
 
 .vp__volume-slider::-webkit-slider-thumb {
