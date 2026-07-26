@@ -31,6 +31,13 @@ export type ChatMessage = {
   relativeTimeSec: number;
   messageTimestamp: string;
   isDeleted: boolean;
+  /**
+   * When the deletion happened, on the same timeline as relativeTimeSec — so
+   * the replay can strike the message at the moment chat saw it vanish
+   * instead of from the very start. Null on rows recorded before this was
+   * exposed, which fall back to "deleted from the beginning".
+   */
+  deletedAtSec?: number | null;
   /** Timeout seconds behind the deletion; 0 = permanent ban; null = plain delete. */
   banDurationSec?: number | null;
   /** The author's first message ever in this channel (Twitch first-msg tag). */
@@ -276,6 +283,21 @@ export function messageRoles(message: ChatMessage): ChatRole[] {
     if (role) roles.add(role);
   }
   return [...roles];
+}
+
+/**
+ * Whether the viewer should see this message as deleted *yet*.
+ *
+ * A ban wipes the author's whole backlog at once, so messages sent long
+ * before it are flagged deleted too. Showing them struck through from the
+ * start would rewrite history — during the stream they read as normal until
+ * the ban landed. `chatTimeSec` is the point the player has reached, on the
+ * chat timeline.
+ */
+export function isVisiblyDeleted(message: ChatMessage, chatTimeSec: number) {
+  if (!message.isDeleted) return false;
+  if (message.deletedAtSec == null) return true;
+  return chatTimeSec >= message.deletedAtSec;
 }
 
 export function formatRenderTime(totalSeconds: number) {

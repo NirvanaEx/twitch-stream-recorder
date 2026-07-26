@@ -11,7 +11,12 @@ import {
 import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { RequirePermissions } from "../auth/auth.decorators";
-import { extractChatRoles, extractInlineEmotes } from "../chat/chat-roles.utils";
+import {
+  deletionOffsetSec,
+  extractChatRoles,
+  extractInlineEmotes,
+  resolveCaptureAnchorMs,
+} from "../chat/chat-roles.utils";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import type { EmoteSnapshotPayload } from "../chat/seventv.service";
@@ -98,6 +103,8 @@ export class ArchivesController {
       }),
     ]);
 
+    const anchorMs = resolveCaptureAnchorMs(messages);
+
     return {
       messages: messages.map((message) => ({
         id: message.id,
@@ -112,6 +119,7 @@ export class ArchivesController {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
@@ -152,6 +160,8 @@ export class ArchivesController {
       }),
     ]);
 
+    const anchorMs = resolveCaptureAnchorMs(messages);
+
     const bundle = {
       version: 1,
       kind: "tsr-archive-bundle",
@@ -178,6 +188,7 @@ export class ArchivesController {
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
+        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
