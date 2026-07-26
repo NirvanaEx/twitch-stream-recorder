@@ -401,6 +401,13 @@ export class ChatService {
           authorDisplayName: parsed.tags["display-name"] ?? parsed.prefixNick ?? null,
           authorColor: parsed.tags["color"] || null,
           badgesJson: parsed.tags["badges"] ? JSON.stringify(parsed.tags["badges"]) : null,
+          // The badges tag says someone bet on "blue-1"; only badge-info says
+          // what blue-1 was — "predictions/PETERBOT POLLO". Without it the
+          // replay can colour the chip but never label it, and the label is
+          // the whole point of showing what a person backed.
+          badgeInfoJson: parsed.tags["badge-info"]
+            ? JSON.stringify(parsed.tags["badge-info"])
+            : null,
           textRaw: text,
           emotesJson: parsed.tags["emotes"] ? JSON.stringify(parsed.tags["emotes"]) : null,
           messageTimestamp,

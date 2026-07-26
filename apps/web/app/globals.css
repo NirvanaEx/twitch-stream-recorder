@@ -2745,6 +2745,164 @@ textarea {
   opacity: 0.6;
 }
 
+/* ---------- Predictions and polls ----------
+   Sits between the metadata strip and the messages, where Twitch puts its own
+   card: above the chat, pushing it down, rather than floating over it. */
+.stream-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 6px;
+}
+
+.stream-event {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.stream-event--locked {
+  border-color: var(--warn);
+}
+
+.stream-event--ended {
+  opacity: 0.9;
+}
+
+.stream-event__head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.stream-event__kind {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent, #7c5cff);
+  color: #fff;
+}
+
+.stream-event__kind--poll {
+  background: #14b8a6;
+}
+
+.stream-event__title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  /* Titles are free text and routinely long; wrap rather than scroll the
+     panel sideways. */
+  overflow-wrap: anywhere;
+}
+
+.stream-event__status {
+  flex: none;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stream-event--locked .stream-event__status {
+  color: var(--warn);
+}
+
+.stream-event__outcomes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.stream-event__outcome {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+/* The bar itself, behind the text — the numbers must stay readable whatever
+   the fill width is. */
+.stream-event__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  opacity: 0.35;
+  transition: width 0.4s ease;
+}
+
+.stream-event__outcome.is-won .stream-event__fill {
+  opacity: 0.55;
+}
+
+.stream-event__outcome.is-lost {
+  opacity: 0.45;
+}
+
+.stream-event__label {
+  position: relative;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.stream-event__crown {
+  margin-right: 4px;
+}
+
+.stream-event__numbers {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stream-event__share {
+  font-weight: 600;
+}
+
+.stream-event__count,
+.stream-event__ratio {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.stream-event__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* The "bet on X" chip before a nick. Capped in width: an outcome title can be
+   a whole sentence, and it must not push the message text off the row. */
+.chat-bet {
+  display: inline-block;
+  max-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: baseline;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #fff;
+}
+
 /* ---------- Per-user history card ----------
    Docked inside the chat panel rather than beside it: the column is ~340px on
    desktop and narrower on mobile, so there is no room for a second one. */

@@ -28,11 +28,13 @@ import {
   type EmoteEntry,
   type EmotePayload,
 } from "../lib/chat-render";
+import { betColor } from "../lib/stream-events";
 import { useLanguage } from "../providers";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { ChatText } from "./ChatText";
 import { ChatUserCard } from "./ChatUserCard";
 import { SettingsIcon } from "./icons";
+import { StreamEventCard } from "./StreamEventCard";
 import { StreamMetaStrip } from "./StreamMetaStrip";
 
 type ChatReplayProps = {
@@ -49,6 +51,11 @@ type ChatReplayProps = {
    * the strip — an offline bundle carries no such data.
    */
   timelineUrl?: string;
+  /**
+   * API path for the broadcast's predictions and polls. Omit to hide the
+   * cards — an offline bundle carries no such data.
+   */
+  eventsUrl?: string;
   staticData?: ChatResponse;
   // Audio-only archives play through an <audio> element, so only the shared
   // HTMLMediaElement surface (currentTime / timeupdate) may be used here.
@@ -71,6 +78,7 @@ export function ChatReplay({
   chatUrl,
   liveEmotesUrl,
   timelineUrl,
+  eventsUrl,
   staticData,
   videoElement,
   isLive,
@@ -422,6 +430,15 @@ export function ChatReplay({
         locale={locale}
       />
 
+      {prefs.showEvents ? (
+        <StreamEventCard
+          eventsUrl={eventsUrl}
+          chatTimeSec={userThreshold}
+          copy={copy}
+          locale={locale}
+        />
+      ) : null}
+
       <div className="chat-list-wrap" ref={setWrapEl}>
         <div ref={listRef} className="chat-list thin-scroll" onScroll={handleScroll}>
           {loading ? (
@@ -444,6 +461,7 @@ export function ChatReplay({
                 readableColors={prefs.readableColors}
                 highlightRoles={highlightRoles}
                 highlightFirstMessage={prefs.highlightFirstMessage}
+                showBets={prefs.showBets}
                 keywords={keywords}
                 selfNames={selfNames}
                 isActiveUser={activeUser === entry.message.authorLogin}
@@ -492,6 +510,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   readableColors,
   highlightRoles,
   highlightFirstMessage,
+  showBets,
   keywords,
   selfNames,
   isActiveUser,
@@ -508,6 +527,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   readableColors: boolean;
   highlightRoles: Set<ChatRole>;
   highlightFirstMessage: boolean;
+  /** Show the "bet on X" chip before the nick. */
+  showBets: boolean;
   keywords: string[];
   selfNames: Set<string>;
   isActiveUser: boolean;
@@ -542,6 +563,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   // chip appears together with the strike, not before it.
   const ban = deleted ? message.banDurationSec ?? null : null;
   const color = readableColors ? readableAuthorColor(message.authorColor) : message.authorColor;
+  const bet = showBets ? message.predictionBet ?? null : null;
 
   return (
     <div className={className}>
@@ -555,6 +577,17 @@ const ChatMessageRow = memo(function ChatMessageRow({
               {ROLE_LABELS[entry].badge}
             </span>
           ))}
+        </span>
+      ) : null}
+      {bet ? (
+        // Right where Twitch puts it: a coloured chip before the nick, so you
+        // can read a bet-heavy chat and see who backed what at a glance.
+        <span
+          className="chat-bet"
+          style={{ background: betColor(bet.badgeVersion) }}
+          title={bet.outcomeTitle ? `${copy.eventBetOn}: ${bet.outcomeTitle}` : copy.eventPrediction}
+        >
+          {bet.outcomeTitle ?? "•"}
         </span>
       ) : null}
       <button

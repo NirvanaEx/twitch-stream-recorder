@@ -95,6 +95,62 @@ export function extractChatRoles(badgesJson: string | null | undefined): ChatRol
   return ROLE_ORDER.filter((role) => roles.has(role));
 }
 
+export type PredictionBet = {
+  /** "blue-1" — which outcome slot, and therefore which colour. */
+  badgeVersion: string;
+  /** The outcome as it was written, e.g. "PETERBOT POLLO". */
+  outcomeTitle: string | null;
+};
+
+/**
+ * What this author bet on, if anything.
+ *
+ * Twitch puts the bet in the chat line itself, split across two tags: `badges`
+ * carries `predictions/blue-1` (the slot) and `badge-info` carries
+ * `predictions/PETERBOT POLLO` (the label). Neither is useful alone — the slot
+ * has no meaning without the label, and the label has no colour without the
+ * slot — so they are read together and handed to the UI as one thing.
+ *
+ * This is deliberately independent of the recorded prediction event: it works
+ * even when the prediction opened before the recorder attached, or when the
+ * PubSub capture was down. Messages captured before badge-info was stored
+ * simply have no label, and the UI falls back to the colour alone.
+ */
+export function extractPredictionBet(
+  badgesJson: string | null | undefined,
+  badgeInfoJson: string | null | undefined,
+): PredictionBet | null {
+  const badges = badgesJson ? parseStoredJson<string | KickBadges>(badgesJson) : null;
+
+  // Kick has no predictions, and its badges parse to an object — bail on both.
+  if (typeof badges !== "string") return null;
+
+  const badgeVersion = findTagValue(badges, "predictions");
+  if (!badgeVersion) return null;
+
+  const info = badgeInfoJson ? parseStoredJson<string>(badgeInfoJson) : null;
+  const outcomeTitle = typeof info === "string" ? findTagValue(info, "predictions") : null;
+
+  return { badgeVersion, outcomeTitle };
+}
+
+/**
+ * The value of one badge in an IRC badge list.
+ *
+ * Only the FIRST slash is a separator: outcome titles routinely contain one
+ * ("HIGGS/CURVE"), and splitting on every slash would truncate them.
+ */
+function findTagValue(list: string, key: string): string | null {
+  for (const entry of list.split(",")) {
+    const slash = entry.indexOf("/");
+    if (slash === -1) continue;
+    if (entry.slice(0, slash) !== key) continue;
+    const value = entry.slice(slash + 1).trim();
+    if (value) return value;
+  }
+  return null;
+}
+
 /**
  * When a deletion happened, on the same timeline as relativeTimeSec.
  *

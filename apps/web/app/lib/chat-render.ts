@@ -28,6 +28,8 @@ export type ChatMessage = {
    * without these the message reads as plain words.
    */
   inlineEmotes?: InlineEmote[] | null;
+  /** Set only on Twitch messages sent while a prediction was open. */
+  predictionBet?: { badgeVersion: string; outcomeTitle: string | null } | null;
   relativeTimeSec: number;
   messageTimestamp: string;
   isDeleted: boolean;

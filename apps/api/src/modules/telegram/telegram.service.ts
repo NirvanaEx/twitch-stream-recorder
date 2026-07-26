@@ -15,6 +15,7 @@ import {
   deletionOffsetSec,
   extractChatRoles,
   extractInlineEmotes,
+  extractPredictionBet,
   resolveCaptureAnchorMs,
 } from "../chat/chat-roles.utils";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
@@ -656,6 +657,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         roles: extractChatRoles(message.badgesJson),
         emotes: parseStoredJsonString(message.emotesJson),
         inlineEmotes: extractInlineEmotes(message.emotesJson),
+        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
         relativeTimeSec: message.relativeTimeSec,
         messageTimestamp: message.messageTimestamp.toISOString(),
         isDeleted: message.isDeleted,
