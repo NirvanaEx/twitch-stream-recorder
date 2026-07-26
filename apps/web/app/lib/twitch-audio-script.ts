@@ -2676,7 +2676,15 @@ export function buildTwitchAudioPayload(origin: string): string {
       var snap = payload.emotes && payload.emotes.emotes;
       if (snap && snap.length) {
         for (var e = 0; e < snap.length; e++) {
-          if (snap[e] && snap[e].name && snap[e].url) chatEmoteMap[snap[e].name] = snap[e].url;
+          if (!snap[e] || !snap[e].name) continue;
+          // Prefer our mirrored copy — it outlives an emote being deleted from
+          // 7TV. localUrl is API-relative, and this page is twitch.tv, so it
+          // has to be anchored to the panel origin. Snapshots taken before the
+          // mirror have only the CDN url.
+          var emoteSrc = snap[e].localUrl
+            ? SERVER + '/api/' + String(snap[e].localUrl).replace(/^\\/+/, '')
+            : snap[e].url;
+          if (emoteSrc) chatEmoteMap[snap[e].name] = emoteSrc;
         }
       }
       var msgs = payload.messages || [];

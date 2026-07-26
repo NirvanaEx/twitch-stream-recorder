@@ -16,7 +16,8 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { KickChatService } from "../kick/kick-chat.service";
 import { PlatformsService } from "../platforms/platforms.service";
 import { ChatService } from "../chat/chat.service";
-import { SevenTvService } from "../chat/seventv.service";
+import { EmoteMirrorService } from "../chat/emote-mirror.service";
+import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
 import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
@@ -65,6 +66,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly chatService: ChatService,
     private readonly sevenTvService: SevenTvService,
+    private readonly emoteMirrorService: EmoteMirrorService,
     private readonly telegramService: TelegramService,
   ) {}
 
@@ -387,9 +389,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.bindRecordingLifecycle(channel, session, activeRecording);
 
     // Both platforms capture chat, but over different transports: Twitch over
-    // IRC, Kick over Pusher. The 7TV emote snapshot stays Twitch-only — it is
-    // keyed by Twitch user id.
-    if (this.platformsService.resolvePlatform(channel.platform) === "kick") {
+    // IRC, Kick over Pusher.
+    const chatPlatform = this.platformsService.resolvePlatform(channel.platform);
+
+    if (chatPlatform === "kick") {
       void this.kickChatService.startCapture({
         channelId: channel.id,
         sessionId: session.id,
@@ -407,10 +410,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         channelLogin: channel.twitchLogin,
         captureAnchor: new Date(),
       });
-
-      // Fetch a 7TV emote snapshot best-effort, in the background.
-      void this.captureEmoteSnapshot(session.id, channel.twitchUserId);
     }
+
+    // 7TV serves Kick too — the same v3 endpoint, keyed by the platform's own
+    // user id, which twitchUserId holds for both. Best-effort, in background.
+    void this.captureEmoteSnapshot(session.id, chatPlatform, channel.twitchUserId);
 
     await this.prisma.channel.update({
       where: { id: channel.id },
@@ -960,7 +964,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   private ensureDataLayout() {
     const dataRoot = resolve(process.env.DATA_DIR ?? "./data");
 
-    for (const dir of ["records", "hls", "chat", "logs", "tmp"]) {
+    for (const dir of ["records", "hls", "chat", "logs", "tmp", "emotes"]) {
       mkdirSync(join(dataRoot, dir), { recursive: true });
     }
   }
@@ -1366,32 +1370,43 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     return { command: "ffmpeg", args: [] };
   }
 
-  private async captureEmoteSnapshot(sessionId: string, twitchUserId: string | null) {
+  private async captureEmoteSnapshot(
+    sessionId: string,
+    platform: EmotePlatform,
+    platformUserId: string | null,
+  ) {
     try {
       const settings = await this.prisma.appSettings.findUnique({ where: { id: "default" } });
       if (settings?.support7tv === false || settings?.recordChat === false) return;
 
-      const snapshot = await this.sevenTvService.fetchSnapshot(twitchUserId);
+      const snapshot = await this.sevenTvService.fetchSnapshot(platform, platformUserId);
 
       if (!snapshot) {
         return;
       }
 
+      // Mirror the images before storing, so the snapshot points at copies we
+      // own. Entries whose download failed keep only the CDN url.
+      const { entries, downloaded } = await this.emoteMirrorService.mirror(snapshot.emotes);
+      const stored = { ...snapshot, emotes: entries };
+
       await this.prisma.emoteSnapshot.upsert({
         where: { streamSessionId: sessionId },
         create: {
           streamSessionId: sessionId,
-          provider: snapshot.provider,
-          payloadJson: JSON.stringify(snapshot),
+          provider: stored.provider,
+          payloadJson: JSON.stringify(stored),
         },
         update: {
-          provider: snapshot.provider,
-          payloadJson: JSON.stringify(snapshot),
+          provider: stored.provider,
+          payloadJson: JSON.stringify(stored),
         },
       });
 
+      const mirrored = entries.filter((entry) => entry.localUrl).length;
       this.logger.log(
-        `Saved 7TV snapshot for session ${sessionId} (${snapshot.emotes.length} emotes).`,
+        `Saved 7TV (${platform}) snapshot for session ${sessionId}: ${stored.emotes.length} emotes, ` +
+          `${mirrored} mirrored locally (${downloaded} newly downloaded).`,
       );
     } catch (error) {
       this.logger.warn(

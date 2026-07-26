@@ -11,6 +11,8 @@ import {
 import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { RequirePermissions } from "../auth/auth.decorators";
+import { EmoteMirrorService } from "../chat/emote-mirror.service";
+import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
@@ -30,6 +32,7 @@ export class ArchivesController {
     private readonly prisma: PrismaService,
     private readonly telegramStreamService: TelegramStreamService,
     private readonly thumbnailService: ThumbnailService,
+    private readonly emoteMirrorService: EmoteMirrorService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -161,7 +164,13 @@ export class ArchivesController {
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
-      emotes: parseStoredJson(snapshot?.payloadJson),
+      // Self-contained on purpose: the images of the emotes this chat actually
+      // uses travel inside the file as data URIs, so the offline replay keeps
+      // working with no network and after 7TV has dropped the emote.
+      emotes: this.emoteMirrorService.buildBundleSnapshot(
+        parseStoredJson(snapshot?.payloadJson) as EmoteSnapshotPayload | null,
+        messages.map((message) => message.textRaw),
+      ),
     };
 
     const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");

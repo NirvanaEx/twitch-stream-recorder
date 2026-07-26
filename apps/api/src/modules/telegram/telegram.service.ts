@@ -11,6 +11,8 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
+import { EmoteMirrorService } from "../chat/emote-mirror.service";
+import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import { computeSessionChatOffsetSec } from "../recording/playback.utils";
@@ -72,6 +74,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly telegramClientService: TelegramClientService,
     private readonly telegramStreamService: TelegramStreamService,
+    private readonly emoteMirrorService: EmoteMirrorService,
   ) {}
 
   async onModuleInit() {
@@ -649,7 +652,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         banDurationSec: message.banDurationSec,
         isFirstMessage: message.isFirstMessage,
       })),
-      emotes: parseStoredJson(snapshot?.payloadJson),
+      // Same self-contained shape as the admin download: the used emotes are
+      // inlined, so the archived copy stays viewable even if 7TV loses them.
+      emotes: this.emoteMirrorService.buildBundleSnapshot(
+        parseStoredJson(snapshot?.payloadJson) as EmoteSnapshotPayload | null,
+        messages.map((message) => message.textRaw),
+      ),
     };
 
     const tempDir = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram");
