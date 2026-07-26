@@ -1173,6 +1173,99 @@ textarea {
   font-style: italic;
 }
 
+/* ---- Audio-only recordings ----
+   An audio archive has no picture, so the player must not pretend to be a
+   video stage: no 16:9 black box, no theater / fullscreen, no letterboxing to
+   the viewport height. It renders as a compact cover strip (avatar + the same
+   waveform the archive card draws) with the usual transport controls under
+   it. The selectors repeat the stage prefixes because .replay-stage--fit and
+   theater mode stretch ".vp" with a higher specificity. */
+.vp--audio,
+.replay-stage--fit.replay-stage--normal .vp--audio,
+.replay-stage--theater .vp--audio {
+  aspect-ratio: auto;
+  height: auto;
+  max-height: none;
+  align-self: start;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #1a1725 0%, #10131a 55%, #121a17 100%);
+}
+
+.vp__audio-stage {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 168px;
+  /* Leave the bottom free for the controls dock, which floats over it. */
+  padding: 0 20px 46px;
+  cursor: pointer;
+}
+
+.vp__audio-media {
+  display: none;
+}
+
+.vp__audio-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-strong);
+  flex: none;
+}
+
+.vp__audio-glyph {
+  font-size: 40px;
+  line-height: 1;
+  flex: none;
+}
+
+.vp__audio-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1;
+  height: 64px;
+  overflow: hidden;
+}
+
+.vp__audio-wave i {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.vp--audio.vp--playing .vp__audio-wave i {
+  animation: vp-wave 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes vp-wave {
+  from { transform: scaleY(0.4); opacity: 0.35; }
+  to { transform: scaleY(1); opacity: 0.85; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vp--audio.vp--playing .vp__audio-wave i {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .vp__audio-stage {
+    height: 132px;
+    gap: 12px;
+    padding: 0 12px 46px;
+  }
+
+  .vp__audio-avatar {
+    width: 48px;
+    height: 48px;
+  }
+}
+
 /* Top bar (theater / fullscreen) */
 .vp__top-bar {
   position: absolute;
@@ -1451,6 +1544,15 @@ textarea {
   line-height: 1;
   padding-bottom: 2px;
   white-space: nowrap;
+}
+
+/* Audio has no frame to preview — the tooltip shrinks to the timestamp. */
+.vp__scrub-preview--time {
+  padding: 3px 7px;
+}
+
+.vp__scrub-preview--time .vp__scrub-time {
+  padding-bottom: 0;
 }
 
 /* Bottom bar */

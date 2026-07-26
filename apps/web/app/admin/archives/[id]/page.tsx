@@ -51,6 +51,8 @@ type ArchiveDetailResponse = {
     fileSizeBytes: string | null;
     videoReady: boolean;
     videoSource: "local" | "telegram" | null;
+    audioOnly: boolean;
+    channelProfileImageUrl: string | null;
     chatAvailable: boolean;
     chatOffsetSec: number;
     telegramStatus: string;
@@ -89,7 +91,7 @@ export default function ArchiveReplayPage() {
   const [busyDelete, setBusyDelete] = useState(false);
   const [chatVisible, setChatVisible] = useState<boolean>(true);
   const [mode, setMode] = useState<PlayerMode>("normal");
-  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const [videoElement, setVideoElement] = useState<HTMLMediaElement | null>(null);
   // 1-based index of the Telegram part being played (split recordings only).
   const [currentPart, setCurrentPart] = useState(1);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
@@ -437,6 +439,8 @@ export default function ArchiveReplayPage() {
                 playlist={playlist ?? undefined}
                 initialSegment={initialSegmentRef.current}
                 onSegmentChange={handleSegmentChange}
+                audioOnly={data.item.audioOnly}
+                artworkUrl={data.item.channelProfileImageUrl}
                 mode={mode}
                 onModeChange={setMode}
                 chatVisible={chatVisible}

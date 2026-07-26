@@ -41,7 +41,9 @@ type ChatReplayProps = {
   /** Override the API path used to load chat (e.g. the public endpoint). */
   chatUrl?: string;
   staticData?: ChatResponse;
-  videoElement: HTMLVideoElement | null;
+  // Audio-only archives play through an <audio> element, so only the shared
+  // HTMLMediaElement surface (currentTime / timeupdate) may be used here.
+  videoElement: HTMLMediaElement | null;
   isLive: boolean;
   defaultOffsetSec?: number;
   /**
