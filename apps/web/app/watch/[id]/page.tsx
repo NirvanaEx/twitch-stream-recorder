@@ -38,6 +38,9 @@ type PublicStreamDetail = {
   audioOnly: boolean;
   chatOffsetSec: number;
   telegramParts: PublicTelegramPart[];
+  /** Wall-clock moment of the video's first frame. */
+  mediaStartedAt: string | null;
+  durationSec: number | null;
 };
 
 // Shared with the admin replay page: chat is ON by default, the in-player
@@ -443,6 +446,9 @@ export default function PublicWatchPage({
               onChatToggle={() => setChatVisible((value) => !value)}
               onVideoElement={setVideoElement}
               title={mode !== "normal" ? playerTitle : undefined}
+              timelineStartAt={
+                data.mediaStartedAt ? new Date(data.mediaStartedAt).getTime() : null
+              }
             />
           </div>
         </div>

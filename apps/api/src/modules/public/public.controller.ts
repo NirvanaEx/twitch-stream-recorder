@@ -21,6 +21,7 @@ import {
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
+import { ThumbnailService } from "../recording/thumbnail.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 import {
   annotateBroadcastParts,
@@ -55,6 +56,7 @@ export class PublicStreamsController {
     private readonly prisma: PrismaService,
     private readonly recordingService: RecordingService,
     private readonly telegramStreamService: TelegramStreamService,
+    private readonly thumbnailService: ThumbnailService,
   ) {}
 
   @Get()
@@ -116,11 +118,12 @@ export class PublicStreamsController {
             profileImageUrl: session.channel.profileImageUrl,
           },
           previewImageUrl: session.previewImageUrl,
-          // Frame from the recording itself; Twitch's preview 404s after the
-          // broadcast ends, so the list used to show broken covers.
-          thumbnailUrl: session.thumbnailPath
-            ? `/api/public/streams/${session.id}/thumbnail`
-            : null,
+          // Frame rendered from the recording itself on demand; Twitch's
+          // preview 404s after the broadcast ends, so the list used to show
+          // broken covers.
+          thumbnailUrl: session.audioOnly
+            ? null
+            : `/api/public/streams/${session.id}/thumbnail`,
           startedAt: session.startedAt?.toISOString() ?? null,
           endedAt: session.endedAt?.toISOString() ?? null,
           fileSizeBytes: playback.fileSizeBytes,
@@ -392,39 +395,33 @@ export class PublicStreamsController {
     };
   }
 
-  /** Cover frame of a recording (see the admin twin for why it exists). */
+  /** Cover frame of a recording, rendered on demand (see the admin twin). */
   @Get(":id/thumbnail")
   async streamThumbnail(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      select: { thumbnailPath: true, videoStatus: true },
+      select: { videoStatus: true },
     });
 
-    if (!session?.thumbnailPath || session.videoStatus !== "ready") {
+    if (session?.videoStatus !== "ready") {
       throw new NotFoundException("Обложка не найдена.");
     }
 
-    const absolutePath = resolve(session.thumbnailPath);
+    const cover = await this.thumbnailService.getCover(id);
 
-    if (!existsSync(absolutePath)) {
-      throw new NotFoundException("Обложка не найдена.");
-    }
-
-    const stat = statSync(absolutePath);
-    const cache = buildMediaCacheHeaders(stat, 86_400);
-
-    if (req.headers["if-none-match"] === cache.etag) {
-      res.writeHead(304, cache.headers);
+    if (req.headers["if-none-match"] === cover.etag) {
+      res.writeHead(304, { ETag: cover.etag, "Cache-Control": "public, max-age=86400" });
       res.end();
       return;
     }
 
     res.writeHead(200, {
-      "Content-Length": stat.size,
+      "Content-Length": cover.buffer.length,
       "Content-Type": "image/jpeg",
-      ...cache.headers,
+      ETag: cover.etag,
+      "Cache-Control": "public, max-age=86400",
     });
-    createReadStream(absolutePath).pipe(res);
+    res.end(cover.buffer);
   }
 
   @Get(":id/audio")
@@ -539,11 +536,21 @@ export class PublicStreamsController {
           profileImageUrl: session.channel.profileImageUrl,
         },
         previewImageUrl: session.previewImageUrl,
-        thumbnailUrl: session.thumbnailPath
-          ? `/api/public/streams/${session.id}/thumbnail`
-          : null,
+        thumbnailUrl: session.audioOnly
+          ? null
+          : `/api/public/streams/${session.id}/thumbnail`,
         startedAt: session.startedAt?.toISOString() ?? null,
         endedAt: session.endedAt?.toISOString() ?? null,
+        // Real-world moment of the video's first frame (capture end minus the
+        // probed length); positions on the timeline map to wall-clock time by
+        // simple addition.
+        mediaStartedAt:
+          session.captureEndedAt && session.durationSec
+            ? new Date(
+                session.captureEndedAt.getTime() - session.durationSec * 1000,
+              ).toISOString()
+            : session.createdAt.toISOString(),
+        durationSec: session.durationSec,
         fileSizeBytes: playback.fileSizeBytes,
         // Public clients hit the public video endpoint — never the admin one.
         videoUrl: `/api/public/streams/${session.id}/video`,

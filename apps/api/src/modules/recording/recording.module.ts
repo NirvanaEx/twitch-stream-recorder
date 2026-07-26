@@ -6,11 +6,12 @@ import { TelegramModule } from "../telegram/telegram.module";
 import { PlatformsModule } from "../platforms/platforms.module";
 import { RecordingController } from "./recording.controller";
 import { RecordingService } from "./recording.service";
+import { ThumbnailService } from "./thumbnail.service";
 
 @Module({
   imports: [PlatformsModule, SettingsModule, RealtimeModule, ChatModule, TelegramModule],
   controllers: [RecordingController],
-  providers: [RecordingService],
-  exports: [RecordingService],
+  providers: [RecordingService, ThumbnailService],
+  exports: [RecordingService, ThumbnailService],
 })
 export class RecordingModule {}

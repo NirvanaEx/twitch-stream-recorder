@@ -19,6 +19,7 @@ import {
   parseMediaRange,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
+import { ThumbnailService } from "../recording/thumbnail.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
 @RequirePermissions("view_archives")
@@ -28,6 +29,7 @@ export class ArchivesController {
     private readonly recordingService: RecordingService,
     private readonly prisma: PrismaService,
     private readonly telegramStreamService: TelegramStreamService,
+    private readonly thumbnailService: ThumbnailService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -40,41 +42,27 @@ export class ArchivesController {
   }
 
   /**
-   * Cover frame grabbed from the recording. Served from disk because Twitch's
-   * own preview URL stops resolving once the broadcast ends.
+   * Cover frame rendered on demand from the recording itself (local file or
+   * the Telegram copy) — nothing is stored on disk. Twitch's own preview URL
+   * stops resolving once the broadcast ends, hence a cover of our own.
    */
   @Get(":id/thumbnail")
   async getThumbnail(@Param("id") id: string, @Req() req: any, @Res() res: any) {
-    const session = await this.prisma.streamSession.findUnique({
-      where: { id },
-      select: { thumbnailPath: true },
-    });
+    const cover = await this.thumbnailService.getCover(id);
 
-    if (!session?.thumbnailPath) {
-      throw new NotFoundException("Обложка для этой записи не найдена.");
-    }
-
-    const absolutePath = resolve(session.thumbnailPath);
-
-    if (!existsSync(absolutePath)) {
-      throw new NotFoundException("Файл обложки отсутствует на диске.");
-    }
-
-    const stat = statSync(absolutePath);
-    const cache = buildMediaCacheHeaders(stat, 86_400);
-
-    if (req.headers["if-none-match"] === cache.etag) {
-      res.writeHead(304, cache.headers);
+    if (req.headers["if-none-match"] === cover.etag) {
+      res.writeHead(304, { ETag: cover.etag, "Cache-Control": "private, max-age=86400" });
       res.end();
       return;
     }
 
     res.writeHead(200, {
-      "Content-Length": stat.size,
+      "Content-Length": cover.buffer.length,
       "Content-Type": "image/jpeg",
-      ...cache.headers,
+      ETag: cover.etag,
+      "Cache-Control": "private, max-age=86400",
     });
-    createReadStream(absolutePath).pipe(res);
+    res.end(cover.buffer);
   }
 
   @Get(":id/stream-stats")

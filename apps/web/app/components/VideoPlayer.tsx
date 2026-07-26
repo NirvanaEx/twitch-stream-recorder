@@ -62,6 +62,12 @@ type VideoPlayerProps = {
   initialSegment?: number;
   /** Notified with the 1-based segment index whenever the active segment changes. */
   onSegmentChange?: (segment: number) => void;
+  /**
+   * Wall-clock moment (epoch ms) of the timeline's zero second. When set, the
+   * scrub tooltip and the control bar also show the real-world time of the
+   * hovered / current position — "this part of the video happened at 21:03".
+   */
+  timelineStartAt?: number | null;
 };
 
 const SKIP_SECONDS = 5;
@@ -103,6 +109,7 @@ export function VideoPlayer({
   playlist,
   initialSegment,
   onSegmentChange,
+  timelineStartAt,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLMediaElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -974,6 +981,11 @@ export function VideoPlayer({
               )}
               <span className="vp__scrub-time">
                 {scrubPreview ? formatTime(scrubPreview.time) : ""}
+                {scrubPreview && timelineStartAt ? (
+                  <span className="vp__scrub-clock">
+                    {formatClock(timelineStartAt + scrubPreview.time * 1000)}
+                  </span>
+                ) : null}
               </span>
             </div>
             <div className="vp__progress-thumb" style={{ left: `${progressPct}%` }} />
@@ -1049,6 +1061,14 @@ export function VideoPlayer({
                   <span className="vp__time-sep">/</span>
                   <span>{formatTime(duration)}</span>
                 </>
+              ) : null}
+              {timelineStartAt ? (
+                <span
+                  className="vp__time-clock"
+                  title="Реальное время этого момента записи"
+                >
+                  {formatClock(timelineStartAt + currentTime * 1000)}
+                </span>
               ) : null}
             </div>
 
@@ -1140,6 +1160,16 @@ function describeMediaError(error: MediaError | null, audioOnly = false) {
     default:
       return `Не удалось воспроизвести ${what}.`;
   }
+}
+
+/** Wall-clock HH:MM:SS in the viewer's local time zone. */
+function formatClock(epochMs: number) {
+  const date = new Date(epochMs);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(
+    2,
+    "0",
+  )}:${String(date.getSeconds()).padStart(2, "0")}`;
 }
 
 function formatTime(seconds: number) {

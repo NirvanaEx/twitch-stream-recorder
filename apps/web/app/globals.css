@@ -1597,6 +1597,14 @@ textarea {
   white-space: nowrap;
 }
 
+/* Wall-clock time of the hovered position, under the video-relative one. */
+.vp__scrub-clock {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  opacity: 0.65;
+}
+
 /* Audio has no frame to preview — the tooltip shrinks to the timestamp. */
 .vp__scrub-preview--time {
   padding: 3px 7px;
@@ -1708,6 +1716,13 @@ textarea {
 }
 
 .vp__time-sep { opacity: 0.5; margin: 0 2px; }
+
+/* Wall-clock time of the current position, next to the video-relative one. */
+.vp__time-clock {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.55;
+}
 
 .vp__live-dot {
   display: inline-block;
