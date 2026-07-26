@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { SAME_BROADCAST_TOLERANCE_MS } from "../public/vod-session-match";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { KickChatService } from "../kick/kick-chat.service";
 import { PlatformsService } from "../platforms/platforms.service";
 import { ChatService } from "../chat/chat.service";
 import { SevenTvService } from "../chat/seventv.service";
@@ -60,6 +61,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly platformsService: PlatformsService,
+    private readonly kickChatService: KickChatService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly chatService: ChatService,
     private readonly sevenTvService: SevenTvService,
@@ -383,11 +385,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.activeRecordings.set(channel.id, activeRecording);
     this.bindRecordingLifecycle(channel, session, activeRecording);
 
-    // Chat capture and the 7TV snapshot are Twitch-only: the chat client speaks
-    // Twitch IRC, and Kick delivers chat over a completely different transport.
-    // A Kick recording is still a full recording — it simply has no chat replay,
-    // which the session reports as "not_configured" rather than failing.
-    if (this.platformsService.resolvePlatform(channel.platform) === "twitch") {
+    // Both platforms capture chat, but over different transports: Twitch over
+    // IRC, Kick over Pusher. The 7TV emote snapshot stays Twitch-only — it is
+    // keyed by Twitch user id.
+    if (this.platformsService.resolvePlatform(channel.platform) === "kick") {
+      void this.kickChatService.startCapture({
+        channelId: channel.id,
+        sessionId: session.id,
+        channelLogin: channel.twitchLogin,
+        captureAnchor: new Date(),
+      });
+    } else {
       // The anchor is "now" (when streamlink actually started writing video),
       // NOT session.startedAt — Twitch reports the original go-live time, which
       // can be hours before we joined the stream. We need chat relativeTime to
@@ -446,6 +454,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.chatService.stopCapture(channelId);
+    this.kickChatService.stopCapture(channelId);
 
     await this.prisma.streamSession.update({
       where: { id: activeRecording.sessionId },
@@ -736,6 +745,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
       this.activeRecordings.delete(channel.id);
       this.chatService.stopCapture(channel.id);
+      this.kickChatService.stopCapture(channel.id);
 
       const fileExists = existsSync(activeRecording.outputPath);
       const fileSizeBytes = fileExists ? statSync(activeRecording.outputPath).size : 0;
