@@ -6,6 +6,7 @@ import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { ArchiveCard, type ArchiveItem } from "../../components/ArchiveCard";
 import { Pagination } from "../../components/Pagination";
+import { PageTabs } from "../../components/PageTabs";
 
 type ArchivesResponse = {
   items: ArchiveItem[];
@@ -23,6 +24,8 @@ type Block = { items: ArchiveItem[]; total: number; page: number };
 
 const EMPTY_BLOCK: Block = { items: [], total: 0, page: 1 };
 
+type TabId = "video" | "audio";
+
 export default function ArchivesPage() {
   const { t } = useLanguage();
   const [video, setVideo] = useState<Block>(EMPTY_BLOCK);
@@ -31,6 +34,7 @@ export default function ArchivesPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
   const [detailsArchive, setDetailsArchive] = useState<ArchiveItem | null>(null);
+  const [tab, setTab] = useState<TabId>("video");
 
   const loadArchives = useCallback(async () => {
     try {
@@ -112,17 +116,13 @@ export default function ArchivesPage() {
     audioLayout = false,
   ) {
     return (
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h3 className="page-title" style={{ fontSize: 15 }}>
-              {title}
-            </h3>
-            <p className="page-copy" style={{ margin: 0, fontSize: 12 }}>
-              {hint}
-            </p>
-          </div>
-          <span className="badge">{block.total}</span>
+      <>
+        <div className="filter-row">
+          <span className="filter-note">{hint}</span>
+          <span className="filter-spacer" />
+          <span className="filter-note">
+            {t.storage.foundCount.replace("{count}", String(block.total))}
+          </span>
         </div>
 
         {block.items.length === 0 ? (
@@ -142,15 +142,17 @@ export default function ArchivesPage() {
               ))}
             </div>
 
-            <Pagination
-              page={block.page}
-              pageSize={PAGE_SIZE}
-              total={block.total}
-              onPageChange={onPageChange}
-            />
+            <div className="panel-foot">
+              <Pagination
+                page={block.page}
+                pageSize={PAGE_SIZE}
+                total={block.total}
+                onPageChange={onPageChange}
+              />
+            </div>
           </>
         )}
-      </section>
+      </>
     );
   }
 
@@ -166,24 +168,36 @@ export default function ArchivesPage() {
       {error ? <div className="notice error">{error}</div> : null}
       {success ? <div className="notice success">{success}</div> : null}
 
-      <div style={{ display: "grid", gap: 16 }}>
-        {renderBlock(
-          t.archives.streamsBlock,
-          t.archives.streamsBlockHint,
-          video,
-          (page) => setVideo((current) => ({ ...current, page })),
-          t.archives.empty,
-        )}
+      {/* Video and audio are different artefacts with different lifecycles —
+          a stream to watch and a track to overlay on a VOD. Stacked, the audio
+          list lived below a full page of covers and was never seen. */}
+      <section className="panel">
+        <PageTabs
+          tabs={[
+            { id: "video" as TabId, label: t.archives.streamsBlock, count: video.total },
+            { id: "audio" as TabId, label: t.archives.audioBlock, count: audio.total },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
 
-        {renderBlock(
-          t.archives.audioBlock,
-          t.archives.audioBlockHint,
-          audio,
-          (page) => setAudio((current) => ({ ...current, page })),
-          t.archives.audioEmpty,
-          true,
-        )}
-      </div>
+        {tab === "video"
+          ? renderBlock(
+              t.archives.streamsBlock,
+              t.archives.streamsBlockHint,
+              video,
+              (page) => setVideo((current) => ({ ...current, page })),
+              t.archives.empty,
+            )
+          : renderBlock(
+              t.archives.audioBlock,
+              t.archives.audioBlockHint,
+              audio,
+              (page) => setAudio((current) => ({ ...current, page })),
+              t.archives.audioEmpty,
+              true,
+            )}
+      </section>
 
       {detailsArchive ? (
         <div className="modal-overlay" onClick={() => setDetailsArchive(null)}>
