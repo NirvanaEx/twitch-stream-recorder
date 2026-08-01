@@ -38,6 +38,16 @@ type Dictionary = {
     keepLocalNote: string;
     keepLocalNow: string;
     keepLocalForever: string;
+    archiveTitle: string;
+    archiveKeepNote: string;
+    archiveKeepForever: string;
+    archiveUnavailable: string;
+    archiveStored: string;
+    archiveStoredSize: string;
+    archiveQueued: string;
+    archiveExpired: string;
+    archiveErrors: string;
+    archiveSweep: string;
     openSettings: string;
     diskTitle: string;
     diskSubtitle: string;
@@ -269,6 +279,9 @@ type Dictionary = {
     keepLocalDays: string;
     keepLocalForever: string;
     keepLocalDaysUnit: string;
+    archiveKeep: string;
+    archiveKeepHint: string;
+    archiveKeepDaysMode: string;
   };
   twitchAudio: {
     title: string;
@@ -435,6 +448,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNote: "Локальная копия хранится {days} дн. после выгрузки",
       keepLocalNow: "Локальная копия удаляется сразу после выгрузки",
       keepLocalForever: "Локальные копии не удаляются",
+      archiveTitle: "Архивное хранилище",
+      archiveKeepNote:
+        "Записи лежат на подключённом диске {days} дн. от начала эфира, потом остаётся только копия в Telegram",
+      archiveKeepForever: "Записи с архивного диска не удаляются",
+      archiveUnavailable:
+        "Архивный диск недоступен. Записи остаются на сервере и уходят в Telegram — перенос продолжится сам, когда диск вернётся.",
+      archiveStored: "Записей в архиве",
+      archiveStoredSize: "Объём в архиве",
+      archiveQueued: "Ждут переноса",
+      archiveExpired: "Срок вышел",
+      archiveErrors: "Не удалось перенести записей: {count}. Повтор — раз в час.",
+      archiveSweep: "Проверить сейчас",
       openSettings: "Открыть настройки",
       diskTitle: "Файлы на диске",
       diskSubtitle:
@@ -683,6 +708,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalDays: "Хранить после выгрузки",
       keepLocalForever: "Хранить всегда",
       keepLocalDaysUnit: "дн.",
+      archiveKeep: "Записи на архивном диске",
+      archiveKeepHint:
+        "Срок считается от начала эфира. Когда он выйдет, папка удаляется с архивного диска, а запись остаётся в Telegram — и продолжает открываться в плеере. Пока копии в Telegram нет, запись не удаляется ни при каком сроке.",
+      archiveKeepDaysMode: "Хранить",
     },
     twitchAudio: {
       title: "Twitch аудио",
@@ -856,6 +885,18 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNote: "Local copies are kept for {days} day(s) after upload",
       keepLocalNow: "Local copies are removed right after the upload",
       keepLocalForever: "Local copies are never removed",
+      archiveTitle: "Archive storage",
+      archiveKeepNote:
+        "Recordings stay on the mounted drive for {days} day(s) from the start of the broadcast; after that only the Telegram copy remains",
+      archiveKeepForever: "Recordings are never removed from the archive drive",
+      archiveUnavailable:
+        "The archive drive is unreachable. Recordings stay on the server and go to Telegram — the move resumes on its own once the mount is back.",
+      archiveStored: "Recordings archived",
+      archiveStoredSize: "Archive size",
+      archiveQueued: "Waiting to move",
+      archiveExpired: "Expired",
+      archiveErrors: "{count} recording(s) failed to reach the archive. Retried hourly.",
+      archiveSweep: "Check now",
       openSettings: "Open settings",
       diskTitle: "Files on disk",
       diskSubtitle:
@@ -1104,6 +1145,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalDays: "Keep after the upload",
       keepLocalForever: "Keep forever",
       keepLocalDaysUnit: "days",
+      archiveKeep: "Recordings on the archive drive",
+      archiveKeepHint:
+        "Counted from the start of the broadcast. When it runs out the folder is deleted from the archive drive and the recording lives on in Telegram, still playable. While Telegram has no copy, nothing expires at any setting.",
+      archiveKeepDaysMode: "Keep for",
     },
     twitchAudio: {
       title: "Twitch audio",

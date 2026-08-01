@@ -82,6 +82,12 @@ services:
       TELEGRAM_STREAM_CACHE_MB: ${TELEGRAM_STREAM_CACHE_MB:-64}
       TELEGRAM_STREAM_MAX_CONCURRENT: ${TELEGRAM_STREAM_MAX_CONCURRENT:-3}
       DATA_DIR: /data
+      # Archive tier. Finished recordings are moved here and live for
+      # AppSettings.archiveKeepDays before Telegram becomes their only copy.
+      # The tier switches itself off unless ARCHIVE_DIR/.archive-root exists,
+      # so an unmounted drive degrades to "disk + Telegram" instead of quietly
+      # filling the server's own disk under the mount point.
+      ARCHIVE_DIR: ${ARCHIVE_DIR:-/mnt/gdrive/twitch-recorder}
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +95,18 @@ services:
         condition: service_started
     volumes:
       - runtime-data:/data
+      # The PARENT of the rclone mount point, bound rslave and at the same path
+      # inside the container. Both details are load-bearing and were verified
+      # by restarting gdrive.service under a running container: binding the
+      # mount point itself leaves the container on a dead mount ("Socket not
+      # connected") after every rclone restart, because propagation only
+      # travels down into a subtree, never onto the mount point itself.
+      - type: bind
+        source: ${ARCHIVE_HOST_DIR:-/mnt}
+        target: ${ARCHIVE_HOST_DIR:-/mnt}
+        bind:
+          propagation: rslave
+          create_host_path: true
     mem_limit: ${API_MEM_LIMIT:-1200m}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:$${PORT}/api/health || exit 1"]

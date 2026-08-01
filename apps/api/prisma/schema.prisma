@@ -106,6 +106,22 @@ model StreamSession {
   // Set when only the local .m4a was dropped by the local-retention cleanup:
   // the Telegram copy is still there and playback falls back to it.
   audioLocalDeletedAt     DateTime?
+  // --- Archive tier (the mounted 5 TB Drive) ---
+  // Where the finished recording actually lives once it left the server disk:
+  // none | pending | copying | stored | expired | error. "pending" means the
+  // session is queued for the move and its local files must survive until it
+  // happens — see ArchiveStorageService.
+  archiveStatus           String               @default("none")
+  // Absolute path of this session's folder on the archive tier. Stored rather
+  // than re-derived: the folder name carries the (mutable) stream title, and a
+  // renamed title must not orphan the files.
+  archiveDir              String?
+  archivedAt              DateTime?
+  // Set when the archive retention removed the folder. The Telegram copy is
+  // untouched, so playback falls back to it exactly like it does for a dropped
+  // local file.
+  archiveDeletedAt        DateTime?
+  archiveError            String?
   // The moment the capture process (streamlink) exited — BEFORE the remux,
   // unlike endedAt which lands minutes later. captureEndedAt - durationSec is
   // the most precise "where the recording starts on the VOD timeline" anchor:
@@ -283,6 +299,12 @@ model AppSettings {
   // the setting can only cost disk cache, never the recording itself.
   videoKeepLocalDays    Int      @default(0)
   audioKeepLocalDays    Int      @default(0)
+  // Archive retention, in days, counted from the start of the broadcast: how
+  // long a finished recording stays on the mounted Drive before it is deleted
+  // there. -1 keeps it forever. Unlike the local retention this one deletes
+  // real archive storage, so it never fires while Telegram has no copy — the
+  // last remaining copy of a recording is never the one that expires.
+  archiveKeepDays       Int      @default(90)
   updatedAt             DateTime @updatedAt
 }
 

@@ -18,17 +18,12 @@ import {
   extractPredictionBet,
   resolveCaptureAnchorMs,
 } from "../chat/chat-roles.utils";
-import { EmoteMirrorService } from "../chat/emote-mirror.service";
+import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
-import type { EmoteSnapshotPayload } from "../chat/seventv.service";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
-import {
-  buildMediaCacheHeaders,
-  computeSessionChatOffsetSec,
-  parseMediaRange,
-} from "../recording/playback.utils";
+import { buildMediaCacheHeaders, parseMediaRange } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { ThumbnailService } from "../recording/thumbnail.service";
 import { StreamEventsService } from "../stream-events/stream-events.service";
@@ -42,9 +37,9 @@ export class ArchivesController {
     private readonly prisma: PrismaService,
     private readonly telegramStreamService: TelegramStreamService,
     private readonly thumbnailService: ThumbnailService,
-    private readonly emoteMirrorService: EmoteMirrorService,
     private readonly liveEmotesService: LiveEmotesService,
     private readonly streamEventsService: StreamEventsService,
+    private readonly archiveBundleService: ArchiveBundleService,
   ) {
     this.listArchives = this.listArchives.bind(this);
     this.getArchive = this.getArchive.bind(this);
@@ -172,7 +167,7 @@ export class ArchivesController {
   async getArchiveBundle(@Param("id") id: string, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      include: { channel: true },
+      select: { channel: { select: { twitchLogin: true } } },
     });
 
     if (!session) {
@@ -180,61 +175,8 @@ export class ArchivesController {
       return;
     }
 
-    const [messages, snapshot] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where: { streamSessionId: id },
-        orderBy: { relativeTimeSec: "asc" },
-        take: 100000,
-      }),
-      this.prisma.emoteSnapshot.findUnique({
-        where: { streamSessionId: id },
-      }),
-    ]);
-
-    const anchorMs = resolveCaptureAnchorMs(messages);
-
-    const bundle = {
-      version: 1,
-      kind: "tsr-archive-bundle",
-      meta: {
-        id: session.id,
-        title: session.title,
-        categoryName: session.categoryName,
-        channelLogin: session.channel.twitchLogin,
-        channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
-        startedAt: session.startedAt?.toISOString() ?? null,
-        endedAt: session.endedAt?.toISOString() ?? null,
-        chatOffsetSec: computeSessionChatOffsetSec(session),
-      },
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorLogin: message.authorLogin,
-        authorDisplayName: message.authorDisplayName,
-        authorColor: message.authorColor,
-        textRaw: message.textRaw,
-        badges: parseStoredJsonString(message.badgesJson),
-        roles: extractChatRoles(message.badgesJson),
-        emotes: parseStoredJsonString(message.emotesJson),
-        inlineEmotes: extractInlineEmotes(message.emotesJson),
-        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
-        relativeTimeSec: message.relativeTimeSec,
-        messageTimestamp: message.messageTimestamp.toISOString(),
-        isDeleted: message.isDeleted,
-        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
-        banDurationSec: message.banDurationSec,
-        isFirstMessage: message.isFirstMessage,
-      })),
-      // Self-contained on purpose: the images of the emotes this chat actually
-      // uses travel inside the file as data URIs, so the offline replay keeps
-      // working with no network and after 7TV has dropped the emote.
-      emotes: this.emoteMirrorService.buildBundleSnapshot(
-        parseStoredJson(snapshot?.payloadJson) as EmoteSnapshotPayload | null,
-        messages.map((message) => message.textRaw),
-      ),
-    };
-
-    const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-    const filename = `${safeName}-${session.id}.tsr.json`;
+    const bundle = await this.archiveBundleService.build(id);
+    const filename = this.archiveBundleService.fileNameFor(session.channel.twitchLogin, id);
 
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);

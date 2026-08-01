@@ -52,6 +52,15 @@ export class UpdateSettingsDto {
   @Max(3650)
   audioKeepLocalDays?: number;
 
+  // Archive retention, in days from the start of the broadcast: how long a
+  // recording stays on the mounted Drive. -1 keeps it there forever.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(-1)
+  @Max(3650)
+  archiveKeepDays?: number;
+
   // Secrets: an empty string means "keep the stored value" so the settings
   // form can always submit the whole object without wiping them.
   @IsOptional()
