@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import { Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
@@ -20,6 +20,7 @@ import { ChatService } from "../chat/chat.service";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
 import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
+import { parseSegmentManifest } from "./segment-manifest.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 import { TwitchEventsService } from "../stream-events/twitch-events.service";
@@ -38,6 +39,9 @@ type ActiveRecording = {
   // so flipping the channel switch mid-recording cannot change the outcome.
   extractAudio: boolean;
   stopRequested: boolean;
+  // Set for a segmented capture: ffmpeg closes a playable .mp4 every
+  // RECORDING_SEGMENT_MINUTES and there is no single output file.
+  segments: SegmentedCapture | null;
   // Same instant chat capture is anchored to, so metadata points and messages
   // land on one timeline.
   captureAnchor: Date;
@@ -45,6 +49,32 @@ type ActiveRecording = {
   // table back just to decide whether anything changed.
   lastMeta: { title: string | null; categoryName: string | null; atSec: number } | null;
 };
+
+type SegmentedCapture = {
+  // Directory holding the chunks that have not been shipped yet.
+  dir: string;
+  // ffmpeg's own manifest: it appends "name,start,end" the moment a chunk is
+  // closed, which is a far more reliable "this file is finished" signal than
+  // watching the directory and guessing.
+  listPath: string;
+  ffmpegProcess: ChildProcess;
+  pollTimer: NodeJS.Timeout | null;
+  // Chunk indexes already written to the database, so a re-read of the
+  // manifest cannot create duplicates.
+  seen: Set<number>;
+  totalBytes: number;
+  totalDurationSec: number;
+};
+
+// How long one chunk of a segmented capture covers. Fifteen minutes is a
+// compromise: short enough that a broadcast dying mid-chunk loses little and
+// that the disk never holds much, long enough that a 6-hour stream is ~24
+// Telegram messages rather than hundreds.
+const DEFAULT_SEGMENT_MINUTES = 15;
+
+// ffmpeg flushes the manifest as soon as a chunk closes, so polling it is
+// cheap and the delay before a chunk starts uploading is bounded by this.
+const SEGMENT_POLL_MS = 5_000;
 
 // How many consecutive "offline" polls we tolerate before stopping an active
 // recording. Twitch Helix occasionally returns an empty result for a stream
@@ -380,9 +410,19 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     });
     const channelUrl = this.platformsService.channelUrl(channel.platform, channel.twitchLogin);
 
-    // Streamlink writes the live MPEG-TS directly to disk. We avoid stdin/stdout
-    // pipes entirely (which are the typical source of EPIPE crashes on Windows)
-    // and run an ffmpeg remux to .mp4 only after streamlink finishes.
+    // Two capture shapes, chosen by RECORDING_SEGMENT_MINUTES.
+    //
+    // Segmented (the default): streamlink writes to stdout and ffmpeg turns the
+    // stream into finished .mp4 chunks as it goes, so nothing large ever
+    // accumulates and each chunk can leave for Telegram and the archive while
+    // the broadcast is still running.
+    //
+    // Classic (0, or an audio-only capture): streamlink writes the whole
+    // MPEG-TS to disk and it is remuxed once, at the end. Audio-only stays here
+    // because its output is a single .m4a for the userscript to overlay on the
+    // VOD — chopping that into chunks would make it useless.
+    const useSegments = this.segmentMinutes() > 0 && !channel.audioOnly;
+
     const streamlinkProcess = spawn(
       streamlinkCommand.command,
       [
@@ -394,7 +434,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         "--loglevel",
         "info",
         "-o",
-        tsPath,
+        useSegments ? "-" : tsPath,
         channelUrl,
         quality,
       ],
@@ -413,6 +453,26 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     // the same timeline, so they must be measured from the same instant.
     const captureAnchor = new Date();
 
+    const segments = useSegments
+      ? this.startSegmentedCapture(
+          streamlinkProcess,
+          outputPath.replace(/\.mp4$/i, ""),
+          `[recording/${channel.twitchLogin}/${session.id}]`,
+        )
+      : null;
+
+    if (segments) {
+      await this.prisma.streamSession.update({
+        where: { id: session.id },
+        data: {
+          segmented: true,
+          // There is no single file to point at; the chunks are the recording.
+          recordingPath: null,
+          playbackPath: null,
+        },
+      });
+    }
+
     const activeRecording: ActiveRecording = {
       channelId: channel.id,
       sessionId: session.id,
@@ -420,6 +480,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       remuxProcess: null,
       tsPath,
       outputPath,
+      segments,
       audioOnly: channel.audioOnly,
       extractAudio: channel.recordAudio,
       stopRequested: false,
@@ -775,10 +836,35 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async getPlayableFile(id: string) {
+  /**
+   * The file to stream for an archive, or a throw when there is none and the
+   * caller should fall back to Telegram.
+   *
+   * `part` selects a chunk of a segmented capture. Chunks live on the archive
+   * drive once they are shipped, so serving them from there keeps playback off
+   * the shared MTProto connection — which is both faster and leaves the
+   * connection free for the uploads of whatever is recording right now.
+   */
+  async getPlayableFile(id: string, part = 1) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
     });
+
+    if (session?.segmented) {
+      const segment = await this.prisma.recordingSegment.findUnique({
+        where: { streamSessionId_index: { streamSessionId: id, index: Math.max(1, part) } },
+      });
+
+      // localPath while the broadcast is still running, archivePath after the
+      // chunk moved; either is a real file we can serve directly.
+      const path = segment?.localPath ?? segment?.archivePath ?? null;
+
+      if (!path || !existsSync(path)) {
+        throw new NotFoundException(`Chunk ${part} of archive ${id} is not on disk.`);
+      }
+
+      return { absolutePath: path, stat: statSync(path) };
+    }
 
     if (!session?.playbackPath) {
       throw new NotFoundException(`Playback file for archive ${id} was not found.`);
@@ -845,8 +931,15 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.kickChatService.stopCapture(channel.id);
       this.twitchEventsService.stopCapture(channel.id);
 
-      const fileExists = existsSync(activeRecording.outputPath);
-      const fileSizeBytes = fileExists ? statSync(activeRecording.outputPath).size : 0;
+      // A segmented capture has no single output file: its totals are the sum
+      // of the chunks ffmpeg closed, accumulated as they were registered.
+      const capture = activeRecording.segments;
+      const fileExists = capture ? capture.seen.size > 0 : existsSync(activeRecording.outputPath);
+      const fileSizeBytes = capture
+        ? capture.totalBytes
+        : fileExists
+          ? statSync(activeRecording.outputPath).size
+          : 0;
 
       // Best-effort: also clean up the intermediate .ts file if it lingered.
       if (existsSync(activeRecording.tsPath)) {
@@ -865,9 +958,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         errorMessage =
           "Recording produced no data. Check that streamlink and ffmpeg are installed and that the channel is live.";
 
-        if (fileExists) {
+        if (fileExists && !capture) {
           try {
             unlinkSync(activeRecording.outputPath);
+          } catch {
+            // Best-effort cleanup; ignore filesystem errors.
+          }
+        }
+
+        if (capture) {
+          try {
+            rmSync(capture.dir, { recursive: true, force: true });
           } catch {
             // Best-effort cleanup; ignore filesystem errors.
           }
@@ -877,8 +978,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // The standalone audio track is extracted before the session flips to
       // completed so the Telegram offloader picks it up together with the
       // video. An audio-only capture already IS the audio track.
+      // The standalone .m4a is extracted from one finished file, which a
+      // segmented capture does not have. Audio-only channels — the ones the
+      // track exists for — record through the classic path, so nothing that
+      // needs it loses it.
       const audio =
-        finalStatus === "completed" && fileSizeBytes > 0
+        finalStatus === "completed" && fileSizeBytes > 0 && !capture
           ? activeRecording.audioOnly
             ? { path: activeRecording.outputPath, sizeBytes: fileSizeBytes }
             : activeRecording.extractAudio
@@ -888,7 +993,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
       const durationSec =
         finalStatus === "completed" && fileSizeBytes > 0
-          ? await this.probeDurationSec(activeRecording.outputPath)
+          ? capture
+            ? capture.totalDurationSec
+            : await this.probeDurationSec(activeRecording.outputPath)
           : null;
 
       await this.prisma.streamSession.update({
@@ -951,10 +1058,49 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     };
 
+    const capture = activeRecording.segments;
+
+    if (capture) {
+      // Poll ffmpeg's manifest while the broadcast runs so each closed chunk
+      // starts its journey to Telegram and the archive immediately.
+      capture.pollTimer = setInterval(() => {
+        void this.collectClosedSegments(session.id, capture, logPrefix).catch((error) => {
+          this.logger.warn(
+            `${logPrefix} reading the segment manifest failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+      }, SEGMENT_POLL_MS);
+    }
+
     activeRecording.streamlinkProcess.once("exit", (code) => {
       captureEndedAt = new Date();
       this.logger.log(`${logPrefix} streamlink exited with code ${String(code)}`);
-      void this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
+
+      if (!capture) {
+        void this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
+        return;
+      }
+
+      // Closing the pipe makes ffmpeg flush and close the chunk it is on; the
+      // session is only finished once that has happened, otherwise the last
+      // minutes of the broadcast would be dropped.
+      capture.ffmpegProcess.stdin?.end();
+
+      capture.ffmpegProcess.once("exit", (ffmpegCode) => {
+        this.logger.log(`${logPrefix} ffmpeg segmenter exited with code ${String(ffmpegCode)}`);
+
+        if (capture.pollTimer) {
+          clearInterval(capture.pollTimer);
+          capture.pollTimer = null;
+        }
+
+        void (async () => {
+          await this.collectClosedSegments(session.id, capture, logPrefix);
+          await finalize(capture.seen.size > 0 ? "completed" : "error");
+        })();
+      });
     });
 
     activeRecording.streamlinkProcess.once("error", (error) => {
@@ -1031,6 +1177,173 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
       await finalize(success ? "completed" : "error");
     });
+  }
+
+  /**
+   * Chunk length in minutes, or 0 when segmented capture is switched off and
+   * the classic "one .ts, then one .mp4" path is used instead.
+   *
+   * Kept as a switch rather than a hard replacement: this is the code path a
+   * lost broadcast costs the most, so being able to fall back to the shape
+   * that ran for months — by editing .env, with no deploy — is worth the
+   * second path existing.
+   */
+  private segmentMinutes(): number {
+    const raw = Number(process.env.RECORDING_SEGMENT_MINUTES);
+
+    if (Number.isFinite(raw) && raw >= 0) {
+      return Math.floor(raw);
+    }
+
+    return DEFAULT_SEGMENT_MINUTES;
+  }
+
+  /**
+   * Segmented capture: streamlink pulls the stream and pipes it into ffmpeg,
+   * which writes a finished, playable .mp4 every `segmentMinutes`.
+   *
+   * The intermediate .ts is gone entirely, and so is the moment where the disk
+   * had to hold the .ts, the remuxed .mp4 and its upload chunks at once. What
+   * remains on disk is at most one open chunk per recording, because every
+   * closed chunk is shipped and deleted while the broadcast is still running.
+   *
+   * The pipe is the one thing the classic path deliberately avoided (EPIPE on
+   * Windows); the recorder runs on Linux in a container, and the alternative —
+   * letting ffmpeg pull the HLS itself — would throw away streamlink's ad and
+   * discontinuity handling, which is the reason it is here at all.
+   */
+  private startSegmentedCapture(
+    streamlinkProcess: ChildProcess,
+    segmentDir: string,
+    logPrefix: string,
+  ): SegmentedCapture {
+    mkdirSync(segmentDir, { recursive: true });
+
+    const listPath = join(segmentDir, "segments.csv");
+    const ffmpegCommand = this.resolveFfmpegCommand();
+
+    const ffmpegProcess = spawn(
+      ffmpegCommand.command,
+      [
+        ...ffmpegCommand.args,
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-i",
+        "pipe:0",
+        "-c",
+        "copy",
+        "-f",
+        "segment",
+        "-segment_time",
+        String(this.segmentMinutes() * 60),
+        "-segment_format",
+        "mp4",
+        // Without faststart the moov atom lands at the end of each chunk and
+        // the player has to fetch the tail before it can start — which over a
+        // Telegram or network-mount read is exactly the slow path.
+        "-segment_format_options",
+        "movflags=+faststart",
+        // Each chunk starts at zero, so it is a normal standalone file rather
+        // than one that claims to begin two hours in.
+        "-reset_timestamps",
+        "1",
+        // "name,start,end" appended the instant a chunk closes: both the
+        // completion signal and the duration, without probing the file.
+        "-segment_list",
+        listPath,
+        "-segment_list_type",
+        "csv",
+        "-segment_list_flags",
+        "+live",
+        join(segmentDir, "part%04d.mp4"),
+      ],
+      { stdio: ["pipe", "ignore", "pipe"] },
+    );
+
+    ffmpegProcess.stderr?.on("data", (chunk) => {
+      this.logger.log(`${logPrefix} ffmpeg: ${chunk.toString().trim()}`);
+    });
+
+    ffmpegProcess.on("error", (error) => {
+      this.logger.warn(`${logPrefix} ffmpeg segmenter failed to start: ${error.message}`);
+    });
+
+    if (streamlinkProcess.stdout) {
+      streamlinkProcess.stdout.pipe(ffmpegProcess.stdin!);
+      // A dead segmenter must not turn into an unhandled EPIPE on the puller.
+      streamlinkProcess.stdout.on("error", () => undefined);
+      ffmpegProcess.stdin?.on("error", () => undefined);
+    }
+
+    return {
+      dir: segmentDir,
+      listPath,
+      ffmpegProcess,
+      pollTimer: null,
+      seen: new Set<number>(),
+      totalBytes: 0,
+      totalDurationSec: 0,
+    };
+  }
+
+  /**
+   * Read ffmpeg's manifest and register every chunk it has finished since the
+   * last pass. Only whole lines are trusted: the manifest is appended to while
+   * we read it, so the final line may still be half-written.
+   */
+  private async collectClosedSegments(
+    sessionId: string,
+    capture: SegmentedCapture,
+    logPrefix: string,
+  ) {
+    let raw: string;
+
+    try {
+      raw = readFileSync(capture.listPath, "utf8");
+    } catch {
+      return; // No chunk has closed yet — ffmpeg creates the file with the first one.
+    }
+
+    for (const row of parseSegmentManifest(raw)) {
+      if (capture.seen.has(row.index)) {
+        continue;
+      }
+
+      const path = join(capture.dir, row.name);
+
+      if (!existsSync(path)) {
+        continue;
+      }
+
+      capture.seen.add(row.index);
+
+      const sizeBytes = statSync(path).size;
+
+      capture.totalBytes += sizeBytes;
+      capture.totalDurationSec += row.durationSec;
+
+      await this.prisma.recordingSegment.create({
+        data: {
+          streamSessionId: sessionId,
+          // ffmpeg counts from zero, the Telegram parts from one, and the two
+          // must line up because a chunk becomes exactly one part.
+          index: row.index + 1,
+          localPath: path,
+          sizeBytes: String(sizeBytes),
+          durationSec: row.durationSec,
+          startOffsetSec: row.startOffsetSec,
+        },
+      });
+
+      this.logger.log(
+        `${logPrefix} chunk ${row.index + 1} closed (${Math.round(sizeBytes / 1024 / 1024)} MB, ${row.durationSec}s) — queued for upload.`,
+      );
+
+      // Ship it now rather than at the next 60s tick: the whole point is that
+      // the disk does not accumulate.
+      this.telegramService.kick();
+    }
   }
 
   private buildRecordingPath(login: string, startedAt: string, ext: "mp4" | "m4a" = "mp4") {

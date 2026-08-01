@@ -6,8 +6,8 @@ import { useAuth } from "../../lib/auth-context";
 import { useLanguage } from "../../providers";
 
 export default function AdminAccountPage() {
-  const { t } = useLanguage();
-  const { user } = useAuth();
+  const { t, locale, setLocale } = useLanguage();
+  const { user, logout } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -53,22 +53,46 @@ export default function AdminAccountPage() {
         </div>
       </section>
 
-      <section className="panel" style={{ maxWidth: 480 }}>
-        {user ? (
-          <div style={{ marginBottom: 16, color: "var(--text-dim)" }}>
-            <strong>{user.username}</strong>{" "}
-            {user.isSuperadmin ? (
-              <span className="badge live" style={{ marginLeft: 6 }}>
-                {t.auth.youAreSuperadmin}
-              </span>
-            ) : user.role ? (
-              <span className="badge" style={{ marginLeft: 6 }}>
-                {user.role.name}
-              </span>
+      {/* Who you are signed in as, and the two things you can do about it.
+          Both used to sit in the sidebar, where they took up a third of it on
+          every page to answer a question that is asked once a session. */}
+      <section className="panel account-session" style={{ maxWidth: 480 }}>
+        <div className="account-session-row">
+          <span className="account-identity">
+            <strong>{user?.username}</strong>
+            {user?.isSuperadmin ? (
+              <span className="badge live">{t.auth.youAreSuperadmin}</span>
+            ) : user?.role ? (
+              <span className="badge">{user.role.name}</span>
             ) : null}
-          </div>
-        ) : null}
+          </span>
+          <button type="button" className="btn" onClick={() => logout()}>
+            {t.auth.logout}
+          </button>
+        </div>
 
+        <div className="account-session-row">
+          <span className="account-session-label">{t.account.languageLabel}</span>
+          <div className="lang-row">
+            <button
+              type="button"
+              className={locale === "ru" ? "active" : ""}
+              onClick={() => setLocale("ru")}
+            >
+              RU
+            </button>
+            <button
+              type="button"
+              className={locale === "en" ? "active" : ""}
+              onClick={() => setLocale("en")}
+            >
+              EN
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel" style={{ maxWidth: 480, marginTop: 16 }}>
         {error ? <div className="notice error">{error}</div> : null}
         {notice ? <div className="notice success">{notice}</div> : null}
 

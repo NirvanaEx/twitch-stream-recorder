@@ -114,6 +114,14 @@ export class ThumbnailService implements OnModuleDestroy {
         durationSec: true,
         telegramStatus: true,
         archiveDir: true,
+        segmented: true,
+        // First chunk of a segmented capture: the cover is taken near the
+        // start of the broadcast, so that is the only one worth looking at.
+        segments: {
+          where: { index: 1 },
+          take: 1,
+          select: { localPath: true, archivePath: true },
+        },
         telegramParts: {
           orderBy: { partIndex: "asc" },
           take: 1,
@@ -151,6 +159,21 @@ export class ThumbnailService implements OnModuleDestroy {
       const absolutePath = resolve(session.playbackPath);
       if (existsSync(absolutePath)) {
         input = absolutePath;
+      }
+    }
+
+    // A segmented capture has no playbackPath; its first chunk stands in for
+    // the whole recording, wherever that chunk currently lives.
+    if (!input && session.segmented) {
+      const first = session.segments[0];
+
+      for (const candidate of [first?.localPath, first?.archivePath]) {
+        if (candidate && existsSync(candidate)) {
+          input = candidate;
+          // The seek must stay inside the chunk, not the whole broadcast.
+          durationSec = Math.min(durationSec || 600, 600);
+          break;
+        }
       }
     }
 

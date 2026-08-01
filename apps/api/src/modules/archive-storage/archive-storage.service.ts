@@ -117,6 +117,7 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
       });
 
       await this.requeueFailed();
+      await this.archiveSegments(settings);
       await this.archivePending(settings);
       await this.expireOld(settings);
     } catch (error) {
@@ -162,6 +163,103 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
    * runs. Uploading from the local file costs a disk read; uploading from the
    * Drive costs the same gigabytes back over the network.
    */
+  /**
+   * Move the chunks of segmented captures onto the drive, one at a time,
+   * oldest first — including chunks of broadcasts that are still running.
+   *
+   * Each chunk leaves the server disk as soon as Telegram has it, so a
+   * recording in progress costs the disk one open chunk rather than its whole
+   * eventual size. That is the property this whole exercise was about.
+   */
+  private async archiveSegments(settings: AppSettings) {
+    const telegramInPlay = settings.telegramEnabled && Boolean(settings.telegramChatId);
+
+    for (;;) {
+      const segment = await this.prisma.recordingSegment.findFirst({
+        where: {
+          localPath: { not: null },
+          archivePath: null,
+          ...(telegramInPlay ? { telegramStatus: "uploaded" } : {}),
+        },
+        orderBy: { createdAt: "asc" },
+        include: { session: { include: { channel: true } } },
+      });
+
+      if (!segment?.localPath) {
+        return;
+      }
+
+      if (!this.checkAvailability()) {
+        return;
+      }
+
+      const session = segment.session;
+      const logPrefix = `[archive/${session.channel.twitchLogin}/${session.id}]`;
+
+      if (!existsSync(segment.localPath)) {
+        // Already gone — nothing to move, and nothing to mourn: it only ever
+        // gets deleted after a copy exists somewhere else.
+        await this.prisma.recordingSegment.update({
+          where: { id: segment.id },
+          data: { localPath: null },
+        });
+        continue;
+      }
+
+      try {
+        const targetDir = await this.ensureSessionDir(session);
+        const name = `part${String(segment.index).padStart(3, "0")}.mp4`;
+        const archived = await this.moveFile(segment.localPath, join(targetDir, name), logPrefix);
+
+        await this.prisma.recordingSegment.update({
+          where: { id: segment.id },
+          data: { archivePath: archived, localPath: null },
+        });
+
+        this.logger.log(`${logPrefix} chunk ${segment.index} archived.`);
+      } catch (error) {
+        this.logger.warn(
+          `${logPrefix} chunk ${segment.index} could not be archived: ${this.describe(error)}`,
+        );
+        return; // Next sweep retries from the oldest chunk.
+      }
+    }
+  }
+
+  /**
+   * The session's folder on the archive tier, created and remembered on first
+   * use. A segmented capture needs it before the broadcast has ended, so it
+   * cannot wait for the whole-session move to build one.
+   */
+  private async ensureSessionDir(session: SessionWithChannel): Promise<string> {
+    if (session.archiveDir) {
+      mkdirSync(session.archiveDir, { recursive: true });
+      return session.archiveDir;
+    }
+
+    const root = archiveRoot();
+
+    if (!root) {
+      throw new Error("The archive tier is not configured.");
+    }
+
+    const dir = buildSessionDir(root, {
+      platform: session.channel.platform,
+      channelLogin: session.channel.twitchLogin,
+      startedAt: session.startedAt ?? session.createdAt,
+      title: session.title,
+      sessionId: session.id,
+    });
+
+    mkdirSync(dir, { recursive: true });
+    await this.prisma.streamSession.update({
+      where: { id: session.id },
+      data: { archiveDir: dir },
+    });
+
+    return dir;
+  }
+
   private async archivePending(settings: AppSettings) {
     // With Telegram switched off nothing is ever going to claim the local
     // copy, so waiting for it would strand every recording on the disk.

@@ -216,9 +216,10 @@ export class ArchivesController {
   @Get(":id/video")
   async streamArchiveVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     let local: { absolutePath: string; stat: Stats } | null = null;
+    const requestedPart = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
 
     try {
-      local = await this.recordingService.getPlayableFile(id);
+      local = await this.recordingService.getPlayableFile(id, requestedPart);
     } catch {
       // The local file is gone — fall back to the Telegram copy below.
       local = null;
@@ -239,11 +240,10 @@ export class ArchivesController {
         return;
       }
 
-      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
       const downloadName =
-        req.query?.download === "1" ? `${safeName}-${id}-part${partIndex}.mp4` : null;
+        req.query?.download === "1" ? `${safeName}-${id}-part${requestedPart}.mp4` : null;
 
-      await this.telegramStreamService.streamToResponse(id, partIndex, req, res, downloadName);
+      await this.telegramStreamService.streamToResponse(id, requestedPart, req, res, downloadName);
       return;
     }
 

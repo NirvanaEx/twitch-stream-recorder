@@ -111,6 +111,10 @@ type Dictionary = {
     delete: string;
     retry: string;
     diskFree: string;
+    diskServer: string;
+    diskArchive: string;
+    diskFreeShort: string;
+    diskOffline: string;
     actions: string;
     status: string;
     title: string;
@@ -411,6 +415,7 @@ type Dictionary = {
   };
   account: {
     title: string;
+    languageLabel: string;
     subtitle: string;
     currentPasswordLabel: string;
     newPasswordLabel: string;
@@ -527,6 +532,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       delete: "Удалить",
       retry: "Обновить",
       diskFree: "Свободно",
+      diskServer: "Диск сервера",
+      diskArchive: "Внешний архив",
+      diskFreeShort: "свободно",
+      diskOffline: "недоступен",
       actions: "Действия",
       status: "Статус",
       title: "Название",
@@ -851,6 +860,7 @@ const dictionaries: Record<Locale, Dictionary> = {
     },
     account: {
       title: "Аккаунт",
+      languageLabel: "Язык интерфейса",
       subtitle: "Смена собственного пароля. Старый пароль обязателен для подтверждения.",
       currentPasswordLabel: "Текущий пароль",
       newPasswordLabel: "Новый пароль",
@@ -965,6 +975,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       delete: "Delete",
       retry: "Refresh",
       diskFree: "Free space",
+      diskServer: "Server disk",
+      diskArchive: "External archive",
+      diskFreeShort: "free",
+      diskOffline: "unreachable",
       actions: "Actions",
       status: "Status",
       title: "Title",
@@ -1289,6 +1303,7 @@ const dictionaries: Record<Locale, Dictionary> = {
     },
     account: {
       title: "Account",
+      languageLabel: "Interface language",
       subtitle: "Change your own password. Current password is required for confirmation.",
       currentPasswordLabel: "Current password",
       newPasswordLabel: "New password",

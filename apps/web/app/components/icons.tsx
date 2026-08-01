@@ -467,3 +467,12 @@ export function CloseIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function CloudIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.2 10.4 3.8 3.8 0 0 0 7 19z" />
+    </svg>
+  );
+}
