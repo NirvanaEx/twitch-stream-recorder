@@ -369,7 +369,7 @@ export class PublicStreamsController {
 
   private mapAudioTrack(
     session: StreamSession & {
-      channel: { twitchLogin: string; displayName: string | null };
+      channel: { twitchLogin: string; displayName: string | null; platform?: string };
       telegramParts: { durationSec: number | null }[];
       audioOnly: boolean;
     },
@@ -394,6 +394,15 @@ export class PublicStreamsController {
       title: session.title,
       channelLogin: session.channel.twitchLogin,
       channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
+      platform: session.channel.platform ?? "twitch",
+      sizeBytes: session.audioSizeBytes ?? (session.audioOnly ? session.fileSizeBytes : null),
+      // Where the track can be served from right now, which is also how fast
+      // it will start: disk, the archive drive, or a Telegram round-trip.
+      storedIn: session.audioLocalDeletedAt
+        ? "telegram"
+        : session.archiveStatus === "stored"
+          ? "archive"
+          : "local",
       startedAt: session.startedAt?.toISOString() ?? null,
       // When the capture actually started (the session row is created right
       // before streamlink spawns). Unlike startedAt (the Twitch go-live time)

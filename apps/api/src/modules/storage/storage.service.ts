@@ -7,8 +7,11 @@ import { PrismaService } from "../prisma/prisma.service";
 // writing them even if the DB row does not reference them yet.
 const RECENT_FILE_MS = 10 * 60 * 1000;
 
-// The disk table shows only the biggest files; totals are computed over all.
-const MAX_LISTED_FILES = 500;
+// The disk table pages through the biggest files; totals are always computed
+// over all of them. The cap exists so one scan cannot return a hundred
+// thousand rows — it is high enough that paging reaches the end in practice,
+// and the response says when it did not.
+const MAX_LISTED_FILES = 3000;
 
 // Top-level dirs whose files are never orphans. The 7TV emote mirror is
 // referenced only from a JSON blob inside EmoteSnapshot, never by a path
@@ -58,6 +61,7 @@ export class StorageService {
     const files = this.walkDataDir(refs);
 
     const dirTotals = new Map<string, { fileCount: number; totalBytes: number }>();
+    const kindTotals = new Map<string, { fileCount: number; totalBytes: number }>();
     let totalBytes = 0;
     let orphanBytes = 0;
     let orphanCount = 0;
@@ -68,6 +72,10 @@ export class StorageService {
       dirStat.fileCount += 1;
       dirStat.totalBytes += file.sizeBytes;
       dirTotals.set(file.dir, dirStat);
+      const kindStat = kindTotals.get(file.kind) ?? { fileCount: 0, totalBytes: 0 };
+      kindStat.fileCount += 1;
+      kindStat.totalBytes += file.sizeBytes;
+      kindTotals.set(file.kind, kindStat);
       if (file.orphan) {
         orphanCount += 1;
         orphanBytes += file.sizeBytes;
@@ -126,13 +134,26 @@ export class StorageService {
       dbSizeBytes: await this.getDbSizeBytes(),
       missing: missing.slice(0, 200),
       missingTruncated: missing.length > 200,
+      // Per-directory rows carry their share of the total so the table can
+      // show proportion without the client re-deriving it from two columns.
       dirs: [...dirTotals.entries()]
         .map(([name, stat]) => ({
           name,
           fileCount: stat.fileCount,
           totalBytes: String(stat.totalBytes),
+          sharePercent: totalBytes > 0 ? Math.round((stat.totalBytes / totalBytes) * 1000) / 10 : 0,
         }))
         .sort((a, b) => Number(b.totalBytes) - Number(a.totalBytes)),
+      // Counts by kind: "what is actually eating the disk" is a different
+      // question from "which folder is it in".
+      kinds: [...kindTotals.entries()]
+        .map(([kind, stat]) => ({
+          kind,
+          fileCount: stat.fileCount,
+          totalBytes: String(stat.totalBytes),
+        }))
+        .sort((a, b) => Number(b.totalBytes) - Number(a.totalBytes)),
+      fileCount: files.length,
       totalBytes: String(totalBytes),
       orphanCount,
       orphanBytes: String(orphanBytes),
