@@ -6,6 +6,7 @@ import { Pagination } from "./components/Pagination";
 import { apiGet } from "./lib/api";
 import { formatPeriod } from "./lib/media";
 import { useAuth } from "./lib/auth-context";
+import { PlatformTag } from "./components/PlatformTag";
 import { useLanguage } from "./providers";
 
 type PublicStreamCard = {
@@ -15,6 +16,7 @@ type PublicStreamCard = {
     login: string;
     displayName: string;
     profileImageUrl: string | null;
+    platform: "twitch" | "kick";
   };
   previewImageUrl: string | null;
   // Frame from the recording; Twitch's own preview 404s once the broadcast
@@ -199,7 +201,10 @@ export default function PublicHomePage() {
                         {item.channel.displayName.slice(0, 1).toUpperCase()}
                       </span>
                     )}
-                    <span>{item.channel.displayName}</span>
+                    <span>
+                      <PlatformTag platform={item.channel.platform} />
+                      {item.channel.displayName}
+                    </span>
                   </div>
                   <h3 className="stream-card-title">
                     {item.title || item.channel.displayName}

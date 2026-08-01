@@ -176,45 +176,34 @@ textarea {
 }
 
 .storage-tier + .storage-tier {
-  margin-top: 2px;
+  margin-top: 12px;
 }
 
-/* Label and number share one line: the number is what is actually being read,
-   so it sits at the end of the row in tabular figures rather than under a
-   heading of its own. */
-.storage-tier-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 5px;
-}
-
+/* The sidebar is narrow, so the label gets its own line. Sharing one with the
+   number truncated both to "Диск серв..." — an abbreviation that carries less
+   than the space it saved. */
 .storage-tier-name {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--text-dim);
   font-size: 11px;
-  min-width: 0;
+  margin-bottom: 6px;
 }
 
-.storage-tier-name span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.storage-tier-value {
-  color: var(--text);
+.storage-tier-meta {
+  margin-top: 5px;
   font-size: 11px;
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
-.storage-tier-value em {
-  color: var(--text-dim);
-  font-style: normal;
+/* Free space is the number being looked for; the total is the context that
+   makes it mean something, so both are on the line and only the first is
+   emphasised. */
+.storage-tier-meta strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* A hairline, not a progress bar: at a glance it reads as "how full", and it
@@ -250,7 +239,7 @@ textarea {
   );
 }
 
-.storage-tier.offline .storage-tier-value {
+.storage-tier.offline .storage-tier-meta {
   color: var(--danger);
 }
 

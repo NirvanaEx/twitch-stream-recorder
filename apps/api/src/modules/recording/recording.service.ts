@@ -24,6 +24,7 @@ import { parseSegmentManifest } from "./segment-manifest.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 import { TwitchEventsService } from "../stream-events/twitch-events.service";
+import { ThumbnailService } from "./thumbnail.service";
 
 type ActiveRecording = {
   channelId: string;
@@ -125,6 +126,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     private readonly emoteMirrorService: EmoteMirrorService,
     private readonly telegramService: TelegramService,
     private readonly twitchEventsService: TwitchEventsService,
+    private readonly thumbnailService: ThumbnailService,
   ) {}
 
   async onModuleInit() {
@@ -133,7 +135,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     await this.checkRecordingDependencies();
     void this.recoverInterruptedRemuxes();
     void this.backfillRestartFragmentAnchors();
-    void this.cleanupStoredThumbnails();
     await this.syncAllChannels();
 
     this.monitorTimer = setInterval(() => {
@@ -1049,6 +1050,15 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         // Let the Telegram offloader pick up the finished recording right away
         // instead of waiting for its next periodic scan.
         this.telegramService.kick();
+
+        // Render the cover once, now, while the video is still a local file.
+        // Doing it here rather than on first view is the difference between an
+        // archive list that opens instantly and one that waits on ffmpeg
+        // seeking through a file that may by then live on a network mount.
+        // Audio has no picture, so it gets none.
+        if (!activeRecording.audioOnly) {
+          void this.thumbnailService.storeCover(session.id);
+        }
       }
 
       try {
