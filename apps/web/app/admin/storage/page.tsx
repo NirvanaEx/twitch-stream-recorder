@@ -155,7 +155,7 @@ export default function StoragePage() {
       ) : null}
 
       {archive && archive.configured ? (
-        <section className="panel" style={{ marginTop: 16 }}>
+        <section className="panel">
           <div className="panel-body">
             <div
               style={{
@@ -166,7 +166,7 @@ export default function StoragePage() {
                 marginBottom: 10,
               }}
             >
-              <h3 className="page-title" style={{ fontSize: 16 }}>
+              <h3 className="section-title">
                 {t.storage.archiveTitle}
               </h3>
               {hasPermission("manage_archives") ? (
@@ -250,12 +250,11 @@ export default function StoragePage() {
             </div>
           </section>
 
-          <section className="panel" style={{ marginTop: 16 }}>
-            <div className="panel-body">
-              <h3 className="page-title" style={{ fontSize: 16, marginBottom: 10 }}>
-                {t.storage.queueTitle}
-              </h3>
-
+          <section className="panel">
+            <div className="panel-head">
+              <h3 className="section-title">{t.storage.queueTitle}</h3>
+            </div>
+            <div>
               {data.queue.length === 0 ? (
                 <div className="empty-state">{t.storage.queueEmpty}</div>
               ) : (

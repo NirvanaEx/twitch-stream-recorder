@@ -189,7 +189,7 @@ export default function ArchivesPage() {
         <div className="modal-overlay" onClick={() => setDetailsArchive(null)}>
           <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h3 className="page-title" style={{ fontSize: 16 }}>
+              <h3 className="section-title">
                 {t.archives.detailsTitle}
               </h3>
               <button type="button" className="btn" onClick={() => setDetailsArchive(null)}>

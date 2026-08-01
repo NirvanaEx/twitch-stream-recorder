@@ -3882,3 +3882,195 @@ textarea {
   flex: 0 0 auto;
   width: 120px;
 }
+
+/* ---------------------------------------------------------------------------
+   Shared page furniture.
+
+   These exist because the same handful of shapes — a titled panel, a row of
+   filters, a numeric table column — were being rebuilt inline on every page
+   with slightly different numbers. That is what made the panel look crooked:
+   .page-shell already puts 18px between sections, so a panel that also carried
+   style={{ marginTop: 16 }} sat 34px from its neighbour while the one next to
+   it sat at 18px.
+   ------------------------------------------------------------------------- */
+
+.section-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.section-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Title on the left, actions on the right, baselines aligned. */
+.panel-head {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* A row of controls above a table: search, toggles, counters. Wraps instead of
+   overflowing, and every child sits on the same baseline. */
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-row .input,
+.filter-row input[type="search"] {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.filter-spacer {
+  flex: 1 1 auto;
+}
+
+.filter-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Numbers line up on their digits or they are noise. */
+.table .col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table th.col-num {
+  text-align: right;
+}
+
+/* Proportion inside a table cell — how much of the disk one directory holds.
+   Same hairline as the sidebar meter so "how full" reads identically wherever
+   it appears. */
+.share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.share-bar {
+  width: 72px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.share-bar-fill {
+  height: 100%;
+  background: var(--text-faint);
+}
+
+.share-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  font-size: 12px;
+  min-width: 38px;
+  text-align: right;
+}
+
+/* Dense label/value pairs for the detail blocks that used to be prose. */
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 20px;
+}
+
+.kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.kv-key {
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.kv-value {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Pagination sits inside the panel it belongs to, not floating after it. */
+.panel-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.panel-foot .pagination {
+  margin: 0;
+}
+
+/* Small status word next to a row. Replaces the ad-hoc inline colours that
+   made the same state look different on every page. */
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.tag.warn {
+  border-color: transparent;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.tag.danger {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tag.ok {
+  border-color: transparent;
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}

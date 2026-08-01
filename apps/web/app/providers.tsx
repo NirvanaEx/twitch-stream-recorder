@@ -73,6 +73,14 @@ type Dictionary = {
     fileKindOther: string;
     deleteFile: string;
     filesPageTitle: string;
+    balanceTitle: string;
+    shareCol: string;
+    kindsTitle: string;
+    kindsSub: string;
+    kindCol: string;
+    searchPlaceholder: string;
+    foundCount: string;
+    missingSub: string;
     filesPageSubtitle: string;
     diskUsedTotal: string;
     dataFiles: string;
@@ -115,6 +123,7 @@ type Dictionary = {
     diskArchive: string;
     diskFreeShort: string;
     diskOf: string;
+    refresh: string;
     diskOffline: string;
     actions: string;
     status: string;
@@ -307,6 +316,14 @@ type Dictionary = {
     showScript: string;
     hideScript: string;
     tracksTitle: string;
+    tracksSub: string;
+    searchPlaceholder: string;
+    colWhere: string;
+    audioOnlyTag: string;
+    whereLocal: string;
+    whereArchive: string;
+    whereTelegram: string;
+    listen: string;
     tracksEmpty: string;
     localCacheNow: string;
     localCacheDays: string;
@@ -493,6 +510,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       fileKindOther: "файл",
       deleteFile: "Удалить файл",
       filesPageTitle: "Проверка файлов и диска",
+      balanceTitle: "Баланс диска",
+      shareCol: "Доля",
+      kindsTitle: "По типам файлов",
+      kindsSub: "Что занимает место, независимо от того, в какой папке лежит",
+      kindCol: "Тип",
+      searchPlaceholder: "Поиск по пути…",
+      foundCount: "Найдено: {count}",
+      missingSub: "Пути из базы, за которыми нет файла на диске",
       filesPageSubtitle:
         "Сверка диска с базой записей: куда уходит место, какие файлы лишние и не потерялись ли нужные.",
       diskUsedTotal: "Занято на диске (всего)",
@@ -537,6 +562,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       diskArchive: "Внешний архив",
       diskFreeShort: "свободно",
       diskOf: "из",
+      refresh: "Обновить",
       diskOffline: "недоступен",
       actions: "Действия",
       status: "Статус",
@@ -749,6 +775,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       showScript: "Показать скрипт",
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
+      tracksSub: "Дорожки, которые userscript накладывает на VOD поверх заглушенных участков",
+      searchPlaceholder: "Поиск по названию или каналу…",
+      colWhere: "Где лежит",
+      audioOnlyTag: "только звук",
+      whereLocal: "на диске",
+      whereArchive: "в архиве",
+      whereTelegram: "в Telegram",
+      listen: "Слушать",
       tracksEmpty: "Аудиодорожек пока нет — они появятся после следующей завершённой записи.",
       localCacheNow:
         "Дорожки хранятся в Telegram постоянно. Локальная копия удаляется сразу после выгрузки — дальше файл отдаётся из Telegram по той же ссылке.",
@@ -937,6 +971,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       fileKindOther: "file",
       deleteFile: "Delete file",
       filesPageTitle: "Files & disk audit",
+      balanceTitle: "Disk balance",
+      shareCol: "Share",
+      kindsTitle: "By file type",
+      kindsSub: "What is taking up space, regardless of which folder it sits in",
+      kindCol: "Type",
+      searchPlaceholder: "Search by path…",
+      foundCount: "Found: {count}",
+      missingSub: "Paths in the database with no file behind them",
       filesPageSubtitle:
         "The disk is checked against the recordings database: where the space goes, which files are orphans and whether any expected files are missing.",
       diskUsedTotal: "Disk used (total)",
@@ -981,6 +1023,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       diskArchive: "External archive",
       diskFreeShort: "free",
       diskOf: "of",
+      refresh: "Refresh",
       diskOffline: "unreachable",
       actions: "Actions",
       status: "Status",
@@ -1193,6 +1236,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       showScript: "Show script",
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",
+      tracksSub: "Tracks the userscript overlays on a VOD across its muted sections",
+      searchPlaceholder: "Search by title or channel…",
+      colWhere: "Stored in",
+      audioOnlyTag: "audio only",
+      whereLocal: "on disk",
+      whereArchive: "in the archive",
+      whereTelegram: "in Telegram",
+      listen: "Listen",
       tracksEmpty: "No audio tracks yet — they appear after the next finished recording.",
       localCacheNow:
         "Tracks stay in Telegram permanently. The local copy is dropped right after the upload — the same URL then streams from Telegram.",

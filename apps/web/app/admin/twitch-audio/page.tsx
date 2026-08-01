@@ -1,17 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiSend } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
 import { buildTwitchAudioUserscript } from "../../lib/twitch-audio-script";
 import { useLanguage } from "../../providers";
+import { Pagination } from "../../components/Pagination";
+import { PlatformTag } from "../../components/PlatformTag";
+import { formatFileSize } from "../../lib/media";
 
 type AudioTrack = {
   id: string;
   title: string | null;
   channelLogin: string;
   channelDisplayName: string;
+  platform: "twitch" | "kick";
+  sizeBytes: string | null;
+  storedIn: "local" | "archive" | "telegram";
   startedAt: string | null;
   durationSec: number | null;
   audioOnly: boolean;
@@ -19,6 +25,8 @@ type AudioTrack = {
   partCount: number | null;
   audioUrl: string;
 };
+
+const PAGE_SIZE = 15;
 
 type AudioSettings = {
   audioTrackEnabled: boolean;
@@ -44,6 +52,8 @@ export default function TwitchAudioPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showScript, setShowScript] = useState(false);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const scriptAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const canManage = hasPermission("manage_archives");
 
@@ -129,6 +139,19 @@ export default function TwitchAudioPage() {
     }
   }
 
+  const filteredTracks = useMemo(() => {
+    if (!tracks) return [];
+    const needle = search.trim().toLowerCase();
+    if (!needle) return tracks;
+    return tracks.filter(
+      (track) =>
+        (track.title ?? "").toLowerCase().includes(needle) ||
+        track.channelLogin.toLowerCase().includes(needle),
+    );
+  }, [tracks, search]);
+
+  const pageTracks = filteredTracks.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   const installUrl = origin
     ? `${origin}/twitch-audio.user.js?origin=${encodeURIComponent(origin)}`
     : "/twitch-audio.user.js";
@@ -211,10 +234,10 @@ export default function TwitchAudioPage() {
       ) : null}
 
       <section className="panel">
+        <div className="panel-head">
+          <h3 className="section-title">{t.twitchAudio.howTitle}</h3>
+        </div>
         <div className="panel-body">
-          <h3 className="page-title" style={{ fontSize: 16, marginBottom: 10 }}>
-            {t.twitchAudio.howTitle}
-          </h3>
           <ol className="page-copy" style={{ paddingLeft: 20, display: "grid", gap: 6 }}>
             <li>{t.twitchAudio.step1}</li>
             <li>{t.twitchAudio.step2}</li>
@@ -229,7 +252,7 @@ export default function TwitchAudioPage() {
             {t.twitchAudio.updateNote}
           </p>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <div className="action-row" style={{ marginTop: 12 }}>
             <a className="btn primary" href={installUrl}>
               {t.twitchAudio.installScript}
             </a>
@@ -272,85 +295,110 @@ export default function TwitchAudioPage() {
         </div>
       </section>
 
-      <section className="panel" style={{ marginTop: 16 }}>
-        <div className="panel-body">
-          <h3 className="page-title" style={{ fontSize: 16, marginBottom: 10 }}>
-            {t.twitchAudio.tracksTitle}
-          </h3>
-
-          {/* Tracks are never lost — only their local copy expires, after which
-              the same URL is served from Telegram. */}
-          {settings && settings.audioKeepLocalDays >= 0 ? (
-            <p className="page-copy" style={{ fontSize: 12, marginBottom: 10 }}>
-              {settings.audioKeepLocalDays === 0
-                ? t.twitchAudio.localCacheNow
-                : t.twitchAudio.localCacheDays.replace(
-                    "{days}",
-                    String(settings.audioKeepLocalDays),
-                  )}
-            </p>
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h3 className="section-title">{t.twitchAudio.tracksTitle}</h3>
+            <p className="section-sub">{t.twitchAudio.tracksSub}</p>
+          </div>
+          {settings ? (
+            <span className="filter-note">
+              {settings.audioKeepLocalDays < 0
+                ? t.storage.keepLocalForever
+                : settings.audioKeepLocalDays === 0
+                  ? t.storage.keepLocalNow
+                  : t.storage.keepLocalNote.replace(
+                      "{days}",
+                      String(settings.audioKeepLocalDays),
+                    )}
+            </span>
           ) : null}
+        </div>
 
-          {!tracks ? (
-            <div className="empty-state">{t.common.loading}</div>
-          ) : tracks.length === 0 ? (
-            <div className="empty-state">{t.twitchAudio.tracksEmpty}</div>
-          ) : (
+        <div className="filter-row">
+          <input
+            type="search"
+            className="input"
+            placeholder={t.twitchAudio.searchPlaceholder}
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
+          />
+          <span className="filter-spacer" />
+          <span className="filter-note">
+            {t.storage.foundCount.replace("{count}", String(filteredTracks.length))}
+          </span>
+        </div>
+
+        {tracks === null ? (
+          <div className="empty-state">{t.common.loading}</div>
+        ) : pageTracks.length === 0 ? (
+          <div className="empty-state">{t.twitchAudio.tracksEmpty}</div>
+        ) : (
+          <>
             <div className="table-wrap">
               <table className="table">
                 <thead>
                   <tr>
-                    <th>{t.twitchAudio.colChannel}</th>
-                    <th>{t.twitchAudio.colTitle}</th>
-                    <th className="col-meta">{t.twitchAudio.colDate}</th>
-                    <th className="col-meta">{t.twitchAudio.colDuration}</th>
-                    <th className="col-actions" />
+                    <th>{t.common.title}</th>
+                    <th>{t.common.channel}</th>
+                    <th className="col-num">{t.twitchAudio.colDate}</th>
+                    <th className="col-num">{t.twitchAudio.colDuration}</th>
+                    <th className="col-num">{t.common.sizeLabel}</th>
+                    <th>{t.twitchAudio.colWhere}</th>
+                    <th className="col-actions">{t.common.actions}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {tracks.map((track) => (
+                  {pageTracks.map((track) => (
                     <tr key={track.id}>
-                      <td>@{track.channelLogin}</td>
                       <td className="col-truncate" title={track.title ?? ""}>
-                        <Link href={`/admin/archives/${track.id}`}>
-                          {track.title || track.channelDisplayName}
-                        </Link>
-                      </td>
-                      <td className="col-meta">
-                        {track.startedAt
-                          ? new Date(track.startedAt).toLocaleString()
-                          : "—"}
-                        {track.partIndex && track.partCount ? (
-                          <span style={{ opacity: 0.7 }}>
-                            {" · "}
-                            {t.twitchAudio.partLabel
-                              .replace("{n}", String(track.partIndex))
-                              .replace("{m}", String(track.partCount))}
+                        {track.title || track.channelDisplayName}
+                        {track.partCount && track.partCount > 1 ? (
+                          <span className="tag" style={{ marginLeft: 6 }}>
+                            {track.partIndex}/{track.partCount}
+                          </span>
+                        ) : null}
+                        {track.audioOnly ? (
+                          <span className="tag" style={{ marginLeft: 6 }}>
+                            {t.twitchAudio.audioOnlyTag}
                           </span>
                         ) : null}
                       </td>
-                      <td className="col-meta">
-                        {track.audioOnly ? "🎧 " : ""}
-                        {formatDuration(track.durationSec)}
+                      <td>
+                        <PlatformTag platform={track.platform} />@{track.channelLogin}
+                      </td>
+                      <td className="col-num">
+                        {track.startedAt ? new Date(track.startedAt).toLocaleString() : "—"}
+                      </td>
+                      <td className="col-num">{formatDuration(track.durationSec)}</td>
+                      <td className="col-num">
+                        {track.sizeBytes ? formatFileSize(track.sizeBytes) : "—"}
+                      </td>
+                      <td>
+                        <span className={track.storedIn === "telegram" ? "tag" : "tag ok"}>
+                          {track.storedIn === "local"
+                            ? t.twitchAudio.whereLocal
+                            : track.storedIn === "archive"
+                              ? t.twitchAudio.whereArchive
+                              : t.twitchAudio.whereTelegram}
+                        </span>
                       </td>
                       <td className="col-actions">
                         <div className="action-row">
-                          <a
-                            className="btn"
-                            href={`${track.audioUrl}?download=1`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {t.twitchAudio.download}
+                          <a className="btn" href={track.audioUrl} target="_blank" rel="noreferrer">
+                            {t.twitchAudio.listen}
                           </a>
                           {canManage ? (
                             <button
-                              className="btn danger"
                               type="button"
+                              className="btn danger"
                               disabled={busyId === track.id}
                               onClick={() => void handleDelete(track)}
                             >
-                              {t.twitchAudio.deleteAudio}
+                              {t.common.delete}
                             </button>
                           ) : null}
                         </div>
@@ -360,8 +408,16 @@ export default function TwitchAudioPage() {
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
+            <div className="panel-foot">
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={filteredTracks.length}
+                onPageChange={setPage}
+              />
+            </div>
+          </>
+        )}
       </section>
     </main>
   );
