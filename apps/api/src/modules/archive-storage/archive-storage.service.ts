@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { AppSettings, Channel, StreamSession } from "@prisma/client";
+import * as fs from "node:fs";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -510,6 +511,10 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
       configured: Boolean(root),
       available: isArchiveAvailable(),
       root,
+      // Capacity of the mounted drive itself. The "Files and disk" page
+      // measures DATA_DIR and therefore reports the server's own disk; without
+      // this the panel never shows how much room the archive actually has.
+      disk: root ? this.getDiskSpace(root) : null,
       keepDays: settings.archiveKeepDays,
       storedCount: storedSessions.length,
       storedBytes: String(storedBytes),
@@ -517,6 +522,32 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
       queuedCount,
       errorCount,
     };
+  }
+
+  /**
+   * Size and free space of the filesystem holding the archive. Null when the
+   * mount is unreachable — on a dead FUSE mount statfs throws rather than
+   * reporting zeroes, and a card showing "0 B free" would be a lie.
+   */
+  private getDiskSpace(path: string) {
+    // statfsSync landed in Node 18.15 — on an older runtime just omit the card.
+    const statfsSync = (fs as unknown as {
+      statfsSync?: (path: string) => { bsize: number; blocks: number; bavail: number };
+    }).statfsSync;
+
+    if (typeof statfsSync !== "function") {
+      return null;
+    }
+
+    try {
+      const stat = statfsSync(path);
+      return {
+        totalBytes: String(stat.bsize * stat.blocks),
+        freeBytes: String(stat.bsize * stat.bavail),
+      };
+    } catch {
+      return null;
+    }
   }
 
   private toBigInt(value: string | null): bigint {

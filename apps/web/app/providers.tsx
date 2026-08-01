@@ -39,6 +39,7 @@ type Dictionary = {
     keepLocalNow: string;
     keepLocalForever: string;
     archiveTitle: string;
+    archiveDiskFree: string;
     archiveKeepNote: string;
     archiveKeepForever: string;
     archiveUnavailable: string;
@@ -449,6 +450,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNow: "Локальная копия удаляется сразу после выгрузки",
       keepLocalForever: "Локальные копии не удаляются",
       archiveTitle: "Архивное хранилище",
+      archiveDiskFree: "свободно {free} из {total}",
       archiveKeepNote:
         "Записи лежат на подключённом диске {days} дн. от начала эфира, потом остаётся только копия в Telegram",
       archiveKeepForever: "Записи с архивного диска не удаляются",
@@ -886,6 +888,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNow: "Local copies are removed right after the upload",
       keepLocalForever: "Local copies are never removed",
       archiveTitle: "Archive storage",
+      archiveDiskFree: "{free} free of {total}",
       archiveKeepNote:
         "Recordings stay on the mounted drive for {days} day(s) from the start of the broadcast; after that only the Telegram copy remains",
       archiveKeepForever: "Recordings are never removed from the archive drive",
