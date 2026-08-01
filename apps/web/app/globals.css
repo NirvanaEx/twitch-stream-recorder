@@ -4074,3 +4074,35 @@ textarea {
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+/* Row count next to a tab label: tells you where the data is before you click. */
+.tab-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+}
+
+.tab-btn.active .tab-count {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Only for a tab hiding something that needs attention — orphans, losses. */
+.tab-count.alert {
+  border-color: transparent;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--text-faint);
+}

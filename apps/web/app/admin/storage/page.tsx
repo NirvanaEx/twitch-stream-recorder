@@ -8,6 +8,7 @@ import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useAuth } from "../../lib/auth-context";
 import { useLanguage } from "../../providers";
 import { IconButton } from "../../components/IconButton";
+import { PageTabs } from "../../components/PageTabs";
 import { SendIcon } from "../../components/icons";
 
 type QueueItem = {
@@ -48,6 +49,8 @@ type StorageOverview = {
   queue: QueueItem[];
 };
 
+type TabId = "archive" | "telegram";
+
 export default function StoragePage() {
   const { t } = useLanguage();
   const { hasPermission } = useAuth();
@@ -56,6 +59,7 @@ export default function StoragePage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [sweeping, setSweeping] = useState(false);
+  const [tab, setTab] = useState<TabId>("archive");
 
   const load = useCallback(async () => {
     try {
@@ -154,107 +158,147 @@ export default function StoragePage() {
         </div>
       ) : null}
 
-      {archive && archive.configured ? (
-        <section className="panel">
-          <div className="panel-body">
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                gap: 12,
-                marginBottom: 10,
-              }}
-            >
-              <h3 className="section-title">
-                {t.storage.archiveTitle}
-              </h3>
-              {hasPermission("manage_archives") ? (
-                <button
-                  type="button"
-                  className={`btn${sweeping ? " is-loading" : ""}`}
-                  disabled={sweeping}
-                  onClick={() => void handleSweep()}
-                >
-                  {t.storage.archiveSweep}
-                </button>
+      <section className="panel">
+        <PageTabs
+          tabs={[
+            { id: "archive" as TabId, label: t.storage.tabArchive },
+            {
+              id: "telegram" as TabId,
+              label: t.storage.tabTelegram,
+              count: data?.queue.length,
+              alert: true,
+            },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
+
+        {tab === "archive" ? (
+          !archive?.configured ? (
+            <div className="empty-state">{t.storage.archiveOff}</div>
+          ) : (
+            <div className="panel-body">
+              {archive.available ? null : (
+                <div className="notice error" style={{ marginBottom: 14 }}>
+                  {t.storage.archiveUnavailable}
+                </div>
+              )}
+
+              {archive.disk ? (
+                <div className="storage-bar" style={{ height: 6 }}>
+                  <div
+                    className="storage-bar-fill"
+                    style={{
+                      width: `${
+                        Number(archive.disk.totalBytes) > 0
+                          ? Math.min(
+                              100,
+                              ((Number(archive.disk.totalBytes) -
+                                Number(archive.disk.freeBytes)) /
+                                Number(archive.disk.totalBytes)) *
+                                100,
+                            )
+                          : 0
+                      }%`,
+                    }}
+                  />
+                </div>
               ) : null}
-            </div>
 
-            <p className="page-copy" style={{ fontSize: 12 }}>
-              {archive.keepDays < 0
-                ? t.storage.archiveKeepForever
-                : t.storage.archiveKeepNote.replace("{days}", String(archive.keepDays))}
-              {archive.root ? ` · ${archive.root}` : null}
-              {archive.disk
-                ? ` · ${t.storage.archiveDiskFree
-                    .replace("{free}", formatFileSize(archive.disk.freeBytes))
-                    .replace("{total}", formatFileSize(archive.disk.totalBytes))}`
-                : null}
-            </p>
+              {/* One fact per row — free space, capacity, how much the archive
+                  itself holds and how many recordings that is. */}
+              <div className="kv-grid" style={{ marginTop: 16 }}>
+                {archive.disk ? (
+                  <>
+                    <div className="kv">
+                      <span className="kv-key">{t.storage.diskFree}</span>
+                      <span className="kv-value">{formatFileSize(archive.disk.freeBytes)}</span>
+                    </div>
+                    <div className="kv">
+                      <span className="kv-key">{t.storage.diskCapacity}</span>
+                      <span className="kv-value">{formatFileSize(archive.disk.totalBytes)}</span>
+                    </div>
+                  </>
+                ) : null}
+                <div className="kv">
+                  <span className="kv-key">{t.storage.archiveStoredSize}</span>
+                  <span className="kv-value">{formatFileSize(archive.storedBytes)}</span>
+                </div>
+                <div className="kv">
+                  <span className="kv-key">{t.storage.archiveStored}</span>
+                  <span className="kv-value">{archive.storedCount}</span>
+                </div>
+                <div className="kv">
+                  <span className="kv-key">{t.storage.archiveQueued}</span>
+                  <span className="kv-value">{archive.queuedCount}</span>
+                </div>
+                <div className="kv">
+                  <span className="kv-key">{t.storage.archiveExpired}</span>
+                  <span className="kv-value">{archive.expiredCount}</span>
+                </div>
+                <div className="kv">
+                  <span className="kv-key">{t.storage.archiveKeepLabel}</span>
+                  <span className="kv-value">
+                    {archive.keepDays < 0
+                      ? t.settings.keepLocalForever
+                      : `${archive.keepDays} ${t.settings.keepLocalDaysUnit}`}
+                  </span>
+                </div>
+                <div className="kv">
+                  <span className="kv-key">{t.storage.dataRootLabel}</span>
+                  <span className="kv-value" title={archive.root ?? ""}>
+                    {archive.root ?? "—"}
+                  </span>
+                </div>
+              </div>
 
-            {archive.available ? null : (
-              <div className="notice error" style={{ marginTop: 10 }}>
-                {t.storage.archiveUnavailable}
+              <div className="action-row" style={{ marginTop: 16 }}>
+                {hasPermission("manage_archives") ? (
+                  <button
+                    type="button"
+                    className={`btn${sweeping ? " is-loading" : ""}`}
+                    disabled={sweeping}
+                    onClick={() => void handleSweep()}
+                  >
+                    {t.storage.archiveSweep}
+                  </button>
+                ) : null}
+                {archive.errorCount > 0 ? (
+                  <span className="tag danger">
+                    {t.storage.archiveErrors.replace("{count}", String(archive.errorCount))}
+                  </span>
+                ) : null}
               </div>
-            )}
+            </div>
+          )
+        ) : null}
 
-            <section className="stats-row" style={{ marginTop: 12 }}>
-              <div className="stat-card">
-                <span className="stat-label">{t.storage.archiveStored}</span>
-                <span className="stat-value">{archive.storedCount}</span>
+        {tab === "telegram" ? (
+          !data ? (
+            <div className="empty-state">{t.common.loading}</div>
+          ) : (
+            <>
+              <div className="panel-body">
+                <div className="kv-grid">
+                  <div className="kv">
+                    <span className="kv-key">{t.storage.uploadedCount}</span>
+                    <span className="kv-value">{data.uploadedCount}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="kv-key">{t.storage.telegramSize}</span>
+                    <span className="kv-value">{formatFileSize(data.telegramBytes)}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="kv-key">{t.storage.freedSize}</span>
+                    <span className="kv-value">{formatFileSize(data.freedBytes)}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="kv-key">{t.storage.awaitingCleanup}</span>
+                    <span className="kv-value">{data.awaitingCleanupCount}</span>
+                  </div>
+                </div>
               </div>
-              <div className="stat-card">
-                <span className="stat-label">{t.storage.archiveStoredSize}</span>
-                <span className="stat-value">{formatFileSize(archive.storedBytes)}</span>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">{t.storage.archiveQueued}</span>
-                <span className="stat-value">{archive.queuedCount}</span>
-              </div>
-              <div className="stat-card">
-                <span className="stat-label">{t.storage.archiveExpired}</span>
-                <span className="stat-value">{archive.expiredCount}</span>
-              </div>
-            </section>
 
-            {archive.errorCount > 0 ? (
-              <div className="notice error" style={{ marginTop: 10 }}>
-                {t.storage.archiveErrors.replace("{count}", String(archive.errorCount))}
-              </div>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-
-      {!data ? (
-        <div className="empty-state">{t.common.loading}</div>
-      ) : (
-        <>
-          <section className="stats-row">
-            <div className="stat-card">
-              <span className="stat-label">{t.storage.uploadedCount}</span>
-              <span className="stat-value">{data.uploadedCount}</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">{t.storage.telegramSize}</span>
-              <span className="stat-value">{formatFileSize(data.telegramBytes)}</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">{t.storage.freedSize}</span>
-              <span className="stat-value">{formatFileSize(data.freedBytes)}</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-label">{t.storage.awaitingCleanup}</span>
-              <span className="stat-value">{data.awaitingCleanupCount}</span>
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="panel-head">
-              <h3 className="section-title">{t.storage.queueTitle}</h3>
-            </div>
-            <div>
               {data.queue.length === 0 ? (
                 <div className="empty-state">{t.storage.queueEmpty}</div>
               ) : (
@@ -264,8 +308,8 @@ export default function StoragePage() {
                       <tr>
                         <th>{t.common.channel}</th>
                         <th>{t.common.title}</th>
-                        <th className="col-meta">{t.common.sizeLabel}</th>
-                        <th className="col-meta">{t.common.status}</th>
+                        <th className="col-num">{t.common.sizeLabel}</th>
+                        <th>{t.common.status}</th>
                         <th className="col-actions">{t.common.actions}</th>
                       </tr>
                     </thead>
@@ -278,8 +322,8 @@ export default function StoragePage() {
                               {item.title || item.channelDisplayName}
                             </Link>
                           </td>
-                          <td className="col-meta">{formatFileSize(item.fileSizeBytes)}</td>
-                          <td className="col-meta">{renderQueueStatus(item)}</td>
+                          <td className="col-num">{formatFileSize(item.fileSizeBytes)}</td>
+                          <td>{renderQueueStatus(item)}</td>
                           <td className="col-actions">
                             {item.telegramStatus === "error" && hasPermission("manage_archives") ? (
                               <IconButton
@@ -298,16 +342,16 @@ export default function StoragePage() {
                   </table>
                 </div>
               )}
-            </div>
-          </section>
+            </>
+          )
+        ) : null}
+      </section>
 
-          <div className="notice info" style={{ marginTop: 16 }}>
-            <Link href="/admin/files" style={{ textDecoration: "underline" }}>
-              {t.storage.diskTitle} →
-            </Link>
-          </div>
-        </>
-      )}
+      <div className="notice info">
+        <Link href="/admin/files" style={{ textDecoration: "underline" }}>
+          {t.storage.diskTitle} →
+        </Link>
+      </div>
     </main>
   );
 }
