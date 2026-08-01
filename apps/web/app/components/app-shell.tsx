@@ -210,6 +210,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   freeBytes={disk.freeBytes}
                   totalBytes={disk.totalBytes}
                   freeLabel={t.common.diskFreeShort}
+                  ofLabel={t.common.diskOf}
                 />
               ) : null}
 
@@ -220,6 +221,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   freeBytes={archive.disk ? Number(archive.disk.freeBytes) : 0}
                   totalBytes={archive.disk ? Number(archive.disk.totalBytes) : 0}
                   freeLabel={t.common.diskFreeShort}
+                  ofLabel={t.common.diskOf}
                   offline={!archive.available}
                   offlineLabel={t.common.diskOffline}
                 />
@@ -249,6 +251,7 @@ function StorageTier({
   freeBytes,
   totalBytes,
   freeLabel,
+  ofLabel,
   offline = false,
   offlineLabel,
 }: {
@@ -257,6 +260,7 @@ function StorageTier({
   freeBytes: number;
   totalBytes: number;
   freeLabel: string;
+  ofLabel: string;
   offline?: boolean;
   offlineLabel?: string;
 }) {
@@ -266,26 +270,25 @@ function StorageTier({
 
   return (
     <div className={offline ? "storage-tier offline" : "storage-tier"}>
-      <div className="storage-tier-row">
-        <span className="storage-tier-name">
-          {icon}
-          <span>{label}</span>
-        </span>
-        <span className="storage-tier-value">
-          {offline || totalBytes <= 0 ? (
-            offlineLabel ?? "—"
-          ) : (
-            <>
-              {formatBytes(freeBytes)} <em>{freeLabel}</em>
-            </>
-          )}
-        </span>
+      <div className="storage-tier-name">
+        {icon}
+        <span>{label}</span>
       </div>
       <div className="storage-bar">
         <div
           className={`storage-bar-fill ${fillClass}`}
           style={{ width: offline ? "100%" : `${usedPercent}%` }}
         />
+      </div>
+      <div className="storage-tier-meta">
+        {offline || totalBytes <= 0 ? (
+          offlineLabel ?? "—"
+        ) : (
+          <>
+            <strong>{formatBytes(freeBytes)}</strong> {freeLabel} {ofLabel}{" "}
+            {formatBytes(totalBytes)}
+          </>
+        )}
       </div>
     </div>
   );

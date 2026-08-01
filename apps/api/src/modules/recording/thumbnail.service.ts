@@ -2,9 +2,10 @@ import { Injectable, Logger, NotFoundException, OnModuleDestroy } from "@nestjs/
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { ARCHIVE_FILES } from "../archive-storage/archive-paths";
 import { PrismaService } from "../prisma/prisma.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
@@ -89,6 +90,44 @@ export class ThumbnailService implements OnModuleDestroy {
     return `"cover-${sessionId}"`;
   }
 
+  /**
+   * Where a session's cover is kept on the server disk once it has been
+   * rendered. Covers used to be produced on demand, every time, which made the
+   * archive list wait on fifteen ffmpeg seeks — and after the recording moved
+   * to Telegram or a network mount, each of those seeks went over the network.
+   * Rendering once, at the end of the capture, turns that into a file read.
+   */
+  private storedCoverPath(sessionId: string): string {
+    return join(resolve(process.env.DATA_DIR ?? "./data"), "covers", `${sessionId}.jpg`);
+  }
+
+  /**
+   * Render a session's cover and keep it, so the first person to open the
+   * archive list does not pay for it. Called once, right after the capture
+   * finishes, and deliberately best-effort: a cover is not worth failing a
+   * recording over.
+   */
+  async storeCover(sessionId: string): Promise<void> {
+    try {
+      const { buffer } = await this.getCover(sessionId);
+      const target = this.storedCoverPath(sessionId);
+
+      mkdirSync(dirname(target), { recursive: true });
+      await writeFile(target, buffer);
+
+      await this.prisma.streamSession.update({
+        where: { id: sessionId },
+        data: { thumbnailPath: target },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Could not store the cover of session ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   /** Path of the cover stored in a session's archive folder, if it is there. */
   private archivedCoverPath(archiveDir: string | null): string | null {
     if (!archiveDir) {
@@ -114,6 +153,7 @@ export class ThumbnailService implements OnModuleDestroy {
         durationSec: true,
         telegramStatus: true,
         archiveDir: true,
+        thumbnailPath: true,
         segmented: true,
         // First chunk of a segmented capture: the cover is taken near the
         // start of the broadcast, so that is the only one worth looking at.
@@ -132,6 +172,21 @@ export class ThumbnailService implements OnModuleDestroy {
 
     if (!session || session.audioOnly) {
       throw new NotFoundException("Обложка для этой записи недоступна.");
+    }
+
+    // Already rendered once, either here on the server disk or next to the
+    // video in the archive folder. Both are a file read instead of an ffmpeg
+    // seek over a network.
+    for (const candidate of [session.thumbnailPath, this.archivedCoverPath(session.archiveDir)]) {
+      if (!candidate) continue;
+
+      try {
+        if (existsSync(candidate)) {
+          return await readFile(candidate);
+        }
+      } catch {
+        // Unreadable or an unreachable mount — fall through and render.
+      }
     }
 
     // The archive tier already carries a rendered cover next to the video.

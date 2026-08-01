@@ -114,6 +114,7 @@ type Dictionary = {
     diskServer: string;
     diskArchive: string;
     diskFreeShort: string;
+    diskOf: string;
     diskOffline: string;
     actions: string;
     status: string;
@@ -535,6 +536,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       diskServer: "Диск сервера",
       diskArchive: "Внешний архив",
       diskFreeShort: "свободно",
+      diskOf: "из",
       diskOffline: "недоступен",
       actions: "Действия",
       status: "Статус",
@@ -978,6 +980,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       diskServer: "Server disk",
       diskArchive: "External archive",
       diskFreeShort: "free",
+      diskOf: "of",
       diskOffline: "unreachable",
       actions: "Actions",
       status: "Status",

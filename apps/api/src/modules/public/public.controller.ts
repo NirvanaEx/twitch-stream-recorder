@@ -89,7 +89,14 @@ export class PublicStreamsController {
     // by title (case-insensitive substring).
     const where: Prisma.StreamSessionWhereInput = {
       videoStatus: "ready",
-      playbackPath: { not: null },
+      // Audio-only captures are a tool, not a broadcast to browse: the track
+      // exists to be overlaid on a Twitch VOD by the userscript, it has no
+      // picture, and listing it here only made the public page look broken.
+      audioOnly: false,
+      // A segmented capture has no single file to point at — its chunks are
+      // the recording — so "has a playbackPath" is no longer the same question
+      // as "is there something to watch".
+      OR: [{ playbackPath: { not: null } }, { segmented: true }],
       ...(search
         ? {
             title: {
@@ -128,6 +135,9 @@ export class PublicStreamsController {
             login: session.channel.twitchLogin,
             displayName: session.channel.displayName ?? session.channel.twitchLogin,
             profileImageUrl: session.channel.profileImageUrl,
+            // The same slug on Twitch and on Kick can be different people, so
+            // where a recording came from has to travel with it.
+            platform: session.channel.platform,
           },
           previewImageUrl: session.previewImageUrl,
           // Frame rendered from the recording itself on demand; Twitch's
