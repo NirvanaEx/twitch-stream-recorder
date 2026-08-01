@@ -7,6 +7,7 @@ import { useAuth } from "../../lib/auth-context";
 import { buildTwitchAudioUserscript } from "../../lib/twitch-audio-script";
 import { useLanguage } from "../../providers";
 import { Pagination } from "../../components/Pagination";
+import { PageTabs } from "../../components/PageTabs";
 import { PlatformTag } from "../../components/PlatformTag";
 import { formatFileSize } from "../../lib/media";
 
@@ -27,6 +28,8 @@ type AudioTrack = {
 };
 
 const PAGE_SIZE = 15;
+
+type TabId = "tracks" | "install";
 
 type AudioSettings = {
   audioTrackEnabled: boolean;
@@ -54,6 +57,7 @@ export default function TwitchAudioPage() {
   const [showScript, setShowScript] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [tab, setTab] = useState<TabId>("tracks");
   const scriptAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const canManage = hasPermission("manage_archives");
 
@@ -234,73 +238,19 @@ export default function TwitchAudioPage() {
       ) : null}
 
       <section className="panel">
+        <PageTabs
+          tabs={[
+            { id: "tracks" as TabId, label: t.twitchAudio.tabTracks, count: tracks?.length },
+            { id: "install" as TabId, label: t.twitchAudio.tabInstall },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
+
+        {tab === "tracks" ? (
+          <>
         <div className="panel-head">
-          <h3 className="section-title">{t.twitchAudio.howTitle}</h3>
-        </div>
-        <div className="panel-body">
-          <ol className="page-copy" style={{ paddingLeft: 20, display: "grid", gap: 6 }}>
-            <li>{t.twitchAudio.step1}</li>
-            <li>{t.twitchAudio.step2}</li>
-            <li>{t.twitchAudio.step3}</li>
-            <li>{t.twitchAudio.step4}</li>
-          </ol>
-
-          <p className="page-copy" style={{ fontSize: 12, marginTop: 10 }}>
-            {t.twitchAudio.serverNote.replace("{origin}", origin || "…")}
-          </p>
-          <p className="page-copy" style={{ fontSize: 12, marginTop: 6 }}>
-            {t.twitchAudio.updateNote}
-          </p>
-
-          <div className="action-row" style={{ marginTop: 12 }}>
-            <a className="btn primary" href={installUrl}>
-              {t.twitchAudio.installScript}
-            </a>
-            <button
-              className="btn"
-              type="button"
-              disabled={!script}
-              onClick={() => void handleCopy()}
-            >
-              {copied ? t.twitchAudio.copied : t.twitchAudio.copyScript}
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => setShowScript((current) => !current)}
-            >
-              {showScript ? t.twitchAudio.hideScript : t.twitchAudio.showScript}
-            </button>
-          </div>
-
-          <textarea
-            ref={scriptAreaRef}
-            readOnly
-            value={script}
-            spellCheck={false}
-            style={{
-              display: showScript ? "block" : "none",
-              width: "100%",
-              minHeight: 280,
-              marginTop: 12,
-              background: "var(--bg-input, #0e0e10)",
-              color: "inherit",
-              border: "1px solid var(--border, #2f2f35)",
-              borderRadius: 8,
-              padding: 10,
-              fontFamily: "monospace",
-              fontSize: 12,
-            }}
-          />
-        </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <div>
-            <h3 className="section-title">{t.twitchAudio.tracksTitle}</h3>
-            <p className="section-sub">{t.twitchAudio.tracksSub}</p>
-          </div>
+          <p className="section-sub">{t.twitchAudio.tracksSub}</p>
           {settings ? (
             <span className="filter-note">
               {settings.audioKeepLocalDays < 0
@@ -418,6 +368,69 @@ export default function TwitchAudioPage() {
             </div>
           </>
         )}
+          </>
+        ) : null}
+
+        {tab === "install" ? (
+          <>
+        <div className="panel-body">
+          <ol className="page-copy" style={{ paddingLeft: 20, display: "grid", gap: 6 }}>
+            <li>{t.twitchAudio.step1}</li>
+            <li>{t.twitchAudio.step2}</li>
+            <li>{t.twitchAudio.step3}</li>
+            <li>{t.twitchAudio.step4}</li>
+          </ol>
+
+          <p className="page-copy" style={{ fontSize: 12, marginTop: 10 }}>
+            {t.twitchAudio.serverNote.replace("{origin}", origin || "…")}
+          </p>
+          <p className="page-copy" style={{ fontSize: 12, marginTop: 6 }}>
+            {t.twitchAudio.updateNote}
+          </p>
+
+          <div className="action-row" style={{ marginTop: 12 }}>
+            <a className="btn primary" href={installUrl}>
+              {t.twitchAudio.installScript}
+            </a>
+            <button
+              className="btn"
+              type="button"
+              disabled={!script}
+              onClick={() => void handleCopy()}
+            >
+              {copied ? t.twitchAudio.copied : t.twitchAudio.copyScript}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setShowScript((current) => !current)}
+            >
+              {showScript ? t.twitchAudio.hideScript : t.twitchAudio.showScript}
+            </button>
+          </div>
+
+          <textarea
+            ref={scriptAreaRef}
+            readOnly
+            value={script}
+            spellCheck={false}
+            style={{
+              display: showScript ? "block" : "none",
+              width: "100%",
+              minHeight: 280,
+              marginTop: 12,
+              background: "var(--bg-input, #0e0e10)",
+              color: "inherit",
+              border: "1px solid var(--border, #2f2f35)",
+              borderRadius: 8,
+              padding: 10,
+              fontFamily: "monospace",
+              fontSize: 12,
+            }}
+          />
+        </div>
+          </>
+        ) : null}
       </section>
     </main>
   );

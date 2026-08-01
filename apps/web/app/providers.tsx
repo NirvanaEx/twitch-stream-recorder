@@ -39,6 +39,10 @@ type Dictionary = {
     keepLocalNow: string;
     keepLocalForever: string;
     archiveTitle: string;
+    tabArchive: string;
+    tabTelegram: string;
+    archiveOff: string;
+    archiveKeepLabel: string;
     archiveDiskFree: string;
     archiveKeepNote: string;
     archiveKeepForever: string;
@@ -74,6 +78,15 @@ type Dictionary = {
     deleteFile: string;
     filesPageTitle: string;
     balanceTitle: string;
+    tabOverview: string;
+    tabDirs: string;
+    tabKinds: string;
+    tabFiles: string;
+    tabMissing: string;
+    statusLinked: string;
+    diskCapacity: string;
+    orphanBytesLabel: string;
+    dataRootLabel: string;
     shareCol: string;
     kindsTitle: string;
     kindsSub: string;
@@ -317,6 +330,8 @@ type Dictionary = {
     hideScript: string;
     tracksTitle: string;
     tracksSub: string;
+    tabTracks: string;
+    tabInstall: string;
     searchPlaceholder: string;
     colWhere: string;
     audioOnlyTag: string;
@@ -473,6 +488,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNow: "Локальная копия удаляется сразу после выгрузки",
       keepLocalForever: "Локальные копии не удаляются",
       archiveTitle: "Архивное хранилище",
+      tabArchive: "Архивный диск",
+      tabTelegram: "Telegram",
+      archiveOff: "Архивный диск не настроен — записи живут на сервере и в Telegram.",
+      archiveKeepLabel: "Срок хранения",
       archiveDiskFree: "свободно {free} из {total}",
       archiveKeepNote:
         "Записи лежат на подключённом диске {days} дн. от начала эфира, потом остаётся только копия в Telegram",
@@ -511,6 +530,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       deleteFile: "Удалить файл",
       filesPageTitle: "Проверка файлов и диска",
       balanceTitle: "Баланс диска",
+      tabOverview: "Обзор",
+      tabDirs: "Папки",
+      tabKinds: "Типы",
+      tabFiles: "Файлы",
+      tabMissing: "Пропали",
+      statusLinked: "привязан",
+      diskCapacity: "Объём диска",
+      orphanBytesLabel: "Объём лишних",
+      dataRootLabel: "Каталог данных",
       shareCol: "Доля",
       kindsTitle: "По типам файлов",
       kindsSub: "Что занимает место, независимо от того, в какой папке лежит",
@@ -776,6 +804,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       hideScript: "Скрыть скрипт",
       tracksTitle: "Доступные аудиодорожки",
       tracksSub: "Дорожки, которые userscript накладывает на VOD поверх заглушенных участков",
+      tabTracks: "Дорожки",
+      tabInstall: "Установка скрипта",
       searchPlaceholder: "Поиск по названию или каналу…",
       colWhere: "Где лежит",
       audioOnlyTag: "только звук",
@@ -934,6 +964,10 @@ const dictionaries: Record<Locale, Dictionary> = {
       keepLocalNow: "Local copies are removed right after the upload",
       keepLocalForever: "Local copies are never removed",
       archiveTitle: "Archive storage",
+      tabArchive: "Archive drive",
+      tabTelegram: "Telegram",
+      archiveOff: "No archive drive configured — recordings live on the server and in Telegram.",
+      archiveKeepLabel: "Retention",
       archiveDiskFree: "{free} free of {total}",
       archiveKeepNote:
         "Recordings stay on the mounted drive for {days} day(s) from the start of the broadcast; after that only the Telegram copy remains",
@@ -972,6 +1006,15 @@ const dictionaries: Record<Locale, Dictionary> = {
       deleteFile: "Delete file",
       filesPageTitle: "Files & disk audit",
       balanceTitle: "Disk balance",
+      tabOverview: "Overview",
+      tabDirs: "Folders",
+      tabKinds: "Types",
+      tabFiles: "Files",
+      tabMissing: "Missing",
+      statusLinked: "linked",
+      diskCapacity: "Disk capacity",
+      orphanBytesLabel: "Orphan size",
+      dataRootLabel: "Data directory",
       shareCol: "Share",
       kindsTitle: "By file type",
       kindsSub: "What is taking up space, regardless of which folder it sits in",
@@ -1237,6 +1280,8 @@ const dictionaries: Record<Locale, Dictionary> = {
       hideScript: "Hide script",
       tracksTitle: "Available audio tracks",
       tracksSub: "Tracks the userscript overlays on a VOD across its muted sections",
+      tabTracks: "Tracks",
+      tabInstall: "Script setup",
       searchPlaceholder: "Search by title or channel…",
       colWhere: "Stored in",
       audioOnlyTag: "audio only",
