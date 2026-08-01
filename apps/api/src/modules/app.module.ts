@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { ArchiveStorageModule } from "./archive-storage/archive-storage.module";
 import { ArchivesModule } from "./archives/archives.module";
 import { ChatModule } from "./chat/chat.module";
 import { AuthModule } from "./auth/auth.module";
@@ -31,6 +32,7 @@ import { UsersModule } from "./users/users.module";
     DashboardModule,
     ChannelsModule,
     ArchivesModule,
+    ArchiveStorageModule,
     PublicModule,
     SettingsModule,
     StorageModule,

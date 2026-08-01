@@ -14,6 +14,7 @@ type SettingsResponse = {
   audioTrackEnabled: boolean;
   videoKeepLocalDays: number;
   audioKeepLocalDays: number;
+  archiveKeepDays: number;
   telegramApiIdSet: boolean;
   telegramApiHashSet: boolean;
   telegramBotTokenSet: boolean;
@@ -60,6 +61,7 @@ export default function SettingsPage() {
     audioTrackEnabled: true,
     videoKeepLocalDays: 0,
     audioKeepLocalDays: 0,
+    archiveKeepDays: 90,
     telegramApiIdSet: false,
     telegramApiHashSet: false,
     telegramBotTokenSet: false,
@@ -335,6 +337,14 @@ export default function SettingsPage() {
           labels={t.settings}
         />
 
+        <ArchiveKeepField
+          label={t.settings.archiveKeep}
+          hint={t.settings.archiveKeepHint}
+          value={form.archiveKeepDays}
+          onChange={(value) => setForm((c) => ({ ...c, archiveKeepDays: value }))}
+          labels={t.settings}
+        />
+
         {telegramStatus && !telegramStatus.tokenConfigured ? (
           <div className="notice info">{t.settings.storageNoTelegramNote}</div>
         ) : null}
@@ -433,6 +443,71 @@ function KeepLocalField({
         >
           <option value="immediate">{labels.keepLocalImmediate}</option>
           <option value="days">{labels.keepLocalDays}</option>
+          <option value="forever">{labels.keepLocalForever}</option>
+        </select>
+
+        {mode === "days" ? (
+          <label className="input-suffix">
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={3650}
+              value={value}
+              onChange={(event) =>
+                onChange(Math.min(3650, Math.max(1, Number(event.target.value) || 1)))
+              }
+            />
+            <span>{labels.keepLocalDaysUnit}</span>
+          </label>
+        ) : null}
+      </div>
+      {hint ? (
+        <span className="page-copy" style={{ fontSize: 12 }}>
+          {hint}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Archive retention. Deliberately not the KeepLocalField above: on the archive
+ * tier "delete immediately" is not a meaningful choice — the whole point of the
+ * tier is that the recording lives there for a while — so the only options are
+ * a day count and "keep forever".
+ */
+function ArchiveKeepField({
+  label,
+  hint,
+  value,
+  onChange,
+  labels,
+}: {
+  label: string;
+  hint?: string;
+  value: number;
+  onChange: (value: number) => void;
+  labels: {
+    archiveKeepDaysMode: string;
+    keepLocalForever: string;
+    keepLocalDaysUnit: string;
+  };
+}) {
+  const mode = value < 0 ? "forever" : "days";
+
+  return (
+    <div className="field">
+      <span className="field-label">{label}</span>
+      <div className="input-row">
+        <select
+          className="input"
+          value={mode}
+          onChange={(event) =>
+            onChange(event.target.value === "forever" ? -1 : Math.max(1, value))
+          }
+        >
+          <option value="days">{labels.archiveKeepDaysMode}</option>
           <option value="forever">{labels.keepLocalForever}</option>
         </select>
 

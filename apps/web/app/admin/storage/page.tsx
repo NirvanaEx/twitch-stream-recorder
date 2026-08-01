@@ -22,6 +22,18 @@ type QueueItem = {
   startedAt: string | null;
 };
 
+type ArchiveOverview = {
+  configured: boolean;
+  available: boolean;
+  root: string | null;
+  keepDays: number;
+  storedCount: number;
+  storedBytes: string;
+  expiredCount: number;
+  queuedCount: number;
+  errorCount: number;
+};
+
 type StorageOverview = {
   enabled: boolean;
   configured: boolean;
@@ -39,13 +51,19 @@ export default function StoragePage() {
   const { t } = useLanguage();
   const { hasPermission } = useAuth();
   const [data, setData] = useState<StorageOverview | null>(null);
+  const [archive, setArchive] = useState<ArchiveOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [sweeping, setSweeping] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const response = await apiGet<StorageOverview>("telegram/storage");
-      setData(response);
+      const [storage, archiveOverview] = await Promise.all([
+        apiGet<StorageOverview>("telegram/storage"),
+        apiGet<ArchiveOverview>("archive-storage"),
+      ]);
+      setData(storage);
+      setArchive(archiveOverview);
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
@@ -57,6 +75,18 @@ export default function StoragePage() {
   }, [load]);
 
   useRealtimeRefresh(load);
+
+  async function handleSweep() {
+    setSweeping(true);
+    try {
+      await apiSend("archive-storage/sweep", "POST");
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : t.errors.requestFailed);
+    } finally {
+      setSweeping(false);
+    }
+  }
 
   async function handleRetry(sessionId: string) {
     setBusyId(sessionId);
@@ -121,6 +151,74 @@ export default function StoragePage() {
               ? t.storage.keepLocalNow
               : t.storage.keepLocalNote.replace("{days}", String(data.videoKeepLocalDays))}
         </div>
+      ) : null}
+
+      {archive && archive.configured ? (
+        <section className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-body">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 10,
+              }}
+            >
+              <h3 className="page-title" style={{ fontSize: 16 }}>
+                {t.storage.archiveTitle}
+              </h3>
+              {hasPermission("manage_archives") ? (
+                <button
+                  type="button"
+                  className={`btn${sweeping ? " is-loading" : ""}`}
+                  disabled={sweeping}
+                  onClick={() => void handleSweep()}
+                >
+                  {t.storage.archiveSweep}
+                </button>
+              ) : null}
+            </div>
+
+            <p className="page-copy" style={{ fontSize: 12 }}>
+              {archive.keepDays < 0
+                ? t.storage.archiveKeepForever
+                : t.storage.archiveKeepNote.replace("{days}", String(archive.keepDays))}
+              {archive.root ? ` · ${archive.root}` : null}
+            </p>
+
+            {archive.available ? null : (
+              <div className="notice error" style={{ marginTop: 10 }}>
+                {t.storage.archiveUnavailable}
+              </div>
+            )}
+
+            <section className="stats-row" style={{ marginTop: 12 }}>
+              <div className="stat-card">
+                <span className="stat-label">{t.storage.archiveStored}</span>
+                <span className="stat-value">{archive.storedCount}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t.storage.archiveStoredSize}</span>
+                <span className="stat-value">{formatFileSize(archive.storedBytes)}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t.storage.archiveQueued}</span>
+                <span className="stat-value">{archive.queuedCount}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">{t.storage.archiveExpired}</span>
+                <span className="stat-value">{archive.expiredCount}</span>
+              </div>
+            </section>
+
+            {archive.errorCount > 0 ? (
+              <div className="notice error" style={{ marginTop: 10 }}>
+                {t.storage.archiveErrors.replace("{count}", String(archive.errorCount))}
+              </div>
+            ) : null}
+          </div>
+        </section>
       ) : null}
 
       {!data ? (

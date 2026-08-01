@@ -11,18 +11,9 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
-import {
-  deletionOffsetSec,
-  extractChatRoles,
-  extractInlineEmotes,
-  extractPredictionBet,
-  resolveCaptureAnchorMs,
-} from "../chat/chat-roles.utils";
-import { EmoteMirrorService } from "../chat/emote-mirror.service";
-import type { EmoteSnapshotPayload } from "../chat/seventv.service";
-import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
+import { isArchiveAvailable, isUnderDataRoot } from "../archive-storage/archive-paths";
+import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { PrismaService } from "../prisma/prisma.service";
-import { computeSessionChatOffsetSec } from "../recording/playback.utils";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { TelegramClientService } from "./telegram-client.service";
 import { TelegramStreamService } from "./telegram-stream.service";
@@ -81,7 +72,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly telegramClientService: TelegramClientService,
     private readonly telegramStreamService: TelegramStreamService,
-    private readonly emoteMirrorService: EmoteMirrorService,
+    private readonly archiveBundleService: ArchiveBundleService,
   ) {}
 
   async onModuleInit() {
@@ -617,67 +608,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * session has no chat messages.
    */
   private async uploadChatBundle(session: SessionWithChannel, chatId: string) {
-    const [messages, snapshot] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where: { streamSessionId: session.id },
-        orderBy: { relativeTimeSec: "asc" },
-        take: 100000,
-      }),
-      this.prisma.emoteSnapshot.findUnique({
-        where: { streamSessionId: session.id },
-      }),
-    ]);
+    const bundle = await this.archiveBundleService.build(session.id);
 
-    if (messages.length === 0) {
+    if (bundle.messages.length === 0) {
       return null;
     }
-
-    const anchorMs = resolveCaptureAnchorMs(messages);
-
-    const bundle = {
-      version: 1,
-      kind: "tsr-archive-bundle",
-      meta: {
-        id: session.id,
-        title: session.title,
-        categoryName: session.categoryName,
-        channelLogin: session.channel.twitchLogin,
-        channelDisplayName: session.channel.displayName ?? session.channel.twitchLogin,
-        startedAt: session.startedAt?.toISOString() ?? null,
-        endedAt: session.endedAt?.toISOString() ?? null,
-        chatOffsetSec: computeSessionChatOffsetSec(session),
-      },
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorLogin: message.authorLogin,
-        authorDisplayName: message.authorDisplayName,
-        authorColor: message.authorColor,
-        textRaw: message.textRaw,
-        badges: parseStoredJsonString(message.badgesJson),
-        roles: extractChatRoles(message.badgesJson),
-        emotes: parseStoredJsonString(message.emotesJson),
-        inlineEmotes: extractInlineEmotes(message.emotesJson),
-        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
-        relativeTimeSec: message.relativeTimeSec,
-        messageTimestamp: message.messageTimestamp.toISOString(),
-        isDeleted: message.isDeleted,
-        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
-        banDurationSec: message.banDurationSec,
-        isFirstMessage: message.isFirstMessage,
-      })),
-      // Same self-contained shape as the admin download: the used emotes are
-      // inlined, so the archived copy stays viewable even if 7TV loses them.
-      emotes: this.emoteMirrorService.buildBundleSnapshot(
-        parseStoredJson(snapshot?.payloadJson) as EmoteSnapshotPayload | null,
-        messages.map((message) => message.textRaw),
-      ),
-    };
 
     const tempDir = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram");
     mkdirSync(tempDir, { recursive: true });
 
-    const safeName = (session.channel.twitchLogin || "stream").replace(/[^a-z0-9_-]/gi, "_");
-    const bundlePath = join(tempDir, `${safeName}-${session.id}.tsr.json`);
+    const bundlePath = join(
+      tempDir,
+      this.archiveBundleService.fileNameFor(session.channel.twitchLogin, session.id),
+    );
 
     try {
       writeFileSync(bundlePath, JSON.stringify(bundle), "utf8");
@@ -832,6 +775,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * May this path be deleted as "local cache"? Two ways the answer is no, and
+   * both would otherwise destroy an archive rather than free a cache:
+   *
+   * - the file already lives on the archive tier, where it is the primary copy
+   *   and not a cache of anything;
+   * - it is still queued to be moved there, and the archive tier is up. The
+   *   move is what frees this disk; deleting the source first would leave the
+   *   recording in Telegram only, which is the opposite of what the archive is
+   *   for. When the tier is down there is nothing to wait for and the file is
+   *   dropped exactly as it was before the archive existed.
+   */
+  private isDeletableLocalCopy(
+    path: string,
+    archiveStatus: string,
+  ): { ok: true } | { ok: false; reason: string } {
+    if (!isUnderDataRoot(path)) {
+      return { ok: false, reason: "the file lives on the archive tier, not on the local disk" };
+    }
+
+    if (["none", "pending", "copying"].includes(archiveStatus) && isArchiveAvailable()) {
+      return { ok: false, reason: "it is still queued for the archive tier" };
+    }
+
+    return { ok: true };
+  }
+
+  /**
    * "Uploaded at least keepDays ago" boundary. A negative value means "keep
    * the local copy forever" and is reported as null.
    */
@@ -862,6 +832,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     for (const session of sessions) {
       try {
         const filePath = resolve(session.playbackPath!);
+        const verdict = this.isDeletableLocalCopy(filePath, session.archiveStatus);
+
+        if (!verdict.ok) {
+          this.logger.debug(
+            `Keeping the video of session ${session.id}: ${verdict.reason}.`,
+          );
+          continue;
+        }
 
         if (existsSync(filePath)) {
           rmSync(filePath, { force: true });
@@ -916,6 +894,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     for (const session of sessions) {
       try {
         const audioPath = resolve(session.audioPath!);
+        const verdict = this.isDeletableLocalCopy(audioPath, session.archiveStatus);
+
+        if (!verdict.ok) {
+          this.logger.debug(`Keeping the audio of session ${session.id}: ${verdict.reason}.`);
+          continue;
+        }
 
         if (existsSync(audioPath)) {
           rmSync(audioPath, { force: true });

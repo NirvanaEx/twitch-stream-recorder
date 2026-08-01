@@ -9,11 +9,58 @@ Monorepo for a self-hosted Twitch stream recorder with realtime admin panel, bro
 - `apps/worker`: background jobs, capture orchestration, retention tasks
 - `infra/nginx`: reverse proxy and static HLS delivery
 
+## Where recordings live
+
+Three tiers, in the order a finished recording passes through them:
+
+| Tier | Location | Holds it for | Deleted by |
+| --- | --- | --- | --- |
+| capture | `DATA_DIR` on the server disk | minutes to hours | the move to the archive, or the local retention |
+| telegram | the configured channel | forever | nothing automatic |
+| archive | `ARCHIVE_DIR` on a mounted drive | `archiveKeepDays` (90 by default) | the archive retention |
+
+Capture is always local: a network mount cannot take the thousands of small
+appends `streamlink` and `ffmpeg` produce while recording. Once the session is
+finished — and once Telegram has taken its copy from the fast local file — the
+finished artefacts are moved to the archive tier and `playbackPath` follows
+them, so the player, the covers and the downloads all read from the drive.
+
+Each session becomes one self-contained folder, so a downloaded copy is a
+complete archive rather than a video that needs this app's database:
+
+```
+<ARCHIVE_DIR>/<platform>/<login>/<YYYY-MM>/<stamp>__<title>__<id>/
+    video.mp4        the recording (audio.m4a for an audio-only session)
+    audio.m4a        standalone track, when one was extracted
+    chat.tsr.json    chat replay with the used emotes inlined as data URIs
+    cover.jpg        archive cover
+    session.json     title, category, timings, Telegram message ids
+```
+
+Two rules make the tiering safe to leave unattended:
+
+- the local original is deleted only after the copy on the drive has been
+  verified byte-for-byte;
+- a folder expires from the drive only once Telegram is confirmed to hold the
+  same recording. The last copy of a broadcast is never the one that expires —
+  it is kept past its date and the reason shows up on the storage page.
+
+**If the mount goes away**, the tier reports itself unavailable and the app
+behaves exactly as it did before the tier existed: recordings stay on the
+server disk and go to Telegram, and the backlog moves across on its own once
+the mount is back. That check is the `.archive-root` marker file — see
+`.env.example` for how to create it and why it exists.
+
+Retention is set in the admin panel, Settings → Storage. `/admin/storage`
+shows the tier's state, its size, what is queued and what failed.
+
 ## First Run
 
 1. Copy `.env.example` to `.env`
 2. Fill auth secrets, database settings, and optionally Twitch app keys
-3. Run `docker compose up --build`
+3. Optionally point `ARCHIVE_DIR` at a mounted drive and create its
+   `.archive-root` marker (see `.env.example`)
+4. Run `docker compose up --build`
 
 ## Local Development
 

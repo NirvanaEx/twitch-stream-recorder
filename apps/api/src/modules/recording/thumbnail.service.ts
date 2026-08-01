@@ -2,8 +2,10 @@ import { Injectable, Logger, NotFoundException, OnModuleDestroy } from "@nestjs/
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { ARCHIVE_FILES } from "../archive-storage/archive-paths";
 import { PrismaService } from "../prisma/prisma.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 
@@ -87,6 +89,21 @@ export class ThumbnailService implements OnModuleDestroy {
     return `"cover-${sessionId}"`;
   }
 
+  /** Path of the cover stored in a session's archive folder, if it is there. */
+  private archivedCoverPath(archiveDir: string | null): string | null {
+    if (!archiveDir) {
+      return null;
+    }
+
+    try {
+      const candidate = join(archiveDir, ARCHIVE_FILES.cover);
+      return existsSync(candidate) ? candidate : null;
+    } catch {
+      // Unreachable mount — fall through to rendering from Telegram.
+      return null;
+    }
+  }
+
   private async renderCover(sessionId: string): Promise<Buffer> {
     const session = await this.prisma.streamSession.findUnique({
       where: { id: sessionId },
@@ -96,6 +113,7 @@ export class ThumbnailService implements OnModuleDestroy {
         playbackPath: true,
         durationSec: true,
         telegramStatus: true,
+        archiveDir: true,
         telegramParts: {
           orderBy: { partIndex: "asc" },
           take: 1,
@@ -106,6 +124,23 @@ export class ThumbnailService implements OnModuleDestroy {
 
     if (!session || session.audioOnly) {
       throw new NotFoundException("Обложка для этой записи недоступна.");
+    }
+
+    // The archive tier already carries a rendered cover next to the video.
+    // Reading those few kilobytes beats seeking through an mp4 that now lives
+    // on a network mount — the archive list asks for fifteen of these at once.
+    const archivedCover = this.archivedCoverPath(session.archiveDir);
+
+    if (archivedCover) {
+      try {
+        return await readFile(archivedCover);
+      } catch (error) {
+        this.logger.debug(
+          `Stored cover ${archivedCover} unreadable, rendering instead: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     let input: string | null = null;

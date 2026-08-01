@@ -9,6 +9,7 @@ import {
 import { Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { statfs } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { SAME_BROADCAST_TOLERANCE_MS } from "../public/vod-session-match";
@@ -55,6 +56,20 @@ const OFFLINE_MISS_THRESHOLD = 3;
 // keeps failing instantly, while still allowing the recorder to resume the
 // stream after a crash, restart, or transient failure.
 const RESTART_COOLDOWN_MS = 60_000;
+
+// Free space the data disk must have before a capture may start. A recording
+// needs room for the streamlink .ts AND the remuxed .mp4 at the same time, so
+// the real cost is roughly twice the finished file — a 3h 1080p60 Twitch
+// stream is ~8 GB, i.e. ~16 GB in flight.
+//
+// Running out mid-remux is not a graceful failure: ffmpeg dies with ENOSPC
+// before it writes the moov atom, so the .mp4 is left unplayable, the session
+// is marked as error, and the Telegram offload (which only picks up completed
+// sessions) never runs. Since a local file is never deleted while it has no
+// Telegram copy, that unplayable leftover then squats forever on the very disk
+// whose fullness created it. Refusing to start is the cheaper outcome.
+// Tune with RECORDING_MIN_FREE_GB.
+const DEFAULT_MIN_FREE_DISK_GB = 20;
 
 // Metadata is polled every 15s with the live check, but only stored this often
 // unless the title or category actually changed.
@@ -319,6 +334,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     const streamlinkCommand = await this.resolveStreamlinkCommand();
     this.resolveFfmpegCommand();
+    await this.assertFreeDiskSpace();
 
     const recordingStartedAt = liveStream.startedAt ?? new Date().toISOString();
     // The file path is derived from the actual capture start ("now"), not the
@@ -652,6 +668,24 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     for (const mediaPath of [session.playbackPath, session.recordingPath]) {
       if (mediaPath) fileCandidates.add(resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ".ts"));
     }
+    // The session's folder on the archive tier goes first: it holds the media
+    // above plus sidecars the list knows nothing about, and it is the one thing
+    // here that nothing else can find later. Once the database row is gone no
+    // path points at those gigabytes, so a silent failure would strand them on
+    // the Drive — better to delete nothing and let the operator retry with the
+    // mount back up.
+    if (session.archiveDir) {
+      try {
+        rmSync(session.archiveDir, { recursive: true, force: true });
+      } catch (error) {
+        throw new BadRequestException(
+          `Archive folder ${session.archiveDir} could not be removed: ${
+            error instanceof Error ? error.message : String(error)
+          }. Nothing was deleted — retry once the archive storage is reachable.`,
+        );
+      }
+    }
+
     for (const filePath of fileCandidates) {
       if (existsSync(filePath)) {
         rmSync(filePath, { force: true });
@@ -1024,6 +1058,42 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     for (const dir of ["records", "hls", "chat", "logs", "tmp", "emotes"]) {
       mkdirSync(join(dataRoot, dir), { recursive: true });
+    }
+  }
+
+  /**
+   * Refuse to start a capture the disk cannot hold (see
+   * DEFAULT_MIN_FREE_DISK_GB). Throws BadRequestException so the reason reaches
+   * the admin panel for a manual start and the auto-record warning log for an
+   * automatic one.
+   */
+  private async assertFreeDiskSpace() {
+    const configured = Number(process.env.RECORDING_MIN_FREE_GB);
+    const minFreeGb =
+      Number.isFinite(configured) && configured > 0
+        ? configured
+        : DEFAULT_MIN_FREE_DISK_GB;
+
+    let freeGb: number;
+
+    try {
+      const stats = await statfs(resolve(process.env.DATA_DIR ?? "./data"));
+      freeGb = (Number(stats.bsize) * Number(stats.bavail)) / 1024 ** 3;
+    } catch (error) {
+      // A failing probe must not be the thing that stops recordings.
+      this.logger.warn(
+        `Unable to check free disk space, starting anyway: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
+
+    if (freeGb < minFreeGb) {
+      throw new BadRequestException(
+        `Not enough free disk space: ${freeGb.toFixed(1)} GB available, ` +
+          `${minFreeGb} GB required. Free up space or lower RECORDING_MIN_FREE_GB.`,
+      );
     }
   }
 
