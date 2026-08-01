@@ -26,6 +26,7 @@ type ArchiveOverview = {
   configured: boolean;
   available: boolean;
   root: string | null;
+  disk: { totalBytes: string; freeBytes: string } | null;
   keepDays: number;
   storedCount: number;
   storedBytes: string;
@@ -185,6 +186,11 @@ export default function StoragePage() {
                 ? t.storage.archiveKeepForever
                 : t.storage.archiveKeepNote.replace("{days}", String(archive.keepDays))}
               {archive.root ? ` · ${archive.root}` : null}
+              {archive.disk
+                ? ` · ${t.storage.archiveDiskFree
+                    .replace("{free}", formatFileSize(archive.disk.freeBytes))
+                    .replace("{total}", formatFileSize(archive.disk.totalBytes))}`
+                : null}
             </p>
 
             {archive.available ? null : (
