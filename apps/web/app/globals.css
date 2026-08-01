@@ -397,6 +397,11 @@ textarea {
 .table-wrap {
   width: 100%;
   overflow-x: auto;
+  /* Required, not redundant: with overflow-x set and overflow-y left at
+     "visible", CSS computes overflow-y to "auto" as well — so a single pixel
+     of extra height (a sticky header, a negative margin) grew a full vertical
+     scrollbar with arrows inside the box. */
+  overflow-y: hidden;
 }
 
 .table {
@@ -3119,6 +3124,16 @@ textarea {
   padding: 8px 12px 0;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  /* Same trap as .table-wrap: .tab-btn carries margin-bottom -1px to sit on
+     the bar's border, and that alone was enough to make the browser draw a
+     vertical scrollbar across the tab row. */
+  overflow-y: hidden;
+  /* Few tabs, and they wrap on mobile — a horizontal bar under them is noise. */
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-btn {
@@ -4105,4 +4120,46 @@ textarea {
 
 .muted {
   color: var(--text-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbars.
+
+   The default ones are drawn by the OS: light, chunky, with arrow buttons —
+   they read as a Windows dialog dropped into a dark panel. These match the
+   surface they sit on and take a third of the width.
+   ------------------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+/* Chromium draws stepper arrows unless they are explicitly zero-sized. */
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
