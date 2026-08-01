@@ -266,6 +266,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
+      // Chunks of live broadcasts go first: they are the ones sitting on the
+      // disk of a server that is still recording onto it.
+      await this.processSegments(settings);
+      await this.finishSegmentedSessions(settings);
       await this.processUploads(settings);
     } catch (error) {
       this.logger.warn(
@@ -273,6 +277,177 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * Ship the chunks of segmented captures, including those of broadcasts that
+   * are still running.
+   *
+   * This is the difference between "the recording is safe once the stream ends"
+   * and "the recording is safe fifteen minutes in". A chunk closed at 20:15
+   * reaches the channel while the streamer is still talking, so a crash, a full
+   * disk or a power cut at 23:00 costs the last chunk instead of the evening.
+   *
+   * Chunks are uploaded oldest-first across all sessions: the ones that have
+   * been on the disk longest are the ones worth getting rid of first.
+   */
+  private async processSegments(settings: AppSettings) {
+    for (;;) {
+      const segment = await this.prisma.recordingSegment.findFirst({
+        where: {
+          localPath: { not: null },
+          telegramStatus: { in: ["pending", "error"] },
+        },
+        orderBy: { createdAt: "asc" },
+        include: { session: { include: { channel: true } } },
+      });
+
+      if (!segment || !segment.localPath) {
+        return;
+      }
+
+      const logPrefix = `[telegram/${segment.session.channel.twitchLogin}/${segment.session.id}]`;
+
+      if (!existsSync(segment.localPath)) {
+        await this.prisma.recordingSegment.update({
+          where: { id: segment.id },
+          data: {
+            telegramStatus: "error",
+            telegramError: "The chunk is missing from the local disk.",
+          },
+        });
+        continue;
+      }
+
+      await this.yieldToPlayback();
+
+      try {
+        let meta: VideoMeta | null = null;
+        try {
+          meta = await this.probeVideoMeta(segment.localPath);
+        } catch {
+          // Metadata is best-effort; the upload itself must not fail.
+        }
+
+        // The chunk count is unknown while the broadcast is running, so the
+        // caption says "chunk N" without a total; the panel and the player
+        // read the part rows, not the caption.
+        const caption = this.buildCaption(segment.session, segment.index, 0);
+        const sent = await this.sendVideo(
+          segment.localPath,
+          settings.telegramChatId,
+          caption,
+          meta,
+        );
+
+        // The player resolves archives through TelegramUploadPart, so a shipped
+        // chunk becomes a part exactly like a chunk of the old split path did —
+        // which is why multi-part playback needed no changes.
+        await this.prisma.telegramUploadPart.upsert({
+          where: {
+            streamSessionId_partIndex: {
+              streamSessionId: segment.streamSessionId,
+              partIndex: segment.index,
+            },
+          },
+          create: {
+            streamSessionId: segment.streamSessionId,
+            partIndex: segment.index,
+            // Filled in when the capture ends and the count is known.
+            partCount: 0,
+            chatId: settings.telegramChatId,
+            messageId: sent.messageId,
+            fileId: sent.fileId,
+            fileSizeBytes: segment.sizeBytes,
+            startOffsetSec: segment.startOffsetSec,
+            durationSec: segment.durationSec,
+          },
+          update: {
+            chatId: settings.telegramChatId,
+            messageId: sent.messageId,
+            fileId: sent.fileId,
+          },
+        });
+
+        await this.prisma.recordingSegment.update({
+          where: { id: segment.id },
+          data: { telegramStatus: "uploaded", telegramError: null },
+        });
+
+        this.logger.log(`${logPrefix} chunk ${segment.index} is in Telegram.`);
+        this.emitTelegramUpdate(segment.session.id, "uploading");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.prisma.recordingSegment.update({
+          where: { id: segment.id },
+          data: { telegramStatus: "error", telegramError: message.slice(0, 500) },
+        });
+        this.logger.warn(`${logPrefix} chunk ${segment.index} upload failed: ${message}`);
+        return; // Stop the pass: the next tick retries from the oldest chunk.
+      }
+    }
+  }
+
+  /**
+   * Once a segmented capture is finished and every chunk is in Telegram, stamp
+   * the session as uploaded and backfill partCount — the player uses it to know
+   * how many parts an archive has.
+   */
+  private async finishSegmentedSessions(settings: AppSettings) {
+    const sessions = await this.prisma.streamSession.findMany({
+      where: {
+        segmented: true,
+        status: "completed",
+        telegramStatus: { in: ["none", "pending", "uploading", "error"] },
+      },
+      include: { channel: true, segments: true },
+    });
+
+    for (const session of sessions) {
+      if (session.segments.length === 0) {
+        continue;
+      }
+
+      if (session.segments.some((segment) => segment.telegramStatus !== "uploaded")) {
+        continue;
+      }
+
+      const partCount = session.segments.length;
+
+      await this.prisma.telegramUploadPart.updateMany({
+        where: { streamSessionId: session.id },
+        data: { partCount },
+      });
+
+      let telegramChatMessageId = session.telegramChatMessageId;
+
+      if (!telegramChatMessageId) {
+        try {
+          telegramChatMessageId = await this.uploadChatBundle(session, settings.telegramChatId);
+        } catch (error) {
+          this.logger.warn(
+            `[telegram/${session.channel.twitchLogin}/${session.id}] chat bundle upload failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
+      await this.prisma.streamSession.update({
+        where: { id: session.id },
+        data: {
+          telegramStatus: "uploaded",
+          telegramUploadedAt: new Date(),
+          telegramError: null,
+          telegramChatMessageId,
+        },
+      });
+
+      this.emitTelegramUpdate(session.id, "uploaded");
+      this.logger.log(
+        `[telegram/${session.channel.twitchLogin}/${session.id}] all ${partCount} chunk(s) are in Telegram.`,
+      );
     }
   }
 

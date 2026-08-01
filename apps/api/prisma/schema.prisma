@@ -130,8 +130,52 @@ model StreamSession {
   captureEndedAt          DateTime?
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
+  // A segmented capture has no single file: playbackPath stays null and the
+  // chunks below are the recording. Null-safe on purpose — every session made
+  // before segmentation existed simply has none.
+  segmented               Boolean              @default(false)
   channel                 Channel              @relation(fields: [channelId], references: [id], onDelete: Cascade)
   telegramParts           TelegramUploadPart[]
+  segments                RecordingSegment[]
+}
+
+/**
+ * One finished chunk of a segmented capture.
+ *
+ * A segmented recording never exists as a single file: ffmpeg closes a playable
+ * .mp4 every RECORDING_SEGMENT_MINUTES while the broadcast is still running,
+ * and each one is uploaded, archived and dropped from the local disk on its
+ * own. That is what keeps a three-hour stream from ever needing three times its
+ * size in free space, and what stops a broadcast that dies at hour three from
+ * taking the first two hours with it.
+ *
+ * Separate from TelegramUploadPart on purpose: that table is the record of what
+ * Telegram holds, written only after a successful upload, and everything that
+ * plays archives reads it. This one is the local lifecycle of a chunk — where
+ * it is right now — and starts existing before any upload has happened.
+ */
+model RecordingSegment {
+  id              String        @id @default(cuid())
+  streamSessionId String
+  // 1-based, matches TelegramUploadPart.partIndex for the same chunk.
+  index           Int
+  // Where the chunk is, in tier order. Local is cleared once the chunk is
+  // safely elsewhere; archive is cleared when the retention drops it. Both
+  // null means Telegram is the only copy left.
+  localPath       String?
+  archivePath     String?
+  sizeBytes       String?
+  durationSec     Int?
+  // Position on the whole-stream timeline, so chat replay stays in sync when
+  // the player moves between chunks.
+  startOffsetSec  Int           @default(0)
+  telegramStatus  String        @default("pending")
+  telegramError   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  session         StreamSession @relation(fields: [streamSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([streamSessionId, index])
 }
 
 model TelegramUploadPart {

@@ -165,53 +165,93 @@ textarea {
   gap: 12px;
 }
 
-.disk-block {
+.storage-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
 }
 
-.disk-block-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-dim);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+.storage-tier + .storage-tier {
+  margin-top: 2px;
 }
 
-.disk-bar {
-  height: 4px;
+/* Label and number share one line: the number is what is actually being read,
+   so it sits at the end of the row in tabular figures rather than under a
+   heading of its own. */
+.storage-tier-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.storage-tier-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.storage-tier-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-tier-value {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.storage-tier-value em {
+  color: var(--text-dim);
+  font-style: normal;
+}
+
+/* A hairline, not a progress bar: at a glance it reads as "how full", and it
+   stays out of the way the rest of the time. */
+.storage-bar {
+  height: 3px;
   border-radius: 999px;
   background: var(--border);
   overflow: hidden;
 }
 
-.disk-bar-fill {
+.storage-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), #ec4899);
+  background: var(--text-dim);
   transition: width 0.3s;
 }
 
-.disk-bar-fill.warn {
-  background: linear-gradient(90deg, var(--warn), var(--danger));
+/* Colour is a signal here, never decoration: neutral until the disk is
+   genuinely worth looking at. */
+.storage-bar-fill.warn {
+  background: var(--warn);
 }
 
-.disk-bar-fill.danger {
+.storage-bar-fill.danger {
   background: var(--danger);
 }
 
-.disk-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
+.storage-tier.offline .storage-bar-fill {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--border) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+.storage-tier.offline .storage-tier-value {
+  color: var(--danger);
 }
 
 .lang-row {
@@ -3820,4 +3860,36 @@ textarea {
 
 .archive-card-foot .action-row {
   gap: 4px;
+}
+
+/* Account page: identity and session controls. Two label-and-control rows,
+   the same shape as the rest of the settings forms. */
+.account-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-session-row + .account-session-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-session-label {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.account-session .lang-row {
+  flex: 0 0 auto;
+  width: 120px;
 }

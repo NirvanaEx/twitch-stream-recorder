@@ -9,6 +9,7 @@ import { useLanguage } from "../providers";
 import {
   ArchiveIcon,
   CloseIcon,
+  CloudIcon,
   FolderOpenIcon,
   HardDriveIcon,
   HomeIcon,
@@ -28,6 +29,12 @@ type DiskUsage = {
   usedBytes: number;
 };
 
+type ArchiveUsage = {
+  configured: boolean;
+  available: boolean;
+  disk: { totalBytes: string; freeBytes: string } | null;
+};
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -45,6 +52,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { locale, setLocale, t } = useLanguage();
   const { user, hasPermission, logout } = useAuth();
   const [disk, setDisk] = useState<DiskUsage | null>(null);
+  const [archive, setArchive] = useState<ArchiveUsage | null>(null);
   // Mobile-only: the sidebar collapses into a top bar with a burger menu.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isTheater = pathname?.endsWith("/theater") ?? false;
@@ -62,12 +70,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     async function load() {
       try {
-        const response = await apiGet<{
-          diskUsage: DiskUsage | null;
-        }>("dashboard");
-        if (!cancelled && response.diskUsage) {
-          setDisk(response.diskUsage);
+        const [dashboard, archiveOverview] = await Promise.all([
+          apiGet<{ diskUsage: DiskUsage | null }>("dashboard"),
+          apiGet<ArchiveUsage>("archive-storage").catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (dashboard.diskUsage) {
+          setDisk(dashboard.diskUsage);
         }
+        setArchive(archiveOverview);
       } catch {
         // Either unauthorised or transient error — stay silent in the shell.
       }
@@ -190,66 +201,92 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="sidebar-footer">
-          {disk ? (
-            <div className="disk-block">
-              <div className="disk-block-head">
-                <HardDriveIcon size={12} />
-                <span>{t.common.diskFree}</span>
-              </div>
-              <div className="disk-bar">
-                <div
-                  className={`disk-bar-fill ${usageClass}`}
-                  style={{ width: `${usagePercent}%` }}
+          {disk || archive?.configured ? (
+            <div className="storage-block">
+              {disk ? (
+                <StorageTier
+                  icon={<HardDriveIcon size={12} />}
+                  label={t.common.diskServer}
+                  freeBytes={disk.freeBytes}
+                  totalBytes={disk.totalBytes}
+                  freeLabel={t.common.diskFreeShort}
                 />
-              </div>
-              <div className="disk-meta">
-                <span>{formatBytes(disk.freeBytes)} free</span>
-                <span>{formatBytes(disk.totalBytes)}</span>
-              </div>
+              ) : null}
+
+              {archive?.configured ? (
+                <StorageTier
+                  icon={<CloudIcon size={12} />}
+                  label={t.common.diskArchive}
+                  freeBytes={archive.disk ? Number(archive.disk.freeBytes) : 0}
+                  totalBytes={archive.disk ? Number(archive.disk.totalBytes) : 0}
+                  freeLabel={t.common.diskFreeShort}
+                  offline={!archive.available}
+                  offlineLabel={t.common.diskOffline}
+                />
+              ) : null}
             </div>
           ) : null}
-
-          {user ? (
-            <div className="user-block">
-              <div className="user-block-head">
-                <strong>{user.username}</strong>
-                {user.isSuperadmin ? (
-                  <span className="badge live">{t.auth.youAreSuperadmin}</span>
-                ) : user.role ? (
-                  <span className="badge">{user.role.name}</span>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => logout()}
-                style={{ width: "100%", marginTop: 6 }}
-              >
-                {t.auth.logout}
-              </button>
-            </div>
-          ) : null}
-
-          <div className="lang-row">
-            <button
-              type="button"
-              className={locale === "ru" ? "active" : ""}
-              onClick={() => setLocale("ru")}
-            >
-              RU
-            </button>
-            <button
-              type="button"
-              className={locale === "en" ? "active" : ""}
-              onClick={() => setLocale("en")}
-            >
-              EN
-            </button>
-          </div>
         </div>
       </aside>
 
       <div className="content-area">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One storage tier in the sidebar: a label, how much is left, and a hairline
+ * showing how full it is.
+ *
+ * The number leads and the bar supports it — "52 GB free" is the thing being
+ * looked for, and the bar only has to answer "is that a lot?" at a glance. It
+ * stays neutral grey until the tier is genuinely worth attention, so colour in
+ * this corner of the screen always means something.
+ */
+function StorageTier({
+  icon,
+  label,
+  freeBytes,
+  totalBytes,
+  freeLabel,
+  offline = false,
+  offlineLabel,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  freeBytes: number;
+  totalBytes: number;
+  freeLabel: string;
+  offline?: boolean;
+  offlineLabel?: string;
+}) {
+  const usedPercent =
+    totalBytes > 0 ? Math.min(100, Math.max(0, ((totalBytes - freeBytes) / totalBytes) * 100)) : 0;
+  const fillClass = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : "";
+
+  return (
+    <div className={offline ? "storage-tier offline" : "storage-tier"}>
+      <div className="storage-tier-row">
+        <span className="storage-tier-name">
+          {icon}
+          <span>{label}</span>
+        </span>
+        <span className="storage-tier-value">
+          {offline || totalBytes <= 0 ? (
+            offlineLabel ?? "—"
+          ) : (
+            <>
+              {formatBytes(freeBytes)} <em>{freeLabel}</em>
+            </>
+          )}
+        </span>
+      </div>
+      <div className="storage-bar">
+        <div
+          className={`storage-bar-fill ${fillClass}`}
+          style={{ width: offline ? "100%" : `${usedPercent}%` }}
+        />
+      </div>
     </div>
   );
 }
