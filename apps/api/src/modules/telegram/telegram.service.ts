@@ -502,6 +502,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         });
 
         startOffsetSec += partDurationSec;
+
+        // Drop the segment the moment Telegram has it. Splitting used to hold
+        // every part on disk until the whole upload finished, so uploading an
+        // 8 GB recording needed 16 GB free — the .mp4 plus a second copy of it
+        // chopped up. With two or three broadcasts finishing at once that is
+        // what filled the disk and killed the next capture. The .mp4 itself is
+        // untouched, so a retry can always re-split from it.
+        if (tempDir && partPath !== filePath) {
+          try {
+            rmSync(partPath, { force: true });
+          } catch {
+            // The finally block sweeps the whole temp dir anyway.
+          }
+        }
       }
 
       // Standalone audio track for the Twitch userscript: posted as one audio
