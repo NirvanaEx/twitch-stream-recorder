@@ -9,14 +9,16 @@ import { clearResume, readResume, saveResume } from "../../lib/resume";
 import { useLanguage } from "../../providers";
 import { ChatReplay } from "../../components/ChatReplay";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
-import { DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
+import { CloudIcon, DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
 
-type PublicTelegramPart = {
+/** One piece of the recording, and the tier it is read from. */
+type PublicPlaybackPart = {
   partIndex: number;
   partCount: number;
   streamUrl: string;
   startOffsetSec: number;
   durationSec: number | null;
+  source: "local" | "drive" | "telegram";
 };
 
 type PublicStreamDetail = {
@@ -34,10 +36,10 @@ type PublicStreamDetail = {
   endedAt: string | null;
   fileSizeBytes: string | null;
   videoUrl: string;
-  videoSource: "local" | "telegram";
+  videoSource: "local" | "drive" | "telegram";
   audioOnly: boolean;
   chatOffsetSec: number;
-  telegramParts: PublicTelegramPart[];
+  parts: PublicPlaybackPart[];
   /** Wall-clock moment of the video's first frame. */
   mediaStartedAt: string | null;
   durationSec: number | null;
@@ -83,26 +85,26 @@ export default function PublicWatchPage({
   const [currentPart, setCurrentPart] = useState(1);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
 
-  const telegramParts =
-    data?.videoSource === "telegram" ? data.telegramParts ?? [] : [];
+  // The pieces this recording plays back in — chunks off the archive drive,
+  // Telegram parts for whatever the drive no longer holds. Empty when it is
+  // one stored file.
+  const parts = data?.parts ?? [];
   const activePart =
-    telegramParts.length > 0
-      ? telegramParts[Math.min(currentPart, telegramParts.length) - 1]
-      : null;
+    parts.length > 0 ? parts[Math.min(currentPart, parts.length) - 1] : null;
+  const activeSource = activePart?.source ?? data?.videoSource ?? null;
 
   // Seamless playback: when every part has a known duration, the player shows
   // ONE continuous timeline and switches parts internally.
   const playlist = useMemo(
     () =>
-      telegramParts.length > 0 &&
-      telegramParts.every((part) => (part.durationSec ?? 0) > 0)
-        ? telegramParts.map((part) => ({
+      parts.length > 0 && parts.every((part) => (part.durationSec ?? 0) > 0)
+        ? parts.map((part) => ({
             src: buildMediaUrl(part.streamUrl),
             durationSec: part.durationSec as number,
           }))
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.videoSource, data?.telegramParts],
+    [data?.parts],
   );
 
   // Saved "continue watching" part, captured once for the player's start segment.
@@ -118,11 +120,11 @@ export default function PublicWatchPage({
   // Auto-advance to the next part when the current one finishes (fallback
   // mode only — with a playlist the player handles this internally).
   useEffect(() => {
-    if (playlist || !videoElement || telegramParts.length < 2) return undefined;
+    if (playlist || !videoElement || parts.length < 2) return undefined;
 
     const onEnded = () => {
       setCurrentPart((part) => {
-        if (part < telegramParts.length) {
+        if (part < parts.length) {
           setPendingAutoplay(true);
           return part + 1;
         }
@@ -132,7 +134,7 @@ export default function PublicWatchPage({
 
     videoElement.addEventListener("ended", onEnded);
     return () => videoElement.removeEventListener("ended", onEnded);
-  }, [playlist, videoElement, telegramParts.length]);
+  }, [playlist, videoElement, parts.length]);
 
   // Resume playback once the next part's metadata is in (fallback mode).
   useEffect(() => {
@@ -159,14 +161,14 @@ export default function PublicWatchPage({
     const saved = readResume(id);
     if (
       saved &&
-      telegramParts.length > 1 &&
+      parts.length > 1 &&
       saved.part >= 1 &&
-      saved.part <= telegramParts.length
+      saved.part <= parts.length
     ) {
       setCurrentPart(saved.part);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, telegramParts.length, id]);
+  }, [data, parts.length, id]);
 
   useEffect(() => {
     if (!videoElement || !data) return undefined;
@@ -206,7 +208,7 @@ export default function PublicWatchPage({
       if (!Number.isFinite(time) || time < 10) return;
 
       const total = videoElement.duration;
-      const isLastPart = telegramParts.length === 0 || currentPart >= telegramParts.length;
+      const isLastPart = parts.length === 0 || currentPart >= parts.length;
 
       if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
         clearResume(id);
@@ -230,7 +232,7 @@ export default function PublicWatchPage({
       videoElement.removeEventListener("timeupdate", onTimeUpdate);
       videoElement.removeEventListener("pause", save);
     };
-  }, [videoElement, data, currentPart, telegramParts.length, id]);
+  }, [videoElement, data, currentPart, parts.length, id]);
 
   useEffect(() => {
     setChatVisible(readStoredChatPref());
@@ -377,16 +379,22 @@ export default function PublicWatchPage({
                   {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
                 </span>
               ) : null}
-              {data.videoSource ? (
+              {activeSource ? (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                  {data.videoSource === "telegram" ? (
+                  {activeSource === "telegram" ? (
                     <SendIcon size={13} />
+                  ) : activeSource === "drive" ? (
+                    <CloudIcon size={13} />
                   ) : (
                     <HardDriveIcon size={13} />
                   )}
                   {t.replay.sourceLabel}:{" "}
                   <strong>
-                    {data.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
+                    {activeSource === "telegram"
+                      ? "Telegram"
+                      : activeSource === "drive"
+                        ? "Google Drive"
+                        : t.replay.sourceLocal}
                   </strong>
                 </span>
               ) : null}
@@ -405,7 +413,7 @@ export default function PublicWatchPage({
             </div>
           </header>
 
-          {!playlist && mode === "normal" && telegramParts.length > 1 ? (
+          {!playlist && mode === "normal" && parts.length > 1 ? (
             <div className="action-row" style={{ margin: "8px 0" }}>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
                 {t.archives.telegramPart}
@@ -420,7 +428,7 @@ export default function PublicWatchPage({
                     setCurrentPart(next);
                   }}
                 >
-                  {telegramParts.map((part) => (
+                  {parts.map((part) => (
                     <option key={part.partIndex} value={part.partIndex}>
                       {part.partIndex} / {part.partCount}
                     </option>

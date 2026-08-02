@@ -21,6 +21,7 @@ import {
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
 import {
   ChatDownloadIcon,
+  CloudIcon,
   DownloadIcon,
   HardDriveIcon,
   SendIcon,
@@ -37,6 +38,11 @@ type TelegramPart = {
   durationSec: number | null;
 };
 
+/** One piece of the recording, and the tier it is read from. */
+type PlaybackPart = TelegramPart & {
+  source: "local" | "drive" | "telegram";
+};
+
 type ArchiveDetailResponse = {
   item: {
     id: string;
@@ -51,13 +57,14 @@ type ArchiveDetailResponse = {
     endedAt: string | null;
     fileSizeBytes: string | null;
     videoReady: boolean;
-    videoSource: "local" | "telegram" | null;
+    videoSource: "local" | "drive" | "telegram" | null;
     audioOnly: boolean;
     channelProfileImageUrl: string | null;
     chatAvailable: boolean;
     chatOffsetSec: number;
     telegramStatus: string;
     telegramParts: TelegramPart[];
+    parts: PlaybackPart[];
     localFileDeletedAt: string | null;
     /** Wall-clock moment of the video's first frame (see serializeSession). */
     mediaStartedAt: string | null;
@@ -151,16 +158,13 @@ export default function ArchiveReplayPage() {
 
   useRealtimeRefresh(load);
 
-  // Telegram-offloaded recordings are streamed back part by part; locally
-  // stored ones keep playing the single full file.
-  const telegramParts = useMemo(
-    () => (data?.item.videoSource === "telegram" ? data.item.telegramParts : []),
-    [data?.item.videoSource, data?.item.telegramParts],
-  );
+  // A recording kept in pieces — the chunks of a long broadcast, or the parts
+  // of a Telegram copy — is played piece by piece; a single stored file keeps
+  // playing as one. The API says which, and where each piece comes from.
+  const parts = useMemo(() => data?.item.parts ?? [], [data?.item.parts]);
   const activePart =
-    telegramParts.length > 0
-      ? telegramParts[Math.min(currentPart, telegramParts.length) - 1]
-      : null;
+    parts.length > 0 ? parts[Math.min(currentPart, parts.length) - 1] : null;
+  const activeSource = activePart?.source ?? data?.item.videoSource ?? null;
 
   // The /api/archives/:id/video endpoint is auth-protected; <video> can't
   // attach the Authorization header, so we sign the URL with `?token=`.
@@ -173,14 +177,13 @@ export default function ArchiveReplayPage() {
   // ONE continuous timeline and switches parts internally.
   const playlist = useMemo(
     () =>
-      telegramParts.length > 0 &&
-      telegramParts.every((part) => (part.durationSec ?? 0) > 0)
-        ? telegramParts.map((part) => ({
+      parts.length > 0 && parts.every((part) => (part.durationSec ?? 0) > 0)
+        ? parts.map((part) => ({
             src: buildAuthenticatedMediaUrl(part.streamUrl),
             durationSec: part.durationSec as number,
           }))
         : null,
-    [telegramParts],
+    [parts],
   );
 
   // Saved "continue watching" part, captured once for the player's start segment.
@@ -199,8 +202,9 @@ export default function ArchiveReplayPage() {
 
   // Poll live Telegram throughput while watching a Telegram-sourced archive.
   // The endpoint is cheap and returns { active: false } when nothing streams.
+  // Nothing to poll while the piece being played comes off the drive.
   useEffect(() => {
-    if (data?.item.videoSource !== "telegram") {
+    if (activeSource !== "telegram") {
       setTgStats(null);
       return undefined;
     }
@@ -220,7 +224,7 @@ export default function ArchiveReplayPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [data?.item.videoSource, params.id]);
+  }, [activeSource, params.id]);
 
   // ---- "Continue watching": restore and persist the position locally ----
 
@@ -235,13 +239,13 @@ export default function ArchiveReplayPage() {
     const saved = readResume(data.item.id);
     if (
       saved &&
-      telegramParts.length > 1 &&
+      parts.length > 1 &&
       saved.part >= 1 &&
-      saved.part <= telegramParts.length
+      saved.part <= parts.length
     ) {
       setCurrentPart(saved.part);
     }
-  }, [data, telegramParts.length]);
+  }, [data, parts.length]);
 
   // Restore the saved position inside the current part (once per part).
   useEffect(() => {
@@ -285,7 +289,7 @@ export default function ArchiveReplayPage() {
       if (!Number.isFinite(time) || time < 10) return;
 
       const total = videoElement.duration;
-      const isLastPart = telegramParts.length === 0 || currentPart >= telegramParts.length;
+      const isLastPart = parts.length === 0 || currentPart >= parts.length;
 
       if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
         clearResume(data.item.id);
@@ -309,16 +313,16 @@ export default function ArchiveReplayPage() {
       videoElement.removeEventListener("timeupdate", onTimeUpdate);
       videoElement.removeEventListener("pause", save);
     };
-  }, [videoElement, data, currentPart, telegramParts.length]);
+  }, [videoElement, data, currentPart, parts.length]);
 
   // Auto-advance to the next part when the current one finishes (fallback
   // mode only — with a playlist the player handles this internally).
   useEffect(() => {
-    if (playlist || !videoElement || telegramParts.length < 2) return undefined;
+    if (playlist || !videoElement || parts.length < 2) return undefined;
 
     const onEnded = () => {
       setCurrentPart((part) => {
-        if (part < telegramParts.length) {
+        if (part < parts.length) {
           setPendingAutoplay(true);
           return part + 1;
         }
@@ -328,7 +332,7 @@ export default function ArchiveReplayPage() {
 
     videoElement.addEventListener("ended", onEnded);
     return () => videoElement.removeEventListener("ended", onEnded);
-  }, [playlist, videoElement, telegramParts.length]);
+  }, [playlist, videoElement, parts.length]);
 
   // Resume playback once the next part's metadata is in (fallback mode).
   useEffect(() => {
@@ -520,21 +524,25 @@ export default function ArchiveReplayPage() {
             )}
             <span>{formatFileSize(data?.item.fileSizeBytes)}</span>
 
-            {data?.item.videoSource ? (
+            {activeSource ? (
               <span className="replay-facts__source">
-                {data.item.videoSource === "telegram" ? (
+                {activeSource === "telegram" ? (
                   <SendIcon size={13} />
+                ) : activeSource === "drive" ? (
+                  <CloudIcon size={13} />
                 ) : (
                   <HardDriveIcon size={13} />
                 )}
-                {data.item.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
-                {data.item.videoSource === "telegram" ? (
-                  <TelegramSpeedChip stats={tgStats} />
-                ) : null}
+                {activeSource === "telegram"
+                  ? "Telegram"
+                  : activeSource === "drive"
+                    ? "Google Drive"
+                    : t.replay.sourceLocal}
+                {activeSource === "telegram" ? <TelegramSpeedChip stats={tgStats} /> : null}
               </span>
             ) : null}
 
-            {!playlist && telegramParts.length > 1 ? (
+            {!playlist && parts.length > 1 ? (
               <label className="replay-facts__part">
                 {t.archives.telegramPart}
                 <select
@@ -546,7 +554,7 @@ export default function ArchiveReplayPage() {
                     setCurrentPart(next);
                   }}
                 >
-                  {telegramParts.map((part) => (
+                  {parts.map((part) => (
                     <option key={part.partIndex} value={part.partIndex}>
                       {part.partIndex} / {part.partCount}
                     </option>

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
@@ -7,7 +8,7 @@ import { waveformHeights } from "../lib/waveform";
 import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "./IconButton";
 import { PlatformTag } from "./PlatformTag";
-import { DownloadIcon, HardDriveIcon, PlayIcon, SendIcon, TrashIcon } from "./icons";
+import { CloudIcon, DownloadIcon, HardDriveIcon, PlayIcon, SendIcon, TrashIcon } from "./icons";
 
 export type TelegramPart = {
   partIndex: number;
@@ -30,7 +31,7 @@ export type ArchiveItem = {
   audioSizeBytes: string | null;
   videoReady: boolean;
   videoUrl: string | null;
-  videoSource: "local" | "telegram" | null;
+  videoSource: "local" | "drive" | "telegram" | null;
   telegramStatus: string;
   telegramProgress: number | null;
   telegramError: string | null;
@@ -138,8 +139,26 @@ export function ArchiveCard({
     return <span style={{ fontSize: 11, color: "var(--text-faint)" }}>—</span>;
   }
 
+  // Where the bytes come from, in the order playback prefers them.
+  const sourceLabel =
+    archive.videoSource === "telegram"
+      ? "Telegram"
+      : archive.videoSource === "drive"
+        ? "Google Drive"
+        : t.replay.sourceLocal;
+
   return (
     <article className={`archive-card${isAudio ? " audio" : ""}`}>
+      {/* The whole card opens the recording. It is a real link laid over the
+          card rather than a click handler on <article>, so middle-click and
+          "open in new tab" keep working; the buttons in the footer sit above
+          it and are unaffected. */}
+      <Link
+        className="archive-card-hit"
+        href={`/admin/archives/${archive.id}`}
+        aria-label={archive.title || archive.channelDisplayName}
+      />
+
       <div className="archive-cover">
         {isAudio ? (
           <div className="archive-cover-audio">
@@ -163,12 +182,11 @@ export function ArchiveCard({
         )}
 
         {archive.videoSource ? (
-          <span
-            className="archive-cover-source"
-            title={archive.videoSource === "telegram" ? "Telegram" : t.replay.sourceLocal}
-          >
+          <span className="archive-cover-source" title={sourceLabel}>
             {archive.videoSource === "telegram" ? (
               <SendIcon size={11} />
+            ) : archive.videoSource === "drive" ? (
+              <CloudIcon size={11} />
             ) : (
               <HardDriveIcon size={11} />
             )}
