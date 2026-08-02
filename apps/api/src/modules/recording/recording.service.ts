@@ -6,7 +6,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
+import { Channel, RecordingSegment, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { statfs } from "node:fs/promises";
@@ -19,7 +19,12 @@ import { PlatformsService } from "../platforms/platforms.service";
 import { ChatService } from "../chat/chat.service";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
-import { computeSessionChatOffsetSec, resolveSessionPlaybackState } from "./playback.utils";
+import {
+  computeSessionChatOffsetSec,
+  resolvePlaybackParts,
+  resolveSessionPlaybackState,
+  type MediaTier,
+} from "./playback.utils";
 import { parseSegmentManifest } from "./segment-manifest.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
@@ -616,9 +621,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     const safePageSize = Math.min(100, Math.max(1, pageSize));
 
     const where = {
-      playbackPath: {
-        not: null,
-      },
+      // A segmented capture has no single output file, so it has no
+      // playbackPath — its chunks are the recording. Without the second arm
+      // those broadcasts existed in the database and nowhere in the panel.
+      OR: [{ playbackPath: { not: null } }, { segments: { some: {} } }],
       status: {
         not: "recording",
       },
@@ -633,6 +639,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           channel: true,
           telegramParts: {
             orderBy: { partIndex: "asc" },
+          },
+          segments: {
+            orderBy: { index: "asc" },
           },
         },
         orderBy: {
@@ -659,6 +668,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           channel: true,
           telegramParts: {
             orderBy: { partIndex: "asc" },
+          },
+          segments: {
+            orderBy: { index: "asc" },
           },
         },
       }),
@@ -690,6 +702,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       },
       include: {
         channel: true,
+        // Chunks that are already closed are watchable while the broadcast is
+        // still being captured.
+        segments: {
+          orderBy: { index: "asc" },
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -704,6 +721,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   async deleteArchive(id: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
+      include: { segments: true },
     });
 
     if (!session) {
@@ -729,6 +747,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
     for (const mediaPath of [session.playbackPath, session.recordingPath]) {
       if (mediaPath) fileCandidates.add(resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ".ts"));
+    }
+    // Chunks of a segmented capture: those still on the server disk. The ones
+    // that already moved sit inside archiveDir, which goes as a whole below.
+    for (const segment of session.segments) {
+      if (segment.localPath) fileCandidates.add(resolve(segment.localPath));
     }
     // The session's folder on the archive tier goes first: it holds the media
     // above plus sidecars the list knows nothing about, and it is the one thing
@@ -857,14 +880,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       });
 
       // localPath while the broadcast is still running, archivePath after the
-      // chunk moved; either is a real file we can serve directly.
-      const path = segment?.localPath ?? segment?.archivePath ?? null;
-
-      if (!path || !existsSync(path)) {
-        throw new NotFoundException(`Chunk ${part} of archive ${id} is not on disk.`);
+      // chunk moved onto the drive; either is a real file we can serve
+      // directly. Both are tried rather than just the first one that is set:
+      // a stale localPath must not send the viewer to Telegram while the
+      // drive copy sits right there.
+      for (const candidate of [segment?.localPath, segment?.archivePath]) {
+        if (candidate && existsSync(candidate)) {
+          return { absolutePath: candidate, stat: statSync(candidate) };
+        }
       }
 
-      return { absolutePath: path, stat: statSync(path) };
+      throw new NotFoundException(`Chunk ${part} of archive ${id} is not on disk.`);
     }
 
     if (!session?.playbackPath) {
@@ -890,6 +916,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         channel: true,
         telegramParts: {
           orderBy: { partIndex: "asc" },
+        },
+        segments: {
+          orderBy: { index: "asc" },
         },
       },
     });
@@ -1970,7 +1999,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private serializeSession(
-    session: StreamSession & { telegramParts?: TelegramUploadPart[] },
+    session: StreamSession & {
+      telegramParts?: TelegramUploadPart[];
+      segments?: RecordingSegment[];
+    },
     channel: Pick<Channel, "displayName" | "twitchLogin" | "profileImageUrl" | "platform">,
   ) {
     const playback = resolveSessionPlaybackState(session);
@@ -1984,15 +2016,34 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       durationSec: part.durationSec,
     }));
 
-    // A recording whose local file is gone is still watchable when its parts
-    // live in Telegram: the video endpoint streams them back via MTProto.
+    // The pieces this recording plays back in and the tier each one comes
+    // from: the chunks of a segmented capture (drive first, Telegram for the
+    // ones that expired off it), or the Telegram parts of a recording whose
+    // single file is gone. Empty while that file is still there.
+    const telegramUrlByIndex = new Map(telegramParts.map((part) => [part.partIndex, part.url]));
+    const parts = resolvePlaybackParts({
+      hasSingleFile: playback.videoReady,
+      audioOnly: session.audioOnly,
+      telegramStatus: session.telegramStatus,
+      segments: session.segments,
+      telegramParts,
+    }).map((part) => ({
+      ...part,
+      url: telegramUrlByIndex.get(part.partIndex) ?? null,
+      streamUrl: `/api/archives/${session.id}/video?part=${part.partIndex}`,
+    }));
+
     // Audio-only sessions have no parts — their Telegram copy is one audio
     // message, served by the same video endpoint.
-    const telegramPlayable =
+    const telegramAudioPlayable =
       !playback.videoReady &&
+      session.audioOnly &&
       session.telegramStatus === "uploaded" &&
-      (telegramParts.length > 0 ||
-        (session.audioOnly && Boolean(session.telegramAudioMessageId)));
+      Boolean(session.telegramAudioMessageId);
+
+    const videoReady = playback.videoReady || parts.length > 0 || telegramAudioPlayable;
+    const videoSource: MediaTier | null =
+      playback.tier ?? parts[0]?.source ?? (telegramAudioPlayable ? "telegram" : null);
 
     return {
       id: session.id,
@@ -2020,8 +2071,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
               Math.round((session.endedAt.getTime() - session.startedAt.getTime()) / 1000),
             )
           : null),
-      videoReady: playback.videoReady || telegramPlayable,
-      videoSource: playback.videoReady ? "local" : telegramPlayable ? "telegram" : null,
+      videoReady,
+      videoSource,
       chatAvailable: session.chatAvailable,
       chatOffsetSec: computeSessionChatOffsetSec(session),
       stoppedByUser: session.stoppedByUser,
@@ -2032,9 +2083,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // Telegram copy). Unlike previewImageUrl it does not expire when the
       // broadcast ends, and unlike the old stored .jpg it lives nowhere.
       thumbnailUrl:
-        !session.audioOnly && (playback.videoReady || telegramPlayable)
-          ? `/api/archives/${session.id}/thumbnail`
-          : null,
+        !session.audioOnly && videoReady ? `/api/archives/${session.id}/thumbnail` : null,
       // Real-world moment of the video's first frame. captureEndedAt minus
       // the probed length is exact (immune to the --hls-live-restart rewind);
       // createdAt is the honest approximation for live and legacy sessions.
@@ -2050,9 +2099,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       audioSizeBytes: session.audioSizeBytes,
       videoUrl:
         playback.videoUrl ??
-        (telegramPlayable
-          ? telegramParts[0]?.streamUrl ?? `/api/archives/${session.id}/video`
-          : null),
+        parts[0]?.streamUrl ??
+        (telegramAudioPlayable ? `/api/archives/${session.id}/video` : null),
       telegramStatus: session.telegramStatus,
       telegramProgress:
         session.telegramStatus === "uploading"
@@ -2069,6 +2117,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           : null,
       localFileDeletedAt: session.localFileDeletedAt,
       telegramParts,
+      // What the player walks through, with the tier of every piece. Separate
+      // from telegramParts, which is about the Telegram copy itself — the
+      // message links, the upload state — and stays what it always was.
+      parts,
       audioOnly: session.audioOnly,
       // The standalone audio track for the Twitch userscript: available while
       // it exists locally or in Telegram and was not auto-expired.

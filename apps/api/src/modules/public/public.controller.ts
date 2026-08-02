@@ -28,6 +28,7 @@ import {
   buildMediaCacheHeaders,
   computeSessionChatOffsetSec,
   parseMediaRange,
+  resolvePlaybackParts,
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
@@ -54,6 +55,13 @@ function isTelegramPlayable(
     session.telegramParts.length > 0 ||
     (session.audioOnly && Boolean(session.telegramAudioMessageId))
   );
+}
+
+// "There is something to play here." A segmented capture has no single output
+// file and therefore no playbackPath — asking for one turned every chunked
+// broadcast into a 404 on the public pages.
+function hasPlayableSource(session: { playbackPath: string | null; segmented: boolean }) {
+  return Boolean(session.playbackPath) || session.segmented;
 }
 
 const DEFAULT_PAGE_SIZE = 12;
@@ -114,6 +122,7 @@ export class PublicStreamsController {
         include: {
           channel: true,
           telegramParts: { orderBy: { partIndex: "asc" } },
+          segments: { orderBy: { index: "asc" } },
         },
         orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
         skip: (page - 1) * pageSize,
@@ -124,7 +133,18 @@ export class PublicStreamsController {
     const items = sessions
       .map((session) => {
         const playback = resolveSessionPlaybackState(session);
-        if (!playback.videoReady && !isTelegramPlayable(session, playback.videoReady)) {
+        // Chunks on the archive drive are a perfectly good source even when
+        // nothing of this broadcast is in Telegram.
+        const hasParts =
+          resolvePlaybackParts({
+            hasSingleFile: playback.videoReady,
+            audioOnly: session.audioOnly,
+            telegramStatus: session.telegramStatus,
+            segments: session.segments,
+            telegramParts: session.telegramParts,
+          }).length > 0;
+
+        if (!playback.videoReady && !hasParts && !isTelegramPlayable(session, playback.videoReady)) {
           return null;
         }
 
@@ -540,19 +560,27 @@ export class PublicStreamsController {
         include: {
           channel: true,
           telegramParts: { orderBy: { partIndex: "asc" } },
+          segments: { orderBy: { index: "asc" } },
         },
       }),
       this.prisma.appSettings.findUnique({ where: { id: "default" } }),
     ]);
 
-    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+    if (!session || session.videoStatus !== "ready" || !hasPlayableSource(session)) {
       throw new NotFoundException("Запись не найдена.");
     }
 
     const playback = resolveSessionPlaybackState(session);
+    const parts = resolvePlaybackParts({
+      hasSingleFile: playback.videoReady,
+      audioOnly: session.audioOnly,
+      telegramStatus: session.telegramStatus,
+      segments: session.segments,
+      telegramParts: session.telegramParts,
+    });
     const telegramPlayable = isTelegramPlayable(session, playback.videoReady);
 
-    if (!playback.videoReady && !telegramPlayable) {
+    if (!playback.videoReady && parts.length === 0 && !telegramPlayable) {
       throw new NotFoundException("Видео ещё не готово.");
     }
 
@@ -585,19 +613,17 @@ export class PublicStreamsController {
         fileSizeBytes: playback.fileSizeBytes,
         // Public clients hit the public video endpoint — never the admin one.
         videoUrl: `/api/public/streams/${session.id}/video`,
-        videoSource: playback.videoReady ? "local" : "telegram",
+        videoSource: playback.tier ?? parts[0]?.source ?? "telegram",
         audioOnly: session.audioOnly,
         chatOffsetSec:
           computeSessionChatOffsetSec(session) + (settings?.defaultChatOffsetSec ?? 0),
-        telegramParts: telegramPlayable
-          ? session.telegramParts.map((part) => ({
-              partIndex: part.partIndex,
-              partCount: part.partCount,
-              streamUrl: `/api/public/streams/${session.id}/video?part=${part.partIndex}`,
-              startOffsetSec: part.startOffsetSec,
-              durationSec: part.durationSec,
-            }))
-          : [],
+        // The pieces to play in order, each labelled with where it is read
+        // from: chunks off the archive drive, Telegram for whatever the drive
+        // no longer holds.
+        parts: parts.map((part) => ({
+          ...part,
+          streamUrl: `/api/public/streams/${session.id}/video?part=${part.partIndex}`,
+        })),
       },
     };
   }
@@ -606,10 +632,10 @@ export class PublicStreamsController {
   async getChat(@Param("id") id: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      select: { id: true, videoStatus: true, playbackPath: true },
+      select: { id: true, videoStatus: true, playbackPath: true, segmented: true },
     });
 
-    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+    if (!session || session.videoStatus !== "ready" || !hasPlayableSource(session)) {
       throw new NotFoundException("Запись не найдена.");
     }
 
@@ -749,19 +775,29 @@ export class PublicStreamsController {
   async streamVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      select: { id: true, videoStatus: true, playbackPath: true, audioOnly: true },
+      select: {
+        id: true,
+        videoStatus: true,
+        playbackPath: true,
+        audioOnly: true,
+        segmented: true,
+      },
     });
 
-    if (!session || session.videoStatus !== "ready" || !session.playbackPath) {
+    if (!session || session.videoStatus !== "ready" || !hasPlayableSource(session)) {
       throw new NotFoundException("Запись не найдена.");
     }
 
+    const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
     let local: { absolutePath: string; stat: Stats } | null = null;
 
     try {
-      local = await this.recordingService.getPlayableFile(id);
+      // The part matters for a segmented capture: without it every chunk of
+      // the broadcast resolved to chunk one.
+      local = await this.recordingService.getPlayableFile(id, partIndex);
     } catch {
-      // The local file is gone — fall back to the Telegram copy below.
+      // Neither the server disk nor the archive drive has it — fall back to
+      // the Telegram copy below.
       local = null;
     }
 
@@ -780,7 +816,6 @@ export class PublicStreamsController {
         return;
       }
 
-      const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
       const downloadName =
         req.query?.download === "1" ? `${safeName}-${id}-part${partIndex}.mp4` : null;
 

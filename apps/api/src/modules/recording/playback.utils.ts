@@ -1,5 +1,13 @@
 import { existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
+import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
+
+/**
+ * Where a piece of a recording is read from, in the order playback prefers:
+ * the server's own disk (nothing is faster), then the archive drive, then the
+ * Telegram copy — the only one left once the drive copy has expired.
+ */
+export type MediaTier = "local" | "drive" | "telegram";
 
 /**
  * Cache headers for a local media file. Recordings are immutable once written,
@@ -83,10 +91,12 @@ export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
       fileSizeBytes: session.fileSizeBytes,
       videoReady: false,
       videoUrl: null,
+      tier: null as MediaTier | null,
     };
   }
 
   const absolutePath = resolve(session.playbackPath);
+  const tier: MediaTier = isUnderArchiveRoot(absolutePath) ? "drive" : "local";
 
   if (!existsSync(absolutePath)) {
     return {
@@ -95,6 +105,7 @@ export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
       fileSizeBytes: session.fileSizeBytes,
       videoReady: false,
       videoUrl: null,
+      tier: null as MediaTier | null,
     };
   }
 
@@ -109,6 +120,7 @@ export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
       fileSizeBytes,
       videoReady,
       videoUrl: videoReady ? `/api/archives/${session.id}/video` : null,
+      tier: videoReady ? tier : (null as MediaTier | null),
     };
   } catch {
     return {
@@ -117,6 +129,97 @@ export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
       fileSizeBytes: session.fileSizeBytes,
       videoReady: false,
       videoUrl: null,
+      tier: null as MediaTier | null,
     };
   }
+}
+
+type PlaybackSegmentFields = {
+  index: number;
+  localPath: string | null;
+  archivePath: string | null;
+  telegramStatus: string;
+  startOffsetSec: number;
+  durationSec: number | null;
+};
+
+type PlaybackTelegramPartFields = {
+  partIndex: number;
+  partCount: number;
+  startOffsetSec: number;
+  durationSec: number | null;
+};
+
+export type PlaybackPart = {
+  partIndex: number;
+  partCount: number;
+  startOffsetSec: number;
+  durationSec: number | null;
+  source: MediaTier;
+};
+
+/**
+ * The ordered pieces a recording plays back in, and where each piece is read
+ * from. Empty when the recording is one file that is still there — that file
+ * IS the whole thing, and the player must not chop it into parts.
+ *
+ * The tier of a piece follows the same order the video endpoint resolves it
+ * in: the chunk on the server disk while the broadcast runs, its copy on the
+ * archive drive after the move, and the Telegram message only for chunks
+ * neither holds — one whose drive copy expired, or a recording from before
+ * the drive existed.
+ */
+export function resolvePlaybackParts(session: {
+  hasSingleFile: boolean;
+  audioOnly: boolean;
+  telegramStatus: string;
+  segments?: PlaybackSegmentFields[];
+  telegramParts?: PlaybackTelegramPartFields[];
+}): PlaybackPart[] {
+  if (session.hasSingleFile || session.audioOnly) {
+    return [];
+  }
+
+  const segments = [...(session.segments ?? [])].sort((a, b) => a.index - b.index);
+
+  if (segments.length > 0) {
+    const parts: PlaybackPart[] = [];
+
+    for (const segment of segments) {
+      const source: MediaTier | null = segment.localPath
+        ? "local"
+        : segment.archivePath
+          ? "drive"
+          : segment.telegramStatus === "uploaded"
+            ? "telegram"
+            : null;
+
+      // A chunk that reached none of the three tiers yet (still recording, or
+      // its upload failed) would be a hole in the timeline — leaving it out
+      // keeps the parts the player is given all playable.
+      if (source) {
+        parts.push({
+          partIndex: segment.index,
+          partCount: segments.length,
+          startOffsetSec: segment.startOffsetSec,
+          durationSec: segment.durationSec,
+          source,
+        });
+      }
+    }
+
+    return parts;
+  }
+
+  if (session.telegramStatus !== "uploaded") {
+    return [];
+  }
+
+  return (session.telegramParts ?? []).map((part) => ({
+    partIndex: part.partIndex,
+    partCount: part.partCount,
+    startOffsetSec: part.startOffsetSec,
+    durationSec: part.durationSec,
+    source: "telegram" as const,
+  }));
 }

@@ -65,6 +65,22 @@ export function isUnderDataRoot(path: string): boolean {
 }
 
 /**
+ * Does this path live on the archive tier? The player asks so it can name the
+ * source it is reading from: "Google Drive" and the server's own disk both
+ * behave like a local file here, but only one of them expires.
+ */
+export function isUnderArchiveRoot(path: string): boolean {
+  const root = archiveRoot();
+
+  if (!root) {
+    return false;
+  }
+
+  const rel = relative(root, resolve(path));
+  return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
+}
+
+/**
  * Filesystem-safe version of a stream title, kept readable rather than
  * transliterated: the folders are meant to be browsed by a human in the Drive
  * web UI, and "Прохождение Elden Ring" beats "Prokhozhdenie-Elden-Ring".

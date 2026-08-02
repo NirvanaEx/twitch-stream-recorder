@@ -118,6 +118,7 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
 
       await this.requeueFailed();
       await this.archiveSegments(settings);
+      await this.finalizeSegmented();
       await this.archivePending(settings);
       await this.expireOld(settings);
     } catch (error) {
@@ -222,6 +223,67 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
           `${logPrefix} chunk ${segment.index} could not be archived: ${this.describe(error)}`,
         );
         return; // Next sweep retries from the oldest chunk.
+      }
+    }
+  }
+
+  /**
+   * Close the books on a segmented capture whose last chunk has landed.
+   *
+   * Chunks travel one at a time in archiveSegments, so nothing ever declares
+   * the session itself archived — `archivePending` only looks at recordings
+   * that have a single file to move, and a segmented one has none. Left at
+   * that, these broadcasts kept their folder on the Drive forever: no
+   * sidecars next to the chunks, retention never counting, and the storage
+   * page calling them "queued" for good.
+   */
+  private async finalizeSegmented() {
+    for (;;) {
+      const session = await this.prisma.streamSession.findFirst({
+        where: {
+          segmented: true,
+          status: { not: "recording" },
+          archiveStatus: { in: ["none", "pending"] },
+          archiveDir: { not: null },
+          // Every chunk has left the server disk and at least one reached the
+          // drive: the capture is done moving.
+          segments: { some: { archivePath: { not: null } }, every: { localPath: null } },
+        },
+        include: { channel: true },
+        orderBy: { createdAt: "asc" },
+      });
+
+      if (!session?.archiveDir) {
+        return;
+      }
+
+      if (!this.checkAvailability()) {
+        return;
+      }
+
+      const logPrefix = `[archive/${session.channel.twitchLogin}/${session.id}]`;
+
+      try {
+        await this.writeSidecars(session, session.archiveDir, logPrefix);
+
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: {
+            archiveStatus: "stored",
+            archivedAt: new Date(),
+            archiveDeletedAt: null,
+            archiveError: null,
+            // The chunks are the recording and none of them is on the server
+            // disk anymore — the same thing the whole-file move records.
+            localFileDeletedAt: session.localFileDeletedAt ?? new Date(),
+          },
+        });
+
+        this.logger.log(`${logPrefix} archived to ${session.archiveDir}`);
+      } catch (error) {
+        await this.markError(session.id, this.describe(error));
+        this.logger.warn(`${logPrefix} archiving failed: ${this.describe(error)}`);
+        return; // markError takes it out of the query above; retry hourly.
       }
     }
   }
@@ -510,7 +572,10 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
         archiveDeletedAt: null,
         OR: [{ startedAt: { lte: cutoff } }, { startedAt: null, createdAt: { lte: cutoff } }],
       },
-      include: { channel: true },
+      include: {
+        channel: true,
+        segments: { select: { index: true, telegramStatus: true } },
+      },
       orderBy: { startedAt: "asc" },
     });
 
@@ -535,6 +600,15 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
 
       try {
         rmSync(session.archiveDir!, { recursive: true, force: true });
+
+        // The chunks of a segmented capture went with the folder. Clearing the
+        // paths is what moves playback over to Telegram: the video endpoint
+        // and the archive list both read these columns, and a path pointing
+        // into a deleted folder would keep claiming the drive still has it.
+        await this.prisma.recordingSegment.updateMany({
+          where: { streamSessionId: session.id, archivePath: { not: null } },
+          data: { archivePath: null },
+        });
 
         await this.prisma.streamSession.update({
           where: { id: session.id },
@@ -561,9 +635,24 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Human-readable reason this session must not be expired yet, or null. */
-  private expiryBlocker(session: SessionWithChannel): string | null {
+  private expiryBlocker(
+    session: SessionWithChannel & { segments?: { index: number; telegramStatus: string }[] },
+  ): string | null {
     if (session.telegramStatus !== "uploaded") {
       return "Kept past the retention window: Telegram has no copy of this recording yet.";
+    }
+
+    // Per chunk, not just per session: deleting the folder of a segmented
+    // capture whose chunk 7 never made it to Telegram would leave a hole in
+    // the middle of the broadcast with no copy anywhere.
+    const missing = (session.segments ?? []).filter(
+      (segment) => segment.telegramStatus !== "uploaded",
+    );
+
+    if (missing.length > 0) {
+      return `Kept past the retention window: Telegram has no copy of chunk(s) ${missing
+        .map((segment) => segment.index)
+        .join(", ")}.`;
     }
 
     if (session.audioPath && !session.audioOnly && !session.telegramAudioMessageId) {
