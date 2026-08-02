@@ -947,9 +947,16 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     activeRecording.streamlinkProcess.stderr?.on("data", (chunk) => {
       this.logger.log(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
     });
-    activeRecording.streamlinkProcess.stdout?.on("data", (chunk) => {
-      this.logger.debug(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
-    });
+    // Only when streamlink writes the file itself: then stdout carries its
+    // progress text. In a segmented capture stdout IS the video, piped into
+    // ffmpeg — stringifying it put megabytes of H.264 a second into the
+    // container log, rotated every useful line out of it within minutes and
+    // took the API down with it.
+    if (!activeRecording.segments) {
+      activeRecording.streamlinkProcess.stdout?.on("data", (chunk) => {
+        this.logger.debug(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
+      });
+    }
 
     const finalize = async (status: "completed" | "error") => {
       if (!this.activeRecordings.has(channel.id)) {
