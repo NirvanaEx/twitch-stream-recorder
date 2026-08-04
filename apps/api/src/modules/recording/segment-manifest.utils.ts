@@ -7,9 +7,10 @@ export type SegmentManifestRow = {
   durationSec: number;
 };
 
-// "part0000.mp4" — anchored so the "4" of the extension can never be read as
-// part of the number.
-const CHUNK_NAME = /^part(\d+)\.mp4$/;
+// "part0000.mp4", "part0000.ts", and the "<recording>_part001.mp4" the
+// Telegram split writes — anchored on the extension so the "4" of ".mp4" can
+// never be read as part of the number.
+const CHUNK_NAME = /(?:^|[_-])part(\d+)\.(?:mp4|ts)$/i;
 
 /**
  * Parse the manifest ffmpeg appends a line to every time it closes a chunk

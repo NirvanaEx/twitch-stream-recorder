@@ -9,6 +9,36 @@ Monorepo for a self-hosted Twitch stream recorder with realtime admin panel, bro
 - `apps/worker`: background jobs, capture orchestration, retention tasks
 - `infra/nginx`: reverse proxy and static HLS delivery
 
+## How a recording is put together
+
+One broadcast is one file. The capture is written in MPEG-TS pieces while the
+stream runs and joined back into a single `.mp4` the moment it ends — the
+cutting is undone before anything else sees the recording, so the player, the
+archive and the download all get one continuous video.
+
+The pieces are not a compromise on the recording: TS carries no per-file
+container, its timestamps run straight through the boundaries, and the join is
+a stream copy, so what comes out is what streamlink pulled. Verified in
+`chunk-join.spec.ts` — the joined file decodes to the same audio, sample for
+sample, as the uncut capture.
+
+They exist for the disk. Joining from a folder of pieces lets each one be freed
+as ffmpeg reads it, so a broadcast bigger than the free space still joins;
+`RECORDING_SEGMENT_MINUTES` sets how big a piece is.
+
+What is *not* done anymore is cutting the capture into finished `.mp4` chunks
+as it runs. That shipped each chunk to Telegram during the broadcast, but the
+recording then stayed a row of separate files: every boundary re-primed the
+audio decoder, and the player hopping between files turned that into an audible
+break mid-stream. It is still available as `RECORDING_LIVE_SEGMENTS=1` for a
+disk too small to hold a whole broadcast — see `.env.example`.
+
+Splitting for Telegram happens afterwards, on the finished file, and only
+because a message cannot exceed 2 GB. Those parts are cut and uploaded one at a
+time, and each is deleted as soon as Telegram has it, so the split needs a part
+or two of free space rather than a second copy of the recording. The player
+only ever falls back to them once both the local and the archive copy are gone.
+
 ## Where recordings live
 
 Three tiers, in the order a finished recording passes through them:

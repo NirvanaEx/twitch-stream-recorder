@@ -42,6 +42,23 @@ test("keeps the last line when the manifest ends on a newline", () => {
   assert.equal(rows.length, 1);
 });
 
+test("reads the TS pieces a joined capture writes", () => {
+  const rows = parseSegmentManifest("part0000.ts,0.000000,900.000000\npart0001.ts,900.0,1800.0\n");
+
+  assert.deepEqual(
+    rows.map((row) => row.index),
+    [0, 1],
+  );
+  assert.equal(rows[1].startOffsetSec, 900);
+});
+
+test("reads the parts the Telegram split names after the recording", () => {
+  const rows = parseSegmentManifest("stream_2026-08-04_12-00-00_part003.mp4,0.0,120.0\n");
+
+  assert.equal(rows[0].index, 3);
+  assert.equal(rows[0].durationSec, 120);
+});
+
 test("skips anything that is not a chunk record", () => {
   const rows = parseSegmentManifest("\ngarbage\npart0007.mp4,1.0,2.0\n,,\n");
 

@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import * as fs from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
+import { listCaptureChunks } from "../recording/chunk-join";
 
 // Files younger than this are treated as busy: streamlink/ffmpeg may still be
 // writing them even if the DB row does not reference them yet.
@@ -387,8 +388,48 @@ export class StorageService {
         for (const mediaPath of [session.recordingPath, session.playbackPath]) {
           if (!mediaPath) continue;
           register(resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ".ts"), "source", session);
+
+          // Куски идущего захвата: они ещё не собраны в .mp4, и в базе на них
+          // не ссылается ни одна колонка. Без этой строки ревизия через десять
+          // минут объявит их лишними и предложит удалить — то есть стереть
+          // эфир, который прямо сейчас пишется.
+          for (const chunk of listCaptureChunks(
+            resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ""),
+          )) {
+            register(chunk, "source", session);
+          }
         }
       }
+    }
+
+    // Куски сегментного захвата: у них своя таблица, и пока кусок не уехал в
+    // Telegram и в архив, единственная его копия лежит здесь.
+    const segments = await this.prisma.recordingSegment.findMany({
+      where: { localPath: { not: null } },
+      select: {
+        localPath: true,
+        session: {
+          select: {
+            id: true,
+            status: true,
+            title: true,
+            channel: { select: { twitchLogin: true } },
+          },
+        },
+      },
+    });
+
+    for (const segment of segments) {
+      if (!segment.localPath) continue;
+      register(segment.localPath, "video", {
+        ...segment.session,
+        recordingPath: null,
+        playbackPath: null,
+        audioPath: null,
+        chatPath: null,
+        localFileDeletedAt: null,
+        audioLocalDeletedAt: null,
+      });
     }
 
     return { refs, sessions };
