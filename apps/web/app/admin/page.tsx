@@ -27,7 +27,7 @@ type ChannelItem = {
   profileImageUrl: string | null;
   isEnabled: boolean;
   autoRecord: boolean;
-  platform: "twitch" | "kick";
+  platform: "twitch" | "kick" | "vkplay";
   audioOnly: boolean;
   recordVideo: boolean;
   recordAudio: boolean;
@@ -100,6 +100,14 @@ function ChannelStatusBadge({
   return <span className="badge">{t.common.offline}</span>;
 }
 
+// The platforms a channel can live on, and a narrowing for the <select> value:
+// anything unexpected falls back to Twitch, the way the API does.
+type Platform = "twitch" | "kick" | "vkplay";
+
+function toPlatform(value: string): Platform {
+  return value === "kick" || value === "vkplay" ? value : "twitch";
+}
+
 export default function DashboardPage() {
   const { t } = useLanguage();
   const { hasPermission } = useAuth();
@@ -113,7 +121,7 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<{ id: string; action: Action } | null>(null);
   const [channelInput, setChannelInput] = useState("");
-  const [platform, setPlatform] = useState<"twitch" | "kick">("twitch");
+  const [platform, setPlatform] = useState<Platform>("twitch");
   const [page, setPage] = useState(1);
   const [now, setNow] = useState(() => Date.now());
 
@@ -306,20 +314,23 @@ export default function DashboardPage() {
             <form onSubmit={handleSubmit} className="input-row">
               <select
                 value={platform}
-                onChange={(event) =>
-                  setPlatform(event.target.value === "kick" ? "kick" : "twitch")
-                }
+                onChange={(event) => setPlatform(toPlatform(event.target.value))}
                 aria-label={t.channels.platformLabel}
                 style={{ flex: "none", width: 120 }}
               >
                 <option value="twitch">Twitch</option>
                 <option value="kick">Kick</option>
+                <option value="vkplay">VK Play</option>
               </select>
               <input
                 value={channelInput}
                 onChange={(event) => setChannelInput(event.target.value)}
                 placeholder={
-                  platform === "kick" ? t.channels.inputHintKick : t.channels.inputHint
+                  platform === "kick"
+                    ? t.channels.inputHintKick
+                    : platform === "vkplay"
+                      ? t.channels.inputHintVkPlay
+                      : t.channels.inputHint
                 }
                 required
               />

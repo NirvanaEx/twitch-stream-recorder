@@ -15,6 +15,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { SAME_BROADCAST_TOLERANCE_MS } from "../public/vod-session-match";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { KickChatService } from "../kick/kick-chat.service";
+import { VkPlayChatService } from "../vkplay/vkplay-chat.service";
 import { PlatformsService } from "../platforms/platforms.service";
 import { ChatService } from "../chat/chat.service";
 import { EmoteMirrorService } from "../chat/emote-mirror.service";
@@ -149,6 +150,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly platformsService: PlatformsService,
     private readonly kickChatService: KickChatService,
+    private readonly vkPlayChatService: VkPlayChatService,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly chatService: ChatService,
     private readonly sevenTvService: SevenTvService,
@@ -534,12 +536,19 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     this.activeRecordings.set(channel.id, activeRecording);
     this.bindRecordingLifecycle(channel, session, activeRecording);
 
-    // Both platforms capture chat, but over different transports: Twitch over
-    // IRC, Kick over Pusher.
+    // Every platform captures chat, each over its own transport: Twitch over
+    // IRC, Kick over Pusher, VK Play Live over its Centrifuge pubsub.
     const chatPlatform = this.platformsService.resolvePlatform(channel.platform);
 
     if (chatPlatform === "kick") {
       void this.kickChatService.startCapture({
+        channelId: channel.id,
+        sessionId: session.id,
+        channelLogin: channel.twitchLogin,
+        captureAnchor,
+      });
+    } else if (chatPlatform === "vkplay") {
+      void this.vkPlayChatService.startCapture({
         channelId: channel.id,
         sessionId: session.id,
         channelLogin: channel.twitchLogin,
@@ -574,7 +583,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     // 7TV serves Kick too — the same v3 endpoint, keyed by the platform's own
     // user id, which twitchUserId holds for both. Best-effort, in background.
-    void this.captureEmoteSnapshot(session.id, chatPlatform, channel.twitchUserId);
+    // VK Play Live is not on 7TV and needs nothing here: its smiles arrive
+    // inside each message, picture and all, so chat capture stores them per
+    // message instead of snapshotting a channel-wide set.
+    if (chatPlatform !== "vkplay") {
+      void this.captureEmoteSnapshot(session.id, chatPlatform, channel.twitchUserId);
+    }
 
     await this.prisma.channel.update({
       where: { id: channel.id },
@@ -620,6 +634,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     this.chatService.stopCapture(channelId);
     this.kickChatService.stopCapture(channelId);
+    this.vkPlayChatService.stopCapture(channelId);
     this.twitchEventsService.stopCapture(channelId);
 
     await this.prisma.streamSession.update({
@@ -1008,6 +1023,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.activeRecordings.delete(channel.id);
       this.chatService.stopCapture(channel.id);
       this.kickChatService.stopCapture(channel.id);
+      this.vkPlayChatService.stopCapture(channel.id);
       this.twitchEventsService.stopCapture(channel.id);
 
       // Only a live-segmented capture has no single output file: its totals

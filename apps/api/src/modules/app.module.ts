@@ -16,6 +16,7 @@ import { TelegramModule } from "./telegram/telegram.module";
 import { KickModule } from "./kick/kick.module";
 import { PlatformsModule } from "./platforms/platforms.module";
 import { TwitchModule } from "./twitch/twitch.module";
+import { VkPlayModule } from "./vkplay/vkplay.module";
 import { UsersModule } from "./users/users.module";
 
 @Module({
@@ -26,6 +27,7 @@ import { UsersModule } from "./users/users.module";
     UsersModule,
     TwitchModule,
     KickModule,
+    VkPlayModule,
     PlatformsModule,
     ChatModule,
     RecordingModule,

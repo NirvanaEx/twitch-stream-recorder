@@ -54,6 +54,13 @@ export class LiveEmotesService {
       return null;
     }
 
+    // VK Play Live is not on 7TV, and its channel id would be looked up as if
+    // it were a Twitch one — a request that can only come back empty. Its
+    // smiles travel inside each message anyway.
+    if (channel.platform === "vkplay") {
+      return null;
+    }
+
     const platform: EmotePlatform = channel.platform === "kick" ? "kick" : "twitch";
     const key = `${platform}:${channel.twitchUserId}`;
     const cached = this.cache.get(key);

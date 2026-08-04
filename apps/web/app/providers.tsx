@@ -163,6 +163,7 @@ type Dictionary = {
     inputLabel: string;
     inputHint: string;
     inputHintKick: string;
+    inputHintVkPlay: string;
     platformLabel: string;
     addButton: string;
     empty: string;
@@ -618,6 +619,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       inputLabel: "Ссылка или логин",
       inputHint: "Например: https://www.twitch.tv/skywhywalker или skywhywalker",
       inputHintKick: "Например: https://kick.com/xqc или xqc",
+      inputHintVkPlay: "Например: https://live.vkvideo.ru/iserveri или iserveri",
       platformLabel: "Платформа",
       addButton: "Добавить",
       empty: "Пока нет ни одного канала.",
@@ -1094,6 +1096,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       inputLabel: "URL or login",
       inputHint: "Example: https://www.twitch.tv/skywhywalker or skywhywalker",
       inputHintKick: "Example: https://kick.com/xqc or xqc",
+      inputHintVkPlay: "Example: https://live.vkvideo.ru/iserveri or iserveri",
       platformLabel: "Platform",
       addButton: "Add",
       empty: "No channels yet.",

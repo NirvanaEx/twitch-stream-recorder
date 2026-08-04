@@ -70,7 +70,18 @@ export type ChatResponse = {
   emotes: EmotePayload | null;
 };
 
-export type InlineEmote = { id: string; name: string; start: number; end: number };
+export type InlineEmote = {
+  id: string;
+  name: string;
+  start: number;
+  end: number;
+  /**
+   * Set by platforms that host their emotes at an unguessable address — VK
+   * Play Live sends the picture with every message. Kick emotes leave it
+   * unset: theirs is one predictable path per id.
+   */
+  url?: string | null;
+};
 
 export type Token =
   | { type: "text"; value: string }
@@ -148,7 +159,7 @@ function renderInlineEmoteTokens(
   emoteMap: Map<string, EmoteEntry>,
   inlineEmotes: InlineEmote[],
 ): Token[] {
-  const placed: Array<{ id: string; name: string; start: number }> = [];
+  const placed: Array<{ id: string; name: string; start: number; url?: string | null }> = [];
   let searchFrom = 0;
 
   for (const emote of [...inlineEmotes].sort((a, b) => a.start - b.start)) {
@@ -165,7 +176,7 @@ function renderInlineEmoteTokens(
     // Overlapping placements would duplicate text; skip rather than corrupt.
     if (start < searchFrom) continue;
 
-    placed.push({ id: emote.id, name: emote.name, start });
+    placed.push({ id: emote.id, name: emote.name, start, url: emote.url });
     searchFrom = start + emote.name.length;
   }
 
@@ -177,7 +188,9 @@ function renderInlineEmoteTokens(
     tokens.push({
       type: "emote",
       name: emote.name,
-      url: `https://files.kick.com/emotes/${encodeURIComponent(emote.id)}/fullsize`,
+      // Kick's emotes are one path per id; VK Play Live sends the address with
+      // the message, because its smiles have no such scheme.
+      url: emote.url || `https://files.kick.com/emotes/${encodeURIComponent(emote.id)}/fullsize`,
     });
     cursor = emote.start + emote.name.length;
   }
