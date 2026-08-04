@@ -3,6 +3,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import { KickPublicClient } from "./kick-public.client";
 import { KickService } from "./kick.service";
 import { PlatformsService } from "../platforms/platforms.service";
+import { VkPlayPublicClient } from "../vkplay/vkplay-public.client";
+import { VkPlayService } from "../vkplay/vkplay.service";
 import { TwitchService } from "../twitch/twitch.service";
 
 // Every test here exercises the credentialled path; the public fallback has a
@@ -182,7 +184,11 @@ test("the app token is fetched once and reused across polls", async () => {
 });
 
 test("capture quality differs per platform because Kick has no audio_only variant", () => {
-  const platforms = new PlatformsService(new TwitchService(), makeService());
+  const platforms = new PlatformsService(
+    new TwitchService(),
+    makeService(),
+    new VkPlayService(new VkPlayPublicClient()),
+  );
 
   // Twitch publishes a real audio-only rendition: no video is downloaded.
   assert.equal(
@@ -207,7 +213,11 @@ test("capture quality differs per platform because Kick has no audio_only varian
 });
 
 test("streamlink is pointed at the right site, and unknown platforms fall back to Twitch", () => {
-  const platforms = new PlatformsService(new TwitchService(), makeService());
+  const platforms = new PlatformsService(
+    new TwitchService(),
+    makeService(),
+    new VkPlayService(new VkPlayPublicClient()),
+  );
 
   assert.equal(platforms.channelUrl("kick", "xqc"), "https://kick.com/xqc");
   assert.equal(platforms.channelUrl("twitch", "xqc"), "https://www.twitch.tv/xqc");

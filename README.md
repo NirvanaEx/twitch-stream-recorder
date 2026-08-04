@@ -152,6 +152,33 @@ To run the local smoke test while dev services are up:
 
 - `npm run verify:smoke`
 
+## Platforms
+
+A channel carries the site it lives on, and everything downstream — capture,
+chat, archive — follows from that one field.
+
+| Platform | Channel looks like | Credentials | Chat |
+| --- | --- | --- | --- |
+| `twitch` | `twitch.tv/<login>` | optional (see below) | IRC |
+| `kick` | `kick.com/<slug>` | optional | Pusher |
+| `vkplay` | `live.vkvideo.ru/<name>` | none | Centrifuge pubsub |
+
+VK Play Live (`live.vkvideo.ru`, formerly `vkplay.live`) needs no setup at all:
+`api.live.vkvideo.ru` answers whether a channel is live, with what title,
+category and viewer count, and hands out an anonymous websocket token for
+chat. Its smiles arrive inside each message with their pictures, so unlike
+Twitch and Kick there is no channel-wide emote set to snapshot.
+
+Two things differ from Twitch there. It publishes no `audio_only` rendition,
+so an audio-only capture takes the smallest video stream and the remux throws
+the picture away — the same deal as Kick. And its qualities are named
+`240p60 … 1440p60`, which is what a per-channel preferred quality has to say;
+`best` always works.
+
+VK Video proper (`vkvideo.ru`, `vk.com`) is a *different* platform and is not
+supported: its listings redirect to `login.vk.ru`, so watching a channel there
+would need a VK API token.
+
 ## Twitch Integration Modes
 
 The app now has two Twitch modes:

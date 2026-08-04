@@ -188,24 +188,37 @@ export function deletionOffsetSec(
   return Math.round((deletedAt.getTime() - anchorMs) / 1000);
 }
 
-export type InlineEmote = { id: string; name: string; start: number; end: number };
+export type InlineEmote = {
+  id: string;
+  name: string;
+  start: number;
+  end: number;
+  /**
+   * Where the picture lives, for platforms that do not have one predictable
+   * CDN path per id. Kick emotes leave this unset — theirs is derived from the
+   * id — while VK Play Live sends the url with every message.
+   */
+  url?: string | null;
+};
 
 /**
- * Kick's own emotes for one message.
+ * A platform's own emotes for one message.
  *
- * Kick sends them inline as `[emote:39292:catJAM]`; capture unwraps the token
- * to the bare name and records where it landed. That lands in the same column
- * as the Twitch emote tag, and the string parser hands back null for it — so
- * the web chat has been showing Kick emotes as plain words. Returned as its
- * own field, leaving `emotes` (the raw Twitch tag) untouched for the
- * userscript and older bundles.
+ * Kick sends them inline as `[emote:39292:catJAM]` and VK Play Live as typed
+ * parts; capture unwraps both to the bare name and records where it landed.
+ * That lands in the same column as the Twitch emote tag, and the string parser
+ * hands back null for it — so without this the web chat shows them as plain
+ * words. Returned as its own field, leaving `emotes` (the raw Twitch tag)
+ * untouched for the userscript and older bundles.
  */
+const INLINE_EMOTE_PROVIDERS = new Set(["kick", "vkplay"]);
+
 export function extractInlineEmotes(emotesJson: string | null | undefined): InlineEmote[] {
   if (!emotesJson) return [];
 
   const parsed = parseStoredJson<{ provider?: string; emotes?: InlineEmote[] }>(emotesJson);
 
-  if (!parsed || typeof parsed !== "object" || parsed.provider !== "kick") {
+  if (!parsed || typeof parsed !== "object" || !INLINE_EMOTE_PROVIDERS.has(parsed.provider ?? "")) {
     return [];
   }
 
