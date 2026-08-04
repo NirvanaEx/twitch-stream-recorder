@@ -9,12 +9,14 @@ import {
 import { AppSettings, Channel, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { statfs } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
 import { isArchiveAvailable, isUnderDataRoot } from "../archive-storage/archive-paths";
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { PartSplitter, type SplitPart } from "./part-splitter";
 import { TelegramClientService } from "./telegram-client.service";
 import { TelegramStreamService } from "./telegram-stream.service";
 
@@ -578,119 +580,50 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       const fileSize = statSync(filePath).size;
       const maxPartBytes = this.getMaxPartBytes();
-      let partPaths = [filePath];
 
-      if (fileSize > maxPartBytes) {
-        tempDir = resolve(
-          process.env.DATA_DIR ?? "./data",
-          "tmp",
-          "telegram",
-          session.id,
-        );
-        partPaths = await this.splitIntoParts(filePath, tempDir, maxPartBytes);
-        this.logger.log(
-          `${logPrefix} split ${Math.round(fileSize / 1024 / 1024)} MB into ${partPaths.length} part(s).`,
-        );
-      }
-
-      // Leftover parts are only reusable when they belong to the same chat
-      // and the same split layout; otherwise drop them and start over.
+      // Leftover parts are only reusable when they belong to the same chat;
+      // whether their boundaries still match is checked part by part below,
+      // against what this run actually cuts.
       const reusableParts = new Map<number, TelegramUploadPart>();
-      const previousCompatible =
-        previousParts.length > 0 &&
-        previousParts.every(
-          (part) => part.chatId === chatId && part.partCount === partPaths.length,
-        );
 
-      if (previousCompatible) {
-        for (const part of previousParts) {
-          reusableParts.set(part.partIndex, part);
+      if (previousParts.length > 0) {
+        if (previousParts.every((part) => part.chatId === chatId)) {
+          for (const part of previousParts) {
+            reusableParts.set(part.partIndex, part);
+          }
+        } else {
+          await this.prisma.telegramUploadPart.deleteMany({
+            where: { streamSessionId: session.id },
+          });
         }
-      } else if (previousParts.length > 0) {
-        await this.prisma.telegramUploadPart.deleteMany({
-          where: { streamSessionId: session.id },
-        });
       }
 
-      let startOffsetSec = 0;
+      let partCount: number;
 
-      for (let index = 0; index < partPaths.length; index += 1) {
-        const partPath = partPaths[index];
-        const existingPart = reusableParts.get(index + 1);
-
-        // Per-part duration keeps chat replay aligned when the web player
-        // switches between parts; width/height make Telegram render the
-        // upload as a playable video instead of a generic document.
-        let meta: VideoMeta | null = null;
-        try {
-          meta = await this.probeVideoMeta(partPath);
-        } catch {
-          // Metadata is best-effort; the upload itself must not fail.
-        }
-
-        const partDurationSec =
-          existingPart?.durationSec ?? (meta ? Math.round(meta.durationSec) : 0);
-
-        if (existingPart) {
-          this.logger.log(
-            `${logPrefix} part ${index + 1}/${partPaths.length} is already in Telegram, skipping.`,
-          );
-          this.reportUploadProgress(
-            session.id,
-            Math.floor(((index + 1) / partPaths.length) * 100),
-          );
-          startOffsetSec += partDurationSec;
-          continue;
-        }
-
-        const caption = this.buildCaption(session, index + 1, partPaths.length);
-
-        // Re-check between parts too: a multi-part upload runs for a long
-        // time and a viewer may have started watching meanwhile.
-        await this.yieldToPlayback();
-
-        this.logger.log(
-          `${logPrefix} uploading part ${index + 1}/${partPaths.length} (${Math.round(
-            statSync(partPath).size / 1024 / 1024,
-          )} MB)...`,
-        );
-
-        const sent = await this.sendVideo(partPath, chatId, caption, meta, (fraction) => {
-          this.reportUploadProgress(
-            session.id,
-            Math.floor(((index + fraction) / partPaths.length) * 100),
-          );
+      if (fileSize <= maxPartBytes) {
+        // A recording that fits in one message needs no splitting at all.
+        await this.uploadOnePart(session, chatId, {
+          index: 1,
+          path: filePath,
+          sizeBytes: fileSize,
+          startOffsetSec: 0,
+          durationSec: null,
+          expectedParts: 1,
+          existingPart: reusableParts.get(1) ?? null,
+          logPrefix,
         });
 
-        await this.prisma.telegramUploadPart.create({
-          data: {
-            streamSessionId: session.id,
-            partIndex: index + 1,
-            partCount: partPaths.length,
-            chatId,
-            messageId: sent.messageId,
-            fileId: sent.fileId,
-            fileSizeBytes: String(statSync(partPath).size),
-            startOffsetSec,
-            durationSec: meta ? Math.round(meta.durationSec) : null,
-          },
+        partCount = 1;
+      } else {
+        tempDir = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram", session.id);
+        partCount = await this.uploadInParts(session, chatId, {
+          filePath,
+          fileSize,
+          maxPartBytes,
+          tempDir,
+          reusableParts,
+          logPrefix,
         });
-
-        startOffsetSec += partDurationSec;
-
-        // Drop the segment the moment Telegram has it. Splitting used to hold
-        // every part on disk until the whole upload finished, so uploading an
-        // 8 GB recording needed 16 GB free — the .mp4 plus a second copy of it
-        // chopped up. With two or three broadcasts finishing at once that is
-        // what filled the disk and killed the next capture. The .mp4 itself is
-        // untouched, so a retry can always re-split from it.
-        if (tempDir && partPath !== filePath) {
-          try {
-            rmSync(partPath, { force: true });
-          } catch {
-            // The finally block sweeps the whole temp dir anyway.
-          }
-        }
       }
 
       // Standalone audio track for the Twitch userscript: posted as one audio
@@ -735,7 +668,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.emitTelegramUpdate(session.id, "uploaded");
-      this.logger.log(`${logPrefix} upload finished (${partPaths.length} part(s)).`);
+      this.logger.log(`${logPrefix} upload finished (${partCount} part(s)).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`${logPrefix} upload failed: ${message}`);
@@ -751,6 +684,266 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
+  }
+
+  /**
+   * Cut a recording that is too big for one message and upload the pieces.
+   *
+   * The cutting and the uploading run together: a part goes as soon as ffmpeg
+   * closes it and is deleted as soon as Telegram has it, so the disk carries
+   * the recording plus a part or two rather than the recording twice.
+   */
+  private async uploadInParts(
+    session: SessionWithChannel,
+    chatId: string,
+    options: {
+      filePath: string;
+      fileSize: number;
+      maxPartBytes: number;
+      tempDir: string;
+      reusableParts: Map<number, TelegramUploadPart>;
+      logPrefix: string;
+    },
+  ) {
+    const { filePath, fileSize, maxPartBytes, tempDir, logPrefix } = options;
+    let reusableParts = options.reusableParts;
+
+    const { segmentSec, expectedParts } = await this.planSplit(filePath, fileSize, maxPartBytes);
+
+    this.logger.log(
+      `${logPrefix} cutting ${Math.round(fileSize / 1024 / 1024)} MB into ~${expectedParts} part(s), uploading each as it is ready.`,
+    );
+
+    const splitter = new PartSplitter({
+      filePath,
+      tempDir,
+      segmentSec,
+      maxPartBytes,
+      log: (message) => this.logger.log(`${logPrefix} ${message}`),
+      freeBytes: () => this.freeDiskBytes(),
+    });
+
+    let partCount = 0;
+
+    try {
+      splitter.start();
+
+      for (;;) {
+        let part: SplitPart | null;
+
+        try {
+          part = await splitter.next();
+        } catch (error) {
+          // Reading the recording through a pipe needs its index at the front
+          // of the file. Everything this recorder writes has it, but a file
+          // from elsewhere may not — fall back to the unpaced split, which
+          // reads the file directly and only costs disk space.
+          if (!splitter.failedWithoutOutput) {
+            throw error;
+          }
+
+          this.logger.warn(
+            `${logPrefix} the paced split could not read this file (${
+              error instanceof Error ? error.message : String(error)
+            }); splitting it in one pass instead.`,
+          );
+
+          return await this.uploadUnpacedParts(session, chatId, {
+            ...options,
+            segmentSec,
+            reusableParts,
+          });
+        }
+
+        if (!part) {
+          break;
+        }
+
+        const existingPart = reusableParts.get(part.index) ?? null;
+
+        // A resumed upload has to line up with the parts already in Telegram.
+        // It normally does — the same file cut the same way — but a changed
+        // part size would otherwise staple two layouts into one recording.
+        if (existingPart && Math.abs(existingPart.startOffsetSec - part.startOffsetSec) > 2) {
+          this.logger.warn(
+            `${logPrefix} the parts already in Telegram no longer line up with this split; re-uploading the recording.`,
+          );
+          await this.prisma.telegramUploadPart.deleteMany({
+            where: { streamSessionId: session.id },
+          });
+          reusableParts = new Map();
+        }
+
+        await this.uploadOnePart(session, chatId, {
+          index: part.index,
+          path: part.path,
+          sizeBytes: part.sizeBytes,
+          startOffsetSec: part.startOffsetSec,
+          durationSec: part.durationSec,
+          expectedParts,
+          existingPart: reusableParts.get(part.index) ?? null,
+          logPrefix,
+        });
+
+        partCount = part.index;
+
+        // Dropping the part is what lets the split carry on: with no room for
+        // a second copy of the recording, the splitter waits for exactly this.
+        await splitter.release(part);
+      }
+    } finally {
+      await splitter.dispose();
+    }
+
+    await this.backfillPartCount(session.id, partCount);
+
+    return partCount;
+  }
+
+  /**
+   * The fallback for a recording the paced splitter cannot read: cut every
+   * part up front, then upload them. Needs as much free disk as the recording
+   * itself, which is why it is not the normal path.
+   */
+  private async uploadUnpacedParts(
+    session: SessionWithChannel,
+    chatId: string,
+    options: {
+      filePath: string;
+      tempDir: string;
+      segmentSec: number;
+      reusableParts: Map<number, TelegramUploadPart>;
+      logPrefix: string;
+    },
+  ) {
+    const { filePath, tempDir, segmentSec, reusableParts, logPrefix } = options;
+    const partPaths = await this.splitUnpaced(filePath, tempDir, segmentSec);
+
+    this.logger.log(`${logPrefix} split into ${partPaths.length} part(s).`);
+
+    let startOffsetSec = 0;
+
+    for (let index = 0; index < partPaths.length; index += 1) {
+      const partPath = partPaths[index];
+      const durationSec = await this.uploadOnePart(session, chatId, {
+        index: index + 1,
+        path: partPath,
+        sizeBytes: statSync(partPath).size,
+        startOffsetSec,
+        durationSec: null,
+        expectedParts: partPaths.length,
+        existingPart: reusableParts.get(index + 1) ?? null,
+        logPrefix,
+      });
+
+      startOffsetSec += durationSec ?? 0;
+
+      try {
+        rmSync(partPath, { force: true });
+      } catch {
+        // The caller sweeps the whole temp dir anyway.
+      }
+    }
+
+    await this.backfillPartCount(session.id, partPaths.length);
+
+    return partPaths.length;
+  }
+
+  /**
+   * Upload one piece of a recording and record where it sits on the timeline.
+   * Returns the piece's duration, which is what the caller needs to know where
+   * the next one starts.
+   */
+  private async uploadOnePart(
+    session: SessionWithChannel,
+    chatId: string,
+    part: {
+      index: number;
+      path: string;
+      sizeBytes: number;
+      startOffsetSec: number;
+      /** From ffmpeg's manifest; null means "probe the file for it". */
+      durationSec: number | null;
+      expectedParts: number;
+      existingPart: TelegramUploadPart | null;
+      logPrefix: string;
+    },
+  ) {
+    const { index, path, existingPart, logPrefix } = part;
+    // The estimate can come up one short of what the keyframes give: never let
+    // that print "part 9 of 8" in a caption or push the progress past full.
+    const totalParts = Math.max(part.expectedParts, index);
+    const progressBase = (index - 1) / totalParts;
+
+    if (existingPart) {
+      this.logger.log(`${logPrefix} part ${index}/${totalParts} is already in Telegram, skipping.`);
+      this.reportUploadProgress(session.id, Math.floor((index / totalParts) * 100));
+
+      return existingPart.durationSec;
+    }
+
+    // Per-part duration keeps chat replay aligned when the web player switches
+    // between parts; width/height make Telegram render the upload as a
+    // playable video instead of a generic document.
+    let meta: VideoMeta | null = null;
+    try {
+      meta = await this.probeVideoMeta(path);
+    } catch {
+      // Metadata is best-effort; the upload itself must not fail.
+    }
+
+    const durationSec = part.durationSec ?? (meta ? Math.round(meta.durationSec) : null);
+    const caption = this.buildCaption(session, index, totalParts);
+
+    // Re-check between parts too: a multi-part upload runs for a long time and
+    // a viewer may have started watching meanwhile.
+    await this.yieldToPlayback();
+
+    this.logger.log(
+      `${logPrefix} uploading part ${index}/${totalParts} (${Math.round(
+        part.sizeBytes / 1024 / 1024,
+      )} MB)...`,
+    );
+
+    const sent = await this.sendVideo(path, chatId, caption, meta, (fraction) => {
+      this.reportUploadProgress(
+        session.id,
+        Math.floor((progressBase + fraction / totalParts) * 100),
+      );
+    });
+
+    await this.prisma.telegramUploadPart.create({
+      data: {
+        streamSessionId: session.id,
+        partIndex: index,
+        partCount: totalParts,
+        chatId,
+        messageId: sent.messageId,
+        fileId: sent.fileId,
+        fileSizeBytes: String(part.sizeBytes),
+        startOffsetSec: part.startOffsetSec,
+        durationSec,
+      },
+    });
+
+    return durationSec;
+  }
+
+  /**
+   * Replace the estimate the parts were created with by the count that came
+   * out of the split: the player reads it to know how many parts an archive
+   * has, and one part too many is a hole in the timeline.
+   */
+  private async backfillPartCount(sessionId: string, partCount: number) {
+    if (partCount <= 0) {
+      return;
+    }
+
+    await this.prisma.telegramUploadPart.updateMany({
+      where: { streamSessionId: sessionId },
+      data: { partCount },
+    });
   }
 
   private async sendVideo(
@@ -1137,13 +1330,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return lines.join("\n").slice(0, 1024);
   }
 
-  private async splitIntoParts(filePath: string, tempDir: string, maxPartBytes: number) {
-    mkdirSync(tempDir, { recursive: true });
-
+  /**
+   * How long one part of this recording may be, from its own bitrate, and how
+   * many parts that is expected to make.
+   *
+   * Cuts land on the first keyframe past each boundary and can overshoot,
+   * hence the margin below the hard limit — and hence "expected": the count is
+   * good enough for captions and the progress bar, and the real one replaces
+   * it once the split is done.
+   */
+  private async planSplit(filePath: string, fileSize: number, maxPartBytes: number) {
     const { durationSec } = await this.probeVideoMeta(filePath);
-    const fileSize = statSync(filePath).size;
     const bytesPerSec = fileSize / Math.max(durationSec, 1);
     const segmentSec = Math.max(60, Math.floor((maxPartBytes * 0.95) / bytesPerSec));
+
+    return { segmentSec, expectedParts: Math.max(1, Math.ceil(durationSec / segmentSec)) };
+  }
+
+  /** Free space on the data disk, or null when it cannot be measured. */
+  private async freeDiskBytes() {
+    try {
+      const stats = await statfs(resolve(process.env.DATA_DIR ?? "./data"));
+
+      return Number(stats.bsize) * Number(stats.bavail);
+    } catch {
+      return null;
+    }
+  }
+
+  private async splitUnpaced(filePath: string, tempDir: string, segmentSec: number) {
+    rmSync(tempDir, { recursive: true, force: true });
+    mkdirSync(tempDir, { recursive: true });
 
     const pattern = join(tempDir, `${basename(filePath, ".mp4")}_part%03d.mp4`);
 

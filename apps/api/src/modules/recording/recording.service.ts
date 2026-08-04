@@ -25,6 +25,12 @@ import {
   resolveSessionPlaybackState,
   type MediaTier,
 } from "./playback.utils";
+import {
+  joinCaptureChunks,
+  lastChunkModifiedAt,
+  listCaptureChunks,
+  removeChunkDir,
+} from "./chunk-join";
 import { parseSegmentManifest } from "./segment-manifest.utils";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
@@ -45,9 +51,9 @@ type ActiveRecording = {
   // so flipping the channel switch mid-recording cannot change the outcome.
   extractAudio: boolean;
   stopRequested: boolean;
-  // Set for a segmented capture: ffmpeg closes a playable .mp4 every
-  // RECORDING_SEGMENT_MINUTES and there is no single output file.
-  segments: SegmentedCapture | null;
+  // Set when the capture is written in pieces instead of one growing file.
+  // What happens to those pieces is ChunkedCapture.live.
+  chunks: ChunkedCapture | null;
   // Same instant chat capture is anchored to, so metadata points and messages
   // land on one timeline.
   captureAnchor: Date;
@@ -56,27 +62,45 @@ type ActiveRecording = {
   lastMeta: { title: string | null; categoryName: string | null; atSec: number } | null;
 };
 
-type SegmentedCapture = {
-  // Directory holding the chunks that have not been shipped yet.
+type ChunkedCapture = {
+  // Directory holding the pieces.
   dir: string;
-  // ffmpeg's own manifest: it appends "name,start,end" the moment a chunk is
+  // ffmpeg's own manifest: it appends "name,start,end" the moment a piece is
   // closed, which is a far more reliable "this file is finished" signal than
   // watching the directory and guessing.
   listPath: string;
   ffmpegProcess: ChildProcess;
+  /**
+   * What the pieces are for.
+   *
+   * false (the default): MPEG-TS pieces of one continuous capture, joined
+   * back into a single .mp4 the moment the broadcast ends. The recording
+   * itself is never cut — a TS piece ends exactly where the next one starts,
+   * so the join reproduces the stream the recorder pulled, byte for byte.
+   * The pieces exist only so the join can free each one as it consumes it,
+   * instead of needing room for the whole broadcast twice over.
+   *
+   * true (RECORDING_LIVE_SEGMENTS=1): finished .mp4 chunks, uploaded to
+   * Telegram and moved to the archive while the broadcast is still running.
+   * Cheapest possible disk use, but then the recording IS a row of separate
+   * files: the player has to hop from one to the next every chunk, and that
+   * hop is a break in the middle of the broadcast. Kept as a fallback for a
+   * disk too small to hold a whole stream.
+   */
+  live: boolean;
   pollTimer: NodeJS.Timeout | null;
   // Chunk indexes already written to the database, so a re-read of the
-  // manifest cannot create duplicates.
+  // manifest cannot create duplicates. Live mode only.
   seen: Set<number>;
   totalBytes: number;
   totalDurationSec: number;
 };
 
-// How long one chunk of a segmented capture covers. Fifteen minutes is a
-// compromise: short enough that a broadcast dying mid-chunk loses little and
-// that the disk never holds much, long enough that a 6-hour stream is ~24
-// Telegram messages rather than hundreds.
-const DEFAULT_SEGMENT_MINUTES = 15;
+// How long one piece of a chunked capture covers. Fifteen minutes is a
+// compromise: small enough that the join frees space in useful steps and that
+// an interrupted capture loses at most the open piece, large enough that a
+// six-hour broadcast is a couple of dozen files rather than hundreds.
+const DEFAULT_CHUNK_MINUTES = 15;
 
 // ffmpeg flushes the manifest as soon as a chunk closes, so polling it is
 // cheap and the delay before a chunk starts uploading is bounded by this.
@@ -139,6 +163,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     await this.markStaleRecordingsAsStopped();
     await this.checkRecordingDependencies();
     void this.recoverInterruptedRemuxes();
+    void this.recoverInterruptedSegmentedSessions();
     void this.backfillRestartFragmentAnchors();
     await this.syncAllChannels();
 
@@ -416,18 +441,26 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     });
     const channelUrl = this.platformsService.channelUrl(channel.platform, channel.twitchLogin);
 
-    // Two capture shapes, chosen by RECORDING_SEGMENT_MINUTES.
+    // Three capture shapes; all of them produce one continuous recording
+    // except the last, which is opt-in.
     //
-    // Segmented (the default): streamlink writes to stdout and ffmpeg turns the
-    // stream into finished .mp4 chunks as it goes, so nothing large ever
-    // accumulates and each chunk can leave for Telegram and the archive while
-    // the broadcast is still running.
+    // Chunked TS (the default): streamlink writes to stdout and ffmpeg cuts
+    // the stream into MPEG-TS pieces. Nothing is cut in the recording — the
+    // pieces are joined back into one .mp4 after the broadcast, and the join
+    // frees each piece as it reads it, so the disk never has to hold the
+    // broadcast twice.
     //
-    // Classic (0, or an audio-only capture): streamlink writes the whole
-    // MPEG-TS to disk and it is remuxed once, at the end. Audio-only stays here
-    // because its output is a single .m4a for the userscript to overlay on the
-    // VOD — chopping that into chunks would make it useless.
-    const useSegments = this.segmentMinutes() > 0 && !channel.audioOnly;
+    // Classic (RECORDING_SEGMENT_MINUTES=0, or an audio-only capture):
+    // streamlink writes the whole MPEG-TS to disk and it is remuxed once, at
+    // the end. Needs room for the .ts and the .mp4 at the same time. Audio-only
+    // stays here: its output is a single .m4a for the userscript to overlay on
+    // the VOD, and there is nothing to gain from cutting it up first.
+    //
+    // Live segments (RECORDING_LIVE_SEGMENTS=1): the old shape, kept as the
+    // fallback for a disk that cannot hold a whole broadcast — see
+    // ChunkedCapture.live for what it costs.
+    const useChunks = this.chunkMinutes() > 0 && !channel.audioOnly;
+    const liveChunks = useChunks && this.liveSegmentsEnabled();
 
     const streamlinkProcess = spawn(
       streamlinkCommand.command,
@@ -440,7 +473,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         "--loglevel",
         "info",
         "-o",
-        useSegments ? "-" : tsPath,
+        useChunks ? "-" : tsPath,
         channelUrl,
         quality,
       ],
@@ -459,15 +492,19 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     // the same timeline, so they must be measured from the same instant.
     const captureAnchor = new Date();
 
-    const segments = useSegments
-      ? this.startSegmentedCapture(
+    const chunks = useChunks
+      ? this.startChunkedCapture(
           streamlinkProcess,
-          outputPath.replace(/\.mp4$/i, ""),
+          this.buildChunkDir(outputPath),
           `[recording/${channel.twitchLogin}/${session.id}]`,
+          liveChunks,
         )
       : null;
 
-    if (segments) {
+    // Only live segments make the chunks the recording. A joined capture keeps
+    // pointing at the .mp4 it will become, so the panel, the archive move and
+    // the Telegram offload all see the shape they saw before chunking existed.
+    if (chunks?.live) {
       await this.prisma.streamSession.update({
         where: { id: session.id },
         data: {
@@ -486,7 +523,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       remuxProcess: null,
       tsPath,
       outputPath,
-      segments,
+      chunks,
       audioOnly: channel.audioOnly,
       extractAudio: channel.recordAudio,
       stopRequested: false,
@@ -753,6 +790,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     for (const segment of session.segments) {
       if (segment.localPath) fileCandidates.add(resolve(segment.localPath));
     }
+    // The pieces of a capture whose join never finished: a folder beside the
+    // .mp4, invisible to every path stored in the database.
+    for (const mediaPath of [session.playbackPath, session.recordingPath]) {
+      if (mediaPath) removeChunkDir(this.buildChunkDir(resolve(mediaPath)));
+    }
     // The session's folder on the archive tier goes first: it holds the media
     // above plus sidecars the list knows nothing about, and it is the one thing
     // here that nothing else can find later. Once the database row is gone no
@@ -948,11 +990,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
     });
     // Only when streamlink writes the file itself: then stdout carries its
-    // progress text. In a segmented capture stdout IS the video, piped into
+    // progress text. In a chunked capture stdout IS the video, piped into
     // ffmpeg — stringifying it put megabytes of H.264 a second into the
     // container log, rotated every useful line out of it within minutes and
     // took the API down with it.
-    if (!activeRecording.segments) {
+    if (!activeRecording.chunks) {
       activeRecording.streamlinkProcess.stdout?.on("data", (chunk) => {
         this.logger.debug(`${logPrefix} streamlink: ${chunk.toString().trim()}`);
       });
@@ -968,9 +1010,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.kickChatService.stopCapture(channel.id);
       this.twitchEventsService.stopCapture(channel.id);
 
-      // A segmented capture has no single output file: its totals are the sum
-      // of the chunks ffmpeg closed, accumulated as they were registered.
-      const capture = activeRecording.segments;
+      // Only a live-segmented capture has no single output file: its totals
+      // are the sum of the chunks ffmpeg closed, accumulated as they were
+      // registered. A joined capture is a single .mp4 by the time finalize
+      // runs, so from here on it is indistinguishable from a classic one.
+      const capture = activeRecording.chunks?.live ? activeRecording.chunks : null;
       const fileExists = capture ? capture.seen.size > 0 : existsSync(activeRecording.outputPath);
       const fileSizeBytes = capture
         ? capture.totalBytes
@@ -990,10 +1034,27 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       let errorMessage: string | null =
         status === "error" ? "Recording process exited unexpectedly." : null;
 
+      // A join that failed leaves the pieces behind, and they are the only
+      // copy of the broadcast. The session keeps pointing at the .mp4 it was
+      // going to become, because that path is how recoverInterruptedRemuxes
+      // finds the folder to retry the join from — clearing it would strand
+      // gigabytes of recording nothing refers to.
+      const leftoverChunks =
+        activeRecording.chunks && !activeRecording.chunks.live
+          ? listCaptureChunks(activeRecording.chunks.dir).length
+          : 0;
+
+      if (leftoverChunks > 0) {
+        errorMessage = `Joining the capture failed; ${leftoverChunks} piece(s) are kept on disk and the join is retried on the next start.`;
+      }
+
       if (fileSizeBytes === 0) {
         finalStatus = "error";
-        errorMessage =
-          "Recording produced no data. Check that streamlink and ffmpeg are installed and that the channel is live.";
+
+        if (leftoverChunks === 0) {
+          errorMessage =
+            "Recording produced no data. Check that streamlink and ffmpeg are installed and that the channel is live.";
+        }
 
         if (fileExists && !capture) {
           try {
@@ -1015,10 +1076,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // The standalone audio track is extracted before the session flips to
       // completed so the Telegram offloader picks it up together with the
       // video. An audio-only capture already IS the audio track.
-      // The standalone .m4a is extracted from one finished file, which a
-      // segmented capture does not have. Audio-only channels — the ones the
-      // track exists for — record through the classic path, so nothing that
-      // needs it loses it.
+      // The standalone .m4a is extracted from one finished file, which only a
+      // live-segmented capture does not have. A joined capture has one again,
+      // so the track is back for ordinary video channels too.
       const audio =
         finalStatus === "completed" && fileSizeBytes > 0 && !capture
           ? activeRecording.audioOnly
@@ -1045,7 +1105,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           isLive: false,
           fileSizeBytes: String(fileSizeBytes),
           errorMessage,
-          ...(fileSizeBytes === 0
+          ...(fileSizeBytes === 0 && leftoverChunks === 0
             ? { recordingPath: null, playbackPath: null }
             : {}),
           ...(audio
@@ -1104,9 +1164,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     };
 
-    const capture = activeRecording.segments;
+    const capture = activeRecording.chunks;
 
-    if (capture) {
+    if (capture?.live) {
       // Poll ffmpeg's manifest while the broadcast runs so each closed chunk
       // starts its journey to Telegram and the archive immediately.
       capture.pollTimer = setInterval(() => {
@@ -1129,13 +1189,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      // Closing the pipe makes ffmpeg flush and close the chunk it is on; the
+      // Closing the pipe makes ffmpeg flush and close the piece it is on; the
       // session is only finished once that has happened, otherwise the last
       // minutes of the broadcast would be dropped.
       capture.ffmpegProcess.stdin?.end();
 
       capture.ffmpegProcess.once("exit", (ffmpegCode) => {
-        this.logger.log(`${logPrefix} ffmpeg segmenter exited with code ${String(ffmpegCode)}`);
+        this.logger.log(`${logPrefix} ffmpeg chunker exited with code ${String(ffmpegCode)}`);
 
         if (capture.pollTimer) {
           clearInterval(capture.pollTimer);
@@ -1143,8 +1203,22 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         }
 
         void (async () => {
-          await this.collectClosedSegments(session.id, capture, logPrefix);
-          await finalize(capture.seen.size > 0 ? "completed" : "error");
+          if (capture.live) {
+            await this.collectClosedSegments(session.id, capture, logPrefix);
+            await finalize(capture.seen.size > 0 ? "completed" : "error");
+            return;
+          }
+
+          // The broadcast is over, so this is where the cutting is undone:
+          // the pieces become the one continuous .mp4 the player, Telegram
+          // and the archive all get to see.
+          const joined = await this.joinCaptureChunks(
+            capture.dir,
+            activeRecording.outputPath,
+            logPrefix,
+          );
+
+          await finalize(joined ? "completed" : "error");
         })();
       });
     });
@@ -1226,46 +1300,69 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Chunk length in minutes, or 0 when segmented capture is switched off and
-   * the classic "one .ts, then one .mp4" path is used instead.
-   *
-   * Kept as a switch rather than a hard replacement: this is the code path a
-   * lost broadcast costs the most, so being able to fall back to the shape
-   * that ran for months — by editing .env, with no deploy — is worth the
-   * second path existing.
+   * Length of one piece of a chunked capture, in minutes. 0 switches chunking
+   * off entirely and streamlink writes one .ts that is remuxed at the end —
+   * the shape this recorder ran in for months, kept because it needs no pipe
+   * and is the one an operator can fall back to by editing .env.
    */
-  private segmentMinutes(): number {
+  private chunkMinutes(): number {
     const raw = Number(process.env.RECORDING_SEGMENT_MINUTES);
 
     if (Number.isFinite(raw) && raw >= 0) {
       return Math.floor(raw);
     }
 
-    return DEFAULT_SEGMENT_MINUTES;
+    return DEFAULT_CHUNK_MINUTES;
   }
 
   /**
-   * Segmented capture: streamlink pulls the stream and pipes it into ffmpeg,
-   * which writes a finished, playable .mp4 every `segmentMinutes`.
+   * Ship each chunk during the broadcast instead of joining them after it.
    *
-   * The intermediate .ts is gone entirely, and so is the moment where the disk
-   * had to hold the .ts, the remuxed .mp4 and its upload chunks at once. What
-   * remains on disk is at most one open chunk per recording, because every
-   * closed chunk is shipped and deleted while the broadcast is still running.
+   * Off by default: shipping during the broadcast means the recording stays a
+   * row of separate .mp4 files, and every boundary between them is a break
+   * the viewer hears in the middle of the stream. Worth turning on only when
+   * the disk cannot hold a whole broadcast at once.
+   */
+  private liveSegmentsEnabled(): boolean {
+    const raw = (process.env.RECORDING_LIVE_SEGMENTS ?? "").trim().toLowerCase();
+
+    return raw === "1" || raw === "true" || raw === "yes";
+  }
+
+  /** Where the pieces of one capture live: a folder beside the .mp4 they become. */
+  private buildChunkDir(outputPath: string) {
+    return outputPath.replace(/\.mp4$/i, "");
+  }
+
+  /**
+   * Chunked capture: streamlink pulls the stream and pipes it into ffmpeg,
+   * which closes a piece every `chunkMinutes`.
+   *
+   * Joined mode (the default) writes MPEG-TS pieces. TS is what streamlink
+   * hands over anyway, so a piece is a plain slice of the stream: it carries
+   * no per-file container of its own, its timestamps keep running across the
+   * cut, and reading the pieces back in order is the same bytes as reading the
+   * uncut capture. That is what makes the join afterwards lossless — an .mp4
+   * piece would have been re-based to zero and re-primed, and joining those is
+   * exactly where the audible click at every boundary came from.
+   *
+   * Live mode writes finished .mp4 chunks instead, because there each chunk
+   * has to stand on its own in a Telegram message.
    *
    * The pipe is the one thing the classic path deliberately avoided (EPIPE on
    * Windows); the recorder runs on Linux in a container, and the alternative —
    * letting ffmpeg pull the HLS itself — would throw away streamlink's ad and
    * discontinuity handling, which is the reason it is here at all.
    */
-  private startSegmentedCapture(
+  private startChunkedCapture(
     streamlinkProcess: ChildProcess,
-    segmentDir: string,
+    chunkDir: string,
     logPrefix: string,
-  ): SegmentedCapture {
-    mkdirSync(segmentDir, { recursive: true });
+    live: boolean,
+  ): ChunkedCapture {
+    mkdirSync(chunkDir, { recursive: true });
 
-    const listPath = join(segmentDir, "segments.csv");
+    const listPath = join(chunkDir, "segments.csv");
     const ffmpegCommand = this.resolveFfmpegCommand();
 
     const ffmpegProcess = spawn(
@@ -1282,18 +1379,23 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         "-f",
         "segment",
         "-segment_time",
-        String(this.segmentMinutes() * 60),
+        String(this.chunkMinutes() * 60),
         "-segment_format",
-        "mp4",
-        // Without faststart the moov atom lands at the end of each chunk and
-        // the player has to fetch the tail before it can start — which over a
-        // Telegram or network-mount read is exactly the slow path.
-        "-segment_format_options",
-        "movflags=+faststart",
-        // Each chunk starts at zero, so it is a normal standalone file rather
-        // than one that claims to begin two hours in.
-        "-reset_timestamps",
-        "1",
+        live ? "mp4" : "mpegts",
+        ...(live
+          ? [
+              // Without faststart the moov atom lands at the end of each chunk
+              // and the player has to fetch the tail before it can start —
+              // which over a Telegram or network-mount read is exactly the
+              // slow path.
+              "-segment_format_options",
+              "movflags=+faststart",
+              // Each chunk starts at zero, so it is a normal standalone file
+              // rather than one that claims to begin two hours in.
+              "-reset_timestamps",
+              "1",
+            ]
+          : []),
         // "name,start,end" appended the instant a chunk closes: both the
         // completion signal and the duration, without probing the file.
         "-segment_list",
@@ -1302,7 +1404,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         "csv",
         "-segment_list_flags",
         "+live",
-        join(segmentDir, "part%04d.mp4"),
+        join(chunkDir, live ? "part%04d.mp4" : "part%04d.ts"),
       ],
       { stdio: ["pipe", "ignore", "pipe"] },
     );
@@ -1312,20 +1414,21 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     });
 
     ffmpegProcess.on("error", (error) => {
-      this.logger.warn(`${logPrefix} ffmpeg segmenter failed to start: ${error.message}`);
+      this.logger.warn(`${logPrefix} ffmpeg chunker failed to start: ${error.message}`);
     });
 
     if (streamlinkProcess.stdout) {
       streamlinkProcess.stdout.pipe(ffmpegProcess.stdin!);
-      // A dead segmenter must not turn into an unhandled EPIPE on the puller.
+      // A dead chunker must not turn into an unhandled EPIPE on the puller.
       streamlinkProcess.stdout.on("error", () => undefined);
       ffmpegProcess.stdin?.on("error", () => undefined);
     }
 
     return {
-      dir: segmentDir,
+      dir: chunkDir,
       listPath,
       ffmpegProcess,
+      live,
       pollTimer: null,
       seen: new Set<number>(),
       totalBytes: 0,
@@ -1334,13 +1437,41 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Read ffmpeg's manifest and register every chunk it has finished since the
-   * last pass. Only whole lines are trusted: the manifest is appended to while
-   * we read it, so the final line may still be half-written.
+   * Undo the chunking: hand the pieces to the joiner and report whether the
+   * recording came out of it as one file.
+   */
+  private async joinCaptureChunks(chunkDir: string, outputPath: string, logPrefix: string) {
+    const { ok } = await joinCaptureChunks({
+      chunkDir,
+      outputPath,
+      ffmpeg: this.resolveFfmpegCommand(),
+      freeBytes: () => this.freeDiskBytes(),
+      log: (message) => this.logger.log(`${logPrefix} ${message}`),
+    });
+
+    return ok;
+  }
+
+  /** Free space on the data disk, or null when it cannot be measured. */
+  private async freeDiskBytes() {
+    try {
+      const stats = await statfs(resolve(process.env.DATA_DIR ?? "./data"));
+
+      return Number(stats.bsize) * Number(stats.bavail);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Live segments only: read ffmpeg's manifest and register every chunk it has
+   * finished since the last pass, so the uploader can take it while the
+   * broadcast runs. Only whole lines are trusted — the manifest is appended to
+   * while we read it, so the final line may still be half-written.
    */
   private async collectClosedSegments(
     sessionId: string,
-    capture: SegmentedCapture,
+    capture: ChunkedCapture,
     logPrefix: string,
   ) {
     let raw: string;
@@ -1457,11 +1588,20 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * A restart that lands during the post-capture remux (or before it started)
-   * kills ffmpeg halfway: the session is marked as error, the .mp4 on disk is
-   * unplayable (no moov index), but the source .ts survives — finalize, which
-   * would have deleted it, never ran. Re-run the remux for those sessions and
-   * promote them back to completed so playback and the Telegram offload work.
+   * A restart that lands after the capture but before its recording is one
+   * finished file kills the post-processing halfway: the session is marked as
+   * error and the .mp4 on disk is unplayable or missing, but the source the
+   * recorder was working from survives, because finalize — which would have
+   * deleted it — never ran. Two shapes of leftover, both recoverable:
+   *
+   * - a classic capture leaves the whole .ts next to the .mp4;
+   * - a chunked capture leaves the folder of TS pieces the join never
+   *   finished (or never started).
+   *
+   * Redo that last step for those sessions and promote them back to completed
+   * so playback and the Telegram offload work. This is the common case on this
+   * server: a deploy restarts the API, and every capture running at that
+   * moment lands here.
    */
   private async recoverInterruptedRemuxes() {
     if (!this.dependenciesReady) {
@@ -1479,8 +1619,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     for (const session of candidates) {
       const outputPath = resolve(session.recordingPath!);
       const tsPath = outputPath.replace(/\.(mp4|m4a)$/i, ".ts");
+      const chunkDir = this.buildChunkDir(outputPath);
+      const leftoverTs = existsSync(tsPath) && statSync(tsPath).size > 0;
+      const leftoverChunks = !session.audioOnly && listCaptureChunks(chunkDir).length > 0;
 
-      if (!existsSync(tsPath) || statSync(tsPath).size === 0) {
+      if (!leftoverTs && !leftoverChunks) {
         continue;
       }
 
@@ -1490,17 +1633,25 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
       const logPrefix = `[${session.channel.twitchLogin}/${session.id}]`;
       this.logger.log(
-        `${logPrefix} found a leftover .ts from an interrupted remux; recovering the recording.`,
+        leftoverTs
+          ? `${logPrefix} found a leftover .ts from an interrupted remux; recovering the recording.`
+          : `${logPrefix} found the pieces of an interrupted capture; joining them into the recording.`,
       );
 
-      // The last write to the .ts IS the real capture end. Grab it before the
-      // remux touches anything: the userscript anchors the track on the VOD
+      // The last write to the source IS the real capture end. Grab it before
+      // anything is touched: the userscript anchors the track on the VOD
       // timeline as captureEndedAt - durationSec, and without it a recovered
       // restart fragment lands on the wrong part of the stream.
-      const captureEndedAt = statSync(tsPath).mtime;
+      const captureEndedAt = leftoverTs
+        ? statSync(tsPath).mtime
+        : lastChunkModifiedAt(chunkDir) ?? new Date();
 
       try {
-        await this.runFfmpegRemux(tsPath, outputPath, session.audioOnly);
+        if (leftoverTs) {
+          await this.runFfmpegRemux(tsPath, outputPath, session.audioOnly);
+        } else if (!(await this.joinCaptureChunks(chunkDir, outputPath, logPrefix))) {
+          throw new Error("Joining the leftover pieces failed.");
+        }
 
         const fileSizeBytes = existsSync(outputPath) ? statSync(outputPath).size : 0;
 
@@ -1508,10 +1659,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
           throw new Error("Recovered .mp4 is empty.");
         }
 
-        try {
-          unlinkSync(tsPath);
-        } catch {
-          // Best-effort cleanup; ignore filesystem errors.
+        if (leftoverTs) {
+          try {
+            unlinkSync(tsPath);
+          } catch {
+            // Best-effort cleanup; ignore filesystem errors.
+          }
         }
 
         const audio = session.audioOnly
@@ -1553,6 +1706,76 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         this.logger.warn(
           `${logPrefix} recovery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  /**
+   * A live-segmented capture cut short by a restart has nothing to redo: its
+   * closed chunks are whole files, already in Telegram and on the archive
+   * drive. Only the session row is wrong — marked error, with no duration and
+   * no size, which is a 404 on the public page for a broadcast whose every
+   * chunk is sitting there intact.
+   *
+   * Add up what the chunks say and put the session back together. Nothing here
+   * touches a file; the totals are the sum of the pieces that survived, so a
+   * capture killed at hour five keeps the four and a half hours it did record.
+   */
+  private async recoverInterruptedSegmentedSessions() {
+    const candidates = await this.prisma.streamSession.findMany({
+      where: { status: "error", segmented: true, segments: { some: {} } },
+      include: { channel: true, segments: true },
+    });
+
+    for (const session of candidates) {
+      if (this.activeRecordings.has(session.channelId)) {
+        continue;
+      }
+
+      const logPrefix = `[${session.channel.twitchLogin}/${session.id}]`;
+      const durationSec = session.segments.reduce(
+        (sum, segment) => sum + (segment.durationSec ?? 0),
+        0,
+      );
+      const sizeBytes = session.segments.reduce(
+        (sum, segment) => sum + BigInt(segment.sizeBytes ?? "0"),
+        0n,
+      );
+
+      try {
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: {
+            status: "completed",
+            videoStatus: "ready",
+            replayStatus: "ready",
+            errorMessage: null,
+            durationSec,
+            fileSizeBytes: String(sizeBytes),
+            // endedAt was stamped by markStaleRecordingsAsStopped at the boot
+            // that followed the kill — within seconds of the real capture end,
+            // and the only anchor this shape leaves behind.
+            ...(session.captureEndedAt ? {} : { captureEndedAt: session.endedAt }),
+          },
+        });
+
+        this.logger.log(
+          `${logPrefix} interrupted segmented capture restored from its ${session.segments.length} chunk(s) (${Math.round(
+            Number(sizeBytes) / 1024 / 1024,
+          )} MB, ${Math.round(durationSec / 60)} min).`,
+        );
+        this.emitRealtime("recording:stopped", {
+          channelId: session.channelId,
+          sessionId: session.id,
+          status: "completed",
+        });
+        this.telegramService.kick();
+      } catch (error) {
+        this.logger.warn(
+          `${logPrefix} restoring the interrupted segmented capture failed: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
