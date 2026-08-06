@@ -476,3 +476,26 @@ export function CloudIcon(props: IconProps) {
     </svg>
   );
 }
+
+/** Spoiler-free mode: on = an eye with a stroke through it. */
+export function EyeIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" />
+      <circle cx="12" cy="12" r="2.8" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon(props: IconProps) {
+  const p = withDefaults(props);
+  return (
+    <svg {...base(p)}>
+      <path d="M10.6 6.1A9.9 9.9 0 0 1 12 5.5c6.5 0 10 6.5 10 6.5a17.6 17.6 0 0 1-3.2 4" />
+      <path d="M6.5 7.6A17.4 17.4 0 0 0 2 12s3.5 6.5 10 6.5a10 10 0 0 0 4-.8" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      <line x1="3" y1="3" x2="21" y2="21" />
+    </svg>
+  );
+}

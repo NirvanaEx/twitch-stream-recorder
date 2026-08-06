@@ -4181,3 +4181,170 @@ textarea {
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* ---------- Loading skeletons ---------- */
+
+/* The shimmer is one moving highlight over a flat block. `background-position`
+   animates on the compositor, so a screen full of these costs nothing — a
+   version built on animating `opacity` per element made the card grid drop
+   frames on the phone. */
+.skeleton {
+  display: block;
+  background-color: var(--panel-2);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.05) 45%,
+    rgba(255, 255, 255, 0.05) 55%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  border-radius: var(--radius-sm);
+  animation: skeleton-sweep 1.5s ease-in-out infinite;
+}
+
+.skeleton--text {
+  display: block;
+  margin: 3px 0;
+}
+
+/* Fills the 16:9 slot the player will take, so nothing shifts when it mounts. */
+.skeleton--stage {
+  aspect-ratio: 16 / 9;
+  height: auto;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    background-position: 160% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
+/* Respect the system setting: a shimmer is decoration, and for people who
+   asked for less motion a plain block says the same thing. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.stream-card--skeleton {
+  pointer-events: none;
+}
+
+.stream-card--skeleton:hover {
+  border-color: var(--border);
+  transform: none;
+}
+
+.chat-message--skeleton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skeleton-table__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 16px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skeleton-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.skeleton-stats__item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+/* Refetch in flight (next page, new search) — the old cards stay put and fade
+   instead of being replaced by skeletons. */
+.card-grid.is-refreshing {
+  opacity: 0.5;
+  transition: opacity 150ms ease;
+  pointer-events: none;
+}
+
+/* ---------- Spoiler-free mode ---------- */
+
+/* The fog: a fixed strip at the right end of the timeline standing for
+   everything not yet watched. Not a remainder — its width is constant, so it
+   cannot be read as "this much is left". */
+.vp__progress-fog {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 4px;
+  border-radius: 2px;
+  pointer-events: none;
+  transition: height 0.15s;
+  background: repeating-linear-gradient(
+      115deg,
+      rgba(255, 255, 255, 0.16) 0 3px,
+      rgba(255, 255, 255, 0.05) 3px 7px
+    ),
+    linear-gradient(to right, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
+  /* Softens into the clear zone instead of butting against it with a line
+     that would itself mark "you are exactly here". */
+  mask-image: linear-gradient(to right, transparent, #000 22%, #000 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 22%, #000 100%);
+}
+
+.vp__progress:hover .vp__progress-fog {
+  height: 6px;
+}
+
+/* Hovering the fog: no frame, just how far ahead the jump would be. */
+.vp__scrub-preview--fog .vp__scrub-time {
+  background: rgba(20, 24, 32, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.spoiler-toggle.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A value the mode is deliberately not showing. Keeps the row from collapsing
+   and reads as "withheld" rather than "missing". */
+.spoiler-hidden {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* The way out of the panel, at the foot of the sidebar. Bordered rather than
+   flush so it reads as leaving rather than as one more section. */
+.nav-link--out {
+  border: 1px solid var(--border);
+  justify-content: flex-start;
+}
+
+.nav-link--out span {
+  flex: 1;
+}
+
+.nav-link--out:hover {
+  border-color: var(--border-strong);
+}

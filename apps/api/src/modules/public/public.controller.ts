@@ -20,6 +20,7 @@ import {
   resolveCaptureAnchorMs,
 } from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
+import { buildReplayMessage } from "../chat/replay-message.utils";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { StreamEventsService } from "../stream-events/stream-events.service";
@@ -628,7 +629,17 @@ export class PublicStreamsController {
     };
   }
 
+  /**
+   * The recorded chat, in one response.
+   *
+   * Cacheable because it cannot change: the endpoint refuses anything whose
+   * video is not `ready`, and a broadcast that has finished recording gains no
+   * further messages. This is the largest response the app serves by a wide
+   * margin, so re-opening a recording — or reloading the page mid-watch —
+   * should not pull it down a second time.
+   */
   @Get(":id/chat")
+  @Header("Cache-Control", "private, max-age=3600")
   async getChat(@Param("id") id: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
@@ -653,24 +664,7 @@ export class PublicStreamsController {
     const anchorMs = resolveCaptureAnchorMs(messages);
 
     return {
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorLogin: message.authorLogin,
-        authorDisplayName: message.authorDisplayName,
-        authorColor: message.authorColor,
-        textRaw: message.textRaw,
-        badges: parseStoredJsonString(message.badgesJson),
-        roles: extractChatRoles(message.badgesJson),
-        emotes: parseStoredJsonString(message.emotesJson),
-        inlineEmotes: extractInlineEmotes(message.emotesJson),
-        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
-        relativeTimeSec: message.relativeTimeSec,
-        messageTimestamp: message.messageTimestamp.toISOString(),
-        isDeleted: message.isDeleted,
-        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
-        banDurationSec: message.banDurationSec,
-        isFirstMessage: message.isFirstMessage,
-      })),
+      messages: messages.map((message) => buildReplayMessage(message, anchorMs)),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
   }

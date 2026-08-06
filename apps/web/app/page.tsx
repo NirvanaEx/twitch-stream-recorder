@@ -7,6 +7,9 @@ import { apiGet } from "./lib/api";
 import { formatPeriod } from "./lib/media";
 import { useAuth } from "./lib/auth-context";
 import { PlatformTag } from "./components/PlatformTag";
+import { StreamCardGridSkeleton } from "./components/Skeleton";
+import { SpoilerToggle } from "./components/SpoilerToggle";
+import { useSpoiler } from "./lib/spoiler";
 import { useLanguage } from "./providers";
 
 type PublicStreamCard = {
@@ -76,6 +79,7 @@ function StreamCardCover({ item }: { item: PublicStreamCard }) {
 export default function PublicHomePage() {
   const { t } = useLanguage();
   const { isAuthenticated, user } = useAuth();
+  const { spoilerFree } = useSpoiler();
   const [search, setSearch] = useState("");
   const [committedSearch, setCommittedSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -135,6 +139,7 @@ export default function PublicHomePage() {
         </div>
 
         <div className="public-header-actions">
+          <SpoilerToggle />
           {isAuthenticated && user ? (
             <Link className="btn primary" href="/admin">
               {t.publicSite.enterAdmin} · {user.username}
@@ -160,7 +165,7 @@ export default function PublicHomePage() {
       {error ? <div className="notice error">{error}</div> : null}
 
       {loading && !data ? (
-        <div className="empty-state">{t.common.loading}</div>
+        <StreamCardGridSkeleton count={PAGE_SIZE} />
       ) : empty ? (
         <div className="empty-state">
           {committedSearch ? t.publicSite.emptyForQuery : t.publicSite.empty}
@@ -172,7 +177,10 @@ export default function PublicHomePage() {
         </div>
       ) : (
         <>
-          <section className="card-grid">
+          {/* Paging and search keep the cards on screen and dim them rather
+              than dropping back to skeletons: swapping a full grid out and in
+              on every keystroke flickers worse than it informs. */}
+          <section className={`card-grid${loading ? " is-refreshing" : ""}`}>
             {items.map((item) => (
               <Link
                 key={item.id}
@@ -181,7 +189,10 @@ export default function PublicHomePage() {
               >
                 <div className="stream-card-thumb">
                   <StreamCardCover item={item} />
-                  {item.startedAt && item.endedAt ? (
+                  {/* The length badge is the first spoiler of the lot: it
+                      answers "is this the evening they played for six hours"
+                      before the recording is even opened. */}
+                  {!spoilerFree && item.startedAt && item.endedAt ? (
                     <span className="stream-card-duration">
                       {formatPeriod(item.startedAt, item.endedAt)}
                     </span>

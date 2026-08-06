@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "../components/app-shell";
+import { Skeleton, SkeletonText, TableSkeleton } from "../components/Skeleton";
 import { useAuth } from "../lib/auth-context";
 import { useLanguage } from "../providers";
 
@@ -34,9 +35,31 @@ export default function AdminLayout({
   }, [loading, isAuthenticated, router]);
 
   if (loading) {
+    // The whole panel is behind an /auth/me round-trip. Draw the frame it is
+    // about to become — sidebar on the left, page on the right — so the wait
+    // reads as loading rather than as a blank screen.
     return (
-      <div className="page-shell">
-        <div className="empty-state">{t.common.loading}</div>
+      <div className="app-frame" aria-busy="true">
+        <aside className="sidebar">
+          <div className="brand-block">
+            <div className="brand-text">
+              <Skeleton width="90px" height="10px" />
+              <Skeleton width="130px" height="16px" style={{ marginTop: 6 }} />
+            </div>
+          </div>
+          <nav className="nav-list">
+            {Array.from({ length: 8 }, (_, index) => (
+              <Skeleton key={index} width="100%" height="30px" />
+            ))}
+          </nav>
+        </aside>
+        <main className="page-shell">
+          <SkeletonText width="180px" height="20px" />
+          <SkeletonText width="320px" />
+          <div style={{ marginTop: 20 }}>
+            <TableSkeleton rows={6} columns={4} />
+          </div>
+        </main>
       </div>
     );
   }

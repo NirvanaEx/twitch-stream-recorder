@@ -349,6 +349,11 @@ model AppSettings {
   // real archive storage, so it never fires while Telegram has no copy — the
   // last remaining copy of a recording is never the one that expires.
   archiveKeepDays       Int      @default(90)
+  // Whether spoiler-free viewing is on for someone who has never touched the
+  // switch — a first visit, a fresh browser, an anonymous viewer. It is a
+  // default and not a policy: the toggle in the header and in the player
+  // overrides it for that browser and nobody else's.
+  spoilerFreeDefault    Boolean  @default(true)
   updatedAt             DateTime @updatedAt
 }
 

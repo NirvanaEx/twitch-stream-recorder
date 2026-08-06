@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  clearSpanSec,
+  FOG_WIDTH_PCT,
+  plainTimeToPct,
+  spoilerPctToTime,
+  spoilerTimeToPct,
+} from "../lib/spoiler-timeline";
 import { waveformHeights } from "../lib/waveform";
+import { SpoilerToggle } from "./SpoilerToggle";
 import {
   CloseIcon,
   CompressorIcon,
@@ -69,6 +77,16 @@ type VideoPlayerProps = {
    * hovered / current position — "this part of the video happened at 21:03".
    */
   timelineStartAt?: number | null;
+  /**
+   * Spoiler-free playback: the total length is never shown or implied, and the
+   * timeline turns into "what you have already seen, plus fog". The geometry
+   * of that lives in lib/spoiler-timeline.
+   */
+  spoilerFree?: boolean;
+  /** Furthest point this viewer has previously reached, in seconds. */
+  initialRevealedSec?: number;
+  /** Called as that point advances, so the parent can persist it. */
+  onRevealedChange?: (seconds: number) => void;
 };
 
 const SKIP_SECONDS = 5;
@@ -116,6 +134,9 @@ export function VideoPlayer({
   initialSegment,
   onSegmentChange,
   timelineStartAt,
+  spoilerFree = false,
+  initialRevealedSec = 0,
+  onRevealedChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLMediaElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -146,6 +167,29 @@ export function VideoPlayer({
     null,
   );
   const [mediaError, setMediaError] = useState<string | null>(null);
+
+  // How far into the recording this viewer has ever got. Only ever grows —
+  // rewinding does not un-see anything — and it is what the spoiler-free bar
+  // measures itself against.
+  //
+  // Held in a ref as well as in state because the ref is the truth and the
+  // state is only there to redraw the bar: ordinary playback must not pay for
+  // a second render per timeupdate to track a number nothing is displaying.
+  const revealedRef = useRef(initialRevealedSec);
+  const [revealedSec, setRevealedSec] = useState(initialRevealedSec);
+  const reportedRevealRef = useRef(initialRevealedSec);
+
+  useEffect(() => {
+    revealedRef.current = Math.max(revealedRef.current, initialRevealedSec);
+    reportedRevealRef.current = Math.max(reportedRevealRef.current, initialRevealedSec);
+    setRevealedSec((value) => Math.max(value, initialRevealedSec));
+  }, [initialRevealedSec]);
+
+  // Switching the mode on mid-recording: catch the bar up to what the ref has
+  // been quietly accumulating.
+  useEffect(() => {
+    if (spoilerFree) setRevealedSec((value) => Math.max(value, revealedRef.current));
+  }, [spoilerFree]);
 
   // Touch handling: taps are processed in onPointerUp, and the synthetic
   // click/dblclick events the browser fires afterwards must be ignored.
@@ -847,13 +891,17 @@ export function VideoPlayer({
           seekTo(0);
           break;
         case "End": {
+          // "Jump to the end" and "jump to 70%" are shortcuts whose whole
+          // premise is knowing where the end is. Spoiler-free has no answer
+          // for them, so it has no key for them either.
+          if (spoilerFree) break;
           event.preventDefault();
           const vr = virtualRef.current;
           seekTo(vr.segments ? vr.total : v.duration || 0);
           break;
         }
         default:
-          if (event.key >= "0" && event.key <= "9") {
+          if (!spoilerFree && event.key >= "0" && event.key <= "9") {
             event.preventDefault();
             const pct = Number(event.key) / 10;
             const vr = virtualRef.current;
@@ -874,6 +922,7 @@ export function VideoPlayer({
     onModeChange,
     seekBy,
     seekTo,
+    spoilerFree,
     toggleFullscreen,
     toggleMute,
     togglePlay,
@@ -881,6 +930,39 @@ export function VideoPlayer({
   ]);
 
   // ---- Progress bar -----------------------------------------------------
+
+  useEffect(() => {
+    if (!Number.isFinite(currentTime) || currentTime <= revealedRef.current) return;
+    revealedRef.current = currentTime;
+
+    // Only the fog bar reads this, so only the fog bar pays for it.
+    if (spoilerFree) setRevealedSec(currentTime);
+
+    // Persisted in steps: writing localStorage on every timeupdate would be
+    // four writes a second for a difference nobody can see on the bar.
+    if (currentTime - reportedRevealRef.current >= 10) {
+      reportedRevealRef.current = currentTime;
+      onRevealedChange?.(currentTime);
+    }
+  }, [currentTime, spoilerFree, onRevealedChange]);
+
+  // Seconds of recording that the clear (non-fog) part of the bar spans.
+  const clearSpan = clearSpanSec(revealedSec);
+  const clearWidthPct = 100 - FOG_WIDTH_PCT;
+
+  const timeToPct = useCallback(
+    (time: number) =>
+      spoilerFree
+        ? spoilerTimeToPct(time, revealedSec)
+        : plainTimeToPct(time, duration),
+    [spoilerFree, duration, revealedSec],
+  );
+
+  const pctToTime = useCallback(
+    (pct: number) =>
+      spoilerFree ? spoilerPctToTime(pct, revealedSec, duration) : pct * duration,
+    [spoilerFree, duration, revealedSec],
+  );
 
   const progressRef = useRef<HTMLDivElement | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -892,6 +974,10 @@ export function VideoPlayer({
   useEffect(() => {
     const preview = previewVideoRef.current;
     if (!preview || !scrubPreview) return;
+    // Spoiler-free: do not even fetch the frame. Seeking the hidden preview
+    // element would pull the picture down and put it one CSS rule away from
+    // being on screen.
+    if (spoilerFree && scrubPreview.time > clearSpanSec(revealedSec)) return;
 
     const vr = virtualRef.current;
     let local = scrubPreview.time;
@@ -916,7 +1002,7 @@ export function VideoPlayer({
         // Metadata not loaded yet; the next hover move will retry.
       }
     }
-  }, [scrubPreview]);
+  }, [scrubPreview, spoilerFree, revealedSec]);
 
   // Src for the hover-preview element: the hovered segment in playlist mode.
   let previewSrc = effectiveSrc;
@@ -942,7 +1028,7 @@ export function VideoPlayer({
   const onProgressMove = (event: React.PointerEvent) => {
     if (!duration) return;
     const pct = computePctFromEvent(event.clientX);
-    setScrubPreview({ time: pct * duration, left: pct * 100 });
+    setScrubPreview({ time: pctToTime(pct), left: pct * 100 });
   };
 
   const onProgressLeave = () => setScrubPreview(null);
@@ -953,12 +1039,12 @@ export function VideoPlayer({
     if (!duration) return;
     event.preventDefault();
     const pct = computePctFromEvent(event.clientX);
-    seekTo(pct * duration);
+    seekTo(pctToTime(pct));
 
     const onMove = (e: PointerEvent) => {
       const m = computePctFromEvent(e.clientX);
-      seekTo(m * duration);
-      setScrubPreview({ time: m * duration, left: m * 100 });
+      seekTo(pctToTime(m));
+      setScrubPreview({ time: pctToTime(m), left: m * 100 });
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -971,8 +1057,16 @@ export function VideoPlayer({
     window.addEventListener("pointercancel", onUp);
   };
 
-  const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-  const bufferedPct = duration > 0 ? Math.min(100, (bufferedEnd / duration) * 100) : 0;
+  const progressPct = timeToPct(currentTime);
+  // Buffering runs ahead of playback; letting it spill into the fog would
+  // paint a bar past the point the viewer is allowed to know about.
+  const bufferedPct = spoilerFree
+    ? Math.min(timeToPct(bufferedEnd), clearWidthPct)
+    : timeToPct(bufferedEnd);
+
+  // Hovering the unknown part of the timeline: no frame preview there, that is
+  // the whole point.
+  const scrubInFog = spoilerFree && scrubPreview !== null && scrubPreview.time > clearSpan;
 
   // The slider models one continuous loudness scale: element volume up to
   // 100%, Web Audio gain past it.
@@ -1117,17 +1211,29 @@ export function VideoPlayer({
             <div className="vp__progress-track" />
             <div className="vp__progress-buffered" style={{ width: `${bufferedPct}%` }} />
             <div className="vp__progress-played" style={{ width: `${progressPct}%` }} />
+            {/* The unknown part. It is a fixed strip, not a remainder, so its
+                size says nothing about how much recording is behind it. */}
+            {spoilerFree ? (
+              <div
+                className="vp__progress-fog"
+                style={{ left: `${clearWidthPct}%`, width: `${FOG_WIDTH_PCT}%` }}
+                title="Дальше вы ещё не смотрели — перемотка вперёд вслепую"
+                aria-hidden
+              />
+            ) : null}
             {/* Kept mounted so the preview video's metadata loads only once.
                 Audio has no frames — only the hovered timestamp is shown. */}
             <div
-              className={`vp__scrub-preview${audioOnly ? " vp__scrub-preview--time" : ""}`}
+              className={`vp__scrub-preview${
+                audioOnly || scrubInFog ? " vp__scrub-preview--time" : ""
+              }${scrubInFog ? " vp__scrub-preview--fog" : ""}`}
               style={{
                 left: `clamp(86px, ${scrubPreview?.left ?? 0}%, calc(100% - 86px))`,
                 visibility: scrubPreview ? "visible" : "hidden",
               }}
               aria-hidden
             >
-              {audioOnly ? null : (
+              {audioOnly || scrubInFog ? null : (
                 <video
                   ref={previewVideoRef}
                   className="vp__scrub-video"
@@ -1139,8 +1245,15 @@ export function VideoPlayer({
                 />
               )}
               <span className="vp__scrub-time">
-                {scrubPreview ? formatTime(scrubPreview.time) : ""}
-                {scrubPreview && timelineStartAt ? (
+                {/* In the fog the absolute position would be a number the
+                    viewer has no business knowing yet; how far ahead they are
+                    about to jump is exactly what they need. */}
+                {scrubPreview
+                  ? scrubInFog
+                    ? `+${formatTime(Math.max(0, scrubPreview.time - currentTime))}`
+                    : formatTime(scrubPreview.time)
+                  : ""}
+                {scrubPreview && timelineStartAt && !scrubInFog ? (
                   <span className="vp__scrub-clock">
                     {formatClock(timelineStartAt + scrubPreview.time * 1000)}
                   </span>
@@ -1234,7 +1347,9 @@ export function VideoPlayer({
             <div className="vp__time">
               {isLive ? <span className="vp__live-dot" /> : null}
               <span>{formatTime(currentTime)}</span>
-              {!isLive ? (
+              {/* Where you are, yes. How much of it there is, no — the total is
+                  the single biggest spoiler the player has. */}
+              {!isLive && !spoilerFree ? (
                 <>
                   <span className="vp__time-sep">/</span>
                   <span>{formatTime(duration)}</span>
@@ -1276,6 +1391,8 @@ export function VideoPlayer({
                 </div>
               ) : null}
             </div>
+
+            <SpoilerToggle variant="icon" size={19} />
 
             {showChatButton && onChatToggle ? (
               <button

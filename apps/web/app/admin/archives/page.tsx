@@ -7,6 +7,7 @@ import { useLanguage } from "../../providers";
 import { ArchiveCard, type ArchiveItem } from "../../components/ArchiveCard";
 import { Pagination } from "../../components/Pagination";
 import { PageTabs } from "../../components/PageTabs";
+import { Skeleton } from "../../components/Skeleton";
 
 type ArchivesResponse = {
   items: ArchiveItem[];
@@ -30,6 +31,9 @@ export default function ArchivesPage() {
   const { t } = useLanguage();
   const [video, setVideo] = useState<Block>(EMPTY_BLOCK);
   const [audio, setAudio] = useState<Block>(EMPTY_BLOCK);
+  // Both blocks start empty, which looks exactly like "there are no archives"
+  // until the first response lands. Track the difference.
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busyArchiveId, setBusyArchiveId] = useState<string | null>(null);
@@ -52,6 +56,8 @@ export default function ArchivesPage() {
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
+    } finally {
+      setLoaded(true);
     }
   }, [video.page, audio.page, t.errors.apiUnavailable]);
 
@@ -125,7 +131,13 @@ export default function ArchivesPage() {
           </span>
         </div>
 
-        {block.items.length === 0 ? (
+        {!loaded ? (
+          <div className={`archive-grid${audioLayout ? " audio" : ""}`}>
+            {Array.from({ length: 6 }, (_, index) => (
+              <Skeleton key={index} height="150px" radius="var(--radius-lg)" />
+            ))}
+          </div>
+        ) : block.items.length === 0 ? (
           <div className="empty-state">{emptyLabel}</div>
         ) : (
           <>

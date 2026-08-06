@@ -112,9 +112,22 @@ function handleAuthFailure(status: number) {
 
 // --- request helpers ---
 
-export async function apiGet<T>(path: string): Promise<T> {
+type GetOptions = {
+  /**
+   * Let the browser's HTTP cache answer this request when the server said it
+   * may (`Cache-Control` on the response).
+   *
+   * Off by default — nearly everything here is live state that must not be
+   * served stale. The exception is the recorded chat: it is megabytes, and a
+   * finished broadcast never gains another message, so re-opening a recording
+   * should read it out of the disk cache instead of off the wire.
+   */
+  cacheable?: boolean;
+};
+
+export async function apiGet<T>(path: string, options: GetOptions = {}): Promise<T> {
   const response = await fetch(buildApiUrl(path), {
-    cache: "no-store",
+    cache: options.cacheable ? "default" : "no-store",
     headers: { ...authHeaders() },
   });
 

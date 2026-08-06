@@ -40,6 +40,7 @@ export class SettingsService {
         videoKeepLocalDays: dto.videoKeepLocalDays ?? 0,
         audioKeepLocalDays: dto.audioKeepLocalDays ?? 0,
         archiveKeepDays: dto.archiveKeepDays ?? 90,
+        spoilerFreeDefault: dto.spoilerFreeDefault ?? true,
         telegramApiId: telegramApiId ?? "",
         telegramApiHash: telegramApiHash ?? "",
         telegramBotToken: telegramBotToken ?? "",
@@ -55,6 +56,7 @@ export class SettingsService {
         videoKeepLocalDays: dto.videoKeepLocalDays,
         audioKeepLocalDays: dto.audioKeepLocalDays,
         archiveKeepDays: dto.archiveKeepDays,
+        spoilerFreeDefault: dto.spoilerFreeDefault,
         telegramApiId,
         telegramApiHash,
         telegramBotToken,
@@ -76,6 +78,7 @@ export class SettingsService {
       videoKeepLocalDays: settings.videoKeepLocalDays,
       audioKeepLocalDays: settings.audioKeepLocalDays,
       archiveKeepDays: settings.archiveKeepDays,
+      spoilerFreeDefault: settings.spoilerFreeDefault,
       // Secrets never leave the API; the UI only learns whether they are set
       // (either in the database or via env fallback).
       telegramApiIdSet: Boolean(

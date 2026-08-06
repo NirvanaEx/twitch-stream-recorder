@@ -28,12 +28,14 @@ import {
   type EmoteEntry,
   type EmotePayload,
 } from "../lib/chat-render";
+import { useSpoiler } from "../lib/spoiler";
 import { betColor } from "../lib/stream-events";
 import { useLanguage } from "../providers";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { ChatText } from "./ChatText";
 import { ChatUserCard } from "./ChatUserCard";
 import { SettingsIcon } from "./icons";
+import { SkeletonText } from "./Skeleton";
 import { StreamEventCard } from "./StreamEventCard";
 import { StreamMetaStrip } from "./StreamMetaStrip";
 
@@ -86,6 +88,7 @@ export function ChatReplay({
   baseOffsetSec = 0,
 }: ChatReplayProps) {
   const { locale } = useLanguage();
+  const { spoilerFree } = useSpoiler();
   const copy = CHAT_COPY[locale];
   const { prefs, update, toggleRole, reset } = useChatPrefs();
 
@@ -130,7 +133,9 @@ export function ChatReplay({
       setLoadError(false);
       setData(null);
       try {
-        const response = await apiGet<ChatResponse>(endpoint!);
+        // The one request in the app worth caching: a finished broadcast's
+        // chat is the largest thing we download and it never changes.
+        const response = await apiGet<ChatResponse>(endpoint!, { cacheable: true });
         if (!cancelled) {
           setData(response);
         }
@@ -380,7 +385,9 @@ export function ChatReplay({
           used to cost a fifth of the panel's height every session. */}
       <div className="chat-bar">
         <strong className="chat-bar__title">{copy.title}</strong>
-        {data?.messages.length ? (
+        {/* The message count is a length measure in disguise: 40 000 messages
+            is a long night, 900 is an hour that went quietly. */}
+        {!spoilerFree && data?.messages.length ? (
           <span className="chat-bar__count">{data.messages.length}</span>
         ) : null}
         {hiddenCount > 0 ? (
@@ -424,8 +431,12 @@ export function ChatReplay({
       <StreamMetaStrip
         timelineUrl={timelineUrl}
         chatTimeSec={userThreshold}
-        reveal={prefs.revealTimeline}
+        // Spoiler-free overrides the per-chat "show me everything" switch:
+        // the strip's bar spans the whole broadcast, so how far along it the
+        // colour stops is the length of the recording, drawn.
+        reveal={!spoilerFree && prefs.revealTimeline}
         onToggleReveal={() => update("revealTimeline", !prefs.revealTimeline)}
+        hideScale={spoilerFree}
         copy={copy}
         locale={locale}
       />
@@ -442,7 +453,15 @@ export function ChatReplay({
       <div className="chat-list-wrap" ref={setWrapEl}>
         <div ref={listRef} className="chat-list thin-scroll" onScroll={handleScroll}>
           {loading ? (
-            <div className="chat-empty">{copy.loading}</div>
+            // The chat is the heaviest thing on the page — several megabytes
+            // for a long broadcast — so this placeholder is on screen the
+            // longest and has the most work to do.
+            Array.from({ length: 16 }, (_, index) => (
+              <div className="chat-message chat-message--skeleton" key={index}>
+                <SkeletonText width={`${34 + ((index * 17) % 40)}px`} />
+                <SkeletonText width={`${45 + ((index * 29) % 45)}%`} />
+              </div>
+            ))
           ) : loadError ? (
             <div className="chat-empty chat-empty--error">{copy.loadError}</div>
           ) : visibleMessages.length === 0 ? (

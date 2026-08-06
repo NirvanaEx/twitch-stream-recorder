@@ -6,6 +6,7 @@ import { formatDuration, formatFileSize } from "../../lib/media";
 import { useRealtimeRefresh } from "../../lib/use-realtime-refresh";
 import { useLanguage } from "../../providers";
 import { IconButton, IconLink } from "../../components/IconButton";
+import { TableSkeleton } from "../../components/Skeleton";
 import { PlayIcon, StopIcon } from "../../components/icons";
 
 type ActiveRecording = {
@@ -25,6 +26,7 @@ type ActiveRecordingsResponse = { items: ActiveRecording[] };
 export default function RecordingPage() {
   const { t } = useLanguage();
   const [items, setItems] = useState<ActiveRecording[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyChannelId, setBusyChannelId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -36,6 +38,8 @@ export default function RecordingPage() {
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
+    } finally {
+      setLoaded(true);
     }
   }, [t.errors.apiUnavailable]);
 
@@ -75,7 +79,9 @@ export default function RecordingPage() {
       {error ? <div className="notice error">{error}</div> : null}
 
       <section className="panel">
-        {items.length === 0 ? (
+        {!loaded ? (
+          <TableSkeleton rows={3} columns={6} />
+        ) : items.length === 0 ? (
           <div className="empty-state">{t.recording.empty}</div>
         ) : (
           <div className="table-wrap">

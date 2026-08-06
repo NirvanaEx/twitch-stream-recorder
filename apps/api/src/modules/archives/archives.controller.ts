@@ -20,6 +20,7 @@ import {
 } from "../chat/chat-roles.utils";
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
+import { buildReplayMessage } from "../chat/replay-message.utils";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -105,24 +106,7 @@ export class ArchivesController {
     const anchorMs = resolveCaptureAnchorMs(messages);
 
     return {
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorLogin: message.authorLogin,
-        authorDisplayName: message.authorDisplayName,
-        authorColor: message.authorColor,
-        textRaw: message.textRaw,
-        badges: parseStoredJsonString(message.badgesJson),
-        roles: extractChatRoles(message.badgesJson),
-        emotes: parseStoredJsonString(message.emotesJson),
-        inlineEmotes: extractInlineEmotes(message.emotesJson),
-        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
-        relativeTimeSec: message.relativeTimeSec,
-        messageTimestamp: message.messageTimestamp.toISOString(),
-        isDeleted: message.isDeleted,
-        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
-        banDurationSec: message.banDurationSec,
-        isFirstMessage: message.isFirstMessage,
-      })),
+      messages: messages.map((message) => buildReplayMessage(message, anchorMs)),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
   }
