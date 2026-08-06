@@ -10,6 +10,8 @@ import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "../components/IconButton";
 import { Pagination } from "../components/Pagination";
 import { PlatformTag } from "../components/PlatformTag";
+import { TableSkeleton } from "../components/Skeleton";
+import { SpoilerToggle } from "../components/SpoilerToggle";
 import {
   CircleDotIcon,
   FilmIcon,
@@ -115,6 +117,9 @@ export default function DashboardPage() {
 
   const [items, setItems] = useState<ChannelItem[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  // Distinguishes "still asking" from "asked, and there is nothing" — without
+  // it the first paint claims there are no channels, then contradicts itself.
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [twitchMode, setTwitchMode] = useState<"api" | "public">("api");
@@ -136,6 +141,8 @@ export default function DashboardPage() {
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
+    } finally {
+      setLoaded(true);
     }
   }, [t.errors.apiUnavailable]);
 
@@ -270,6 +277,9 @@ export default function DashboardPage() {
           <h2 className="page-title">{t.dashboard.title}</h2>
           <p className="page-copy">{t.dashboard.subtitle}</p>
         </div>
+        {/* The same switch as on the public home page, and the same value:
+            it belongs wherever a list of recordings is about to be read. */}
+        <SpoilerToggle />
       </section>
 
       {error ? <div className="notice error">{error}</div> : null}
@@ -352,7 +362,9 @@ export default function DashboardPage() {
           <h3 className="section-title">{t.common.channels}</h3>
         </div>
 
-        {sortedItems.length === 0 ? (
+        {!loaded ? (
+          <TableSkeleton rows={5} columns={5} />
+        ) : sortedItems.length === 0 ? (
           <div className="empty-state">{t.channels.empty}</div>
         ) : (
           <>
@@ -551,7 +563,9 @@ export default function DashboardPage() {
           </Link>
         </div>
 
-        {stats?.latestArchives.length === 0 ? (
+        {!loaded ? (
+          <TableSkeleton rows={4} columns={4} />
+        ) : stats?.latestArchives.length === 0 ? (
           <div className="empty-state">{t.dashboard.noArchives}</div>
         ) : (
           <div className="table-wrap">

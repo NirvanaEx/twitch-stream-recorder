@@ -8,6 +8,7 @@ import { useAuth } from "../lib/auth-context";
 import { useLanguage } from "../providers";
 import {
   ArchiveIcon,
+  ChevronRightIcon,
   CloseIcon,
   CloudIcon,
   FolderOpenIcon,
@@ -19,6 +20,7 @@ import {
   SendIcon,
   SettingsIcon,
   ShieldIcon,
+  TvIcon,
   UserIcon,
   UsersIcon,
 } from "./icons";
@@ -201,6 +203,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="sidebar-footer">
+          {/* The way back out. The public site links into the panel from its
+              header; without this the trip was one-way and people went at it
+              by editing the URL. Sits in the sidebar rather than on the
+              dashboard so it is there from every page of the panel. */}
+          <Link href="/" className="nav-link nav-link--out">
+            <TvIcon size={15} />
+            <span>{t.nav.publicSite}</span>
+            <ChevronRightIcon size={14} />
+          </Link>
+
           {disk || archive?.configured ? (
             <div className="storage-block">
               {disk ? (

@@ -39,6 +39,67 @@ time, and each is deleted as soon as Telegram has it, so the split needs a part
 or two of free space rather than a second copy of the recording. The player
 only ever falls back to them once both the local and the archive copy are gone.
 
+## Why the pages used to sit there
+
+The panel and the watch page are rendered in the browser, so every one of them
+is a blank frame until its data arrives — and one request dwarfed all the
+others. A three-hour broadcast is around 38 000 chat messages, and the replay
+asks for all of them at once, because seeking anywhere has to land on the right
+message. That response left the server as **16 MB of uncompressed JSON**: over
+half of it the repeated field names of fields nobody had set.
+
+Three changes, in the order they matter:
+
+- **`gzip` in `infra/nginx/default.conf`.** Nothing was compressed before —
+  nginx's `gzip_proxied` defaults to `off`, which means it never touches an
+  upstream's response, and that is every response here. Video is excluded by
+  type, so byte ranges are untouched.
+- **The chat payload is sparse.** `chat/replay-message.utils.ts` omits any
+  field with nothing to say, and the online endpoints leave out the wall-clock
+  timestamp the players never read. The downloadable bundle keeps it — that
+  file is meant to outlive this app.
+- **The chat is cacheable.** It cannot change (the endpoint refuses anything
+  whose video is not `ready`), so re-opening a recording reads it from disk.
+
+16 MB → 7 MB → about 1.5 MB on the wire. Everything else that waits — the card
+grid, the tables, the chat column — now draws a skeleton at the real geometry
+instead of the word "Загрузка", so a wait reads as a wait rather than a hang.
+
+## Spoiler-free mode
+
+The eye toggle sits on both home pages — the public one and the panel's
+dashboard — and in the player control bar.
+
+It has two layers on purpose. **Settings → Запись и чат → "Режим без спойлеров
+по умолчанию"** (`AppSettings.spoilerFreeDefault`, on out of the box) is what a
+first visit, a fresh browser or an anonymous viewer gets; the public site reads
+it from `GET /api/public/preferences`, which needs no login. Flipping the eye
+writes an override for **that browser only** — turning it off to check the
+length of one recording must not change what everyone else sees, and must not
+need the settings permission. A browser that has never touched the eye keeps
+following the server, so changing the default actually reaches people. If the
+API cannot be reached the mode stays on: failing towards showing more than the
+viewer asked for is the wrong way to fail.
+
+A recording is watched to find out what happened, and the interface kept
+answering that first: how long the broadcast ran, how big the file is, how far
+along the progress bar sits, how many messages chat produced, where the
+category changed. With the mode on, the position in the recording stays (plus
+the real-world time of that moment) and none of the rest.
+
+The timeline is the interesting part. It stops being a picture of the recording
+and becomes a picture of *progress through it*: everything watched so far is
+stretched across the bar — always filling it — and a fixed strip on the right
+is fog. The scale shrinks as you watch, so the bar is ten minutes wide after
+ten minutes and two hours wide after two hours, and neither says anything about
+the end. Rewinding is exact. Dragging into the fog jumps forward blind, further
+in meaning a bigger jump, and no frame preview is fetched there. `End` and the
+`0`–`9` seek keys are off, because their whole premise is knowing where the end
+is.
+
+The geometry lives in `apps/web/app/lib/spoiler-timeline.ts`, as pure functions
+with no player or DOM attached.
+
 ## Where recordings live
 
 Three tiers, in the order a finished recording passes through them:

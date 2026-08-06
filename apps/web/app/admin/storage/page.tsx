@@ -10,6 +10,7 @@ import { useLanguage } from "../../providers";
 import { IconButton } from "../../components/IconButton";
 import { PageTabs } from "../../components/PageTabs";
 import { SendIcon } from "../../components/icons";
+import { TableSkeleton } from "../../components/Skeleton";
 
 type QueueItem = {
   id: string;
@@ -275,7 +276,7 @@ export default function StoragePage() {
 
         {tab === "telegram" ? (
           !data ? (
-            <div className="empty-state">{t.common.loading}</div>
+            <TableSkeleton rows={5} columns={2} />
           ) : (
             <>
               <div className="panel-body">

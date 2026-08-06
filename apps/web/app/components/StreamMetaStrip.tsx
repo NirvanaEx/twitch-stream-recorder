@@ -45,6 +45,15 @@ type Props = {
   chatTimeSec: number;
   reveal: boolean;
   onToggleReveal: () => void;
+  /**
+   * Drop the category bar and the reveal switch entirely (spoiler-free mode).
+   *
+   * Clipping the bar is not enough there: it is drawn against the full length
+   * of the broadcast, so the point where the colour stops is a read-out of how
+   * far in the viewer is — the exact thing the mode exists to hide. What is
+   * happening *now* stays: viewers, title, category are all "so far" already.
+   */
+  hideScale?: boolean;
   copy: ChatCopy;
   locale: "ru" | "en";
 };
@@ -78,6 +87,7 @@ export function StreamMetaStrip({
   chatTimeSec,
   reveal,
   onToggleReveal,
+  hideScale = false,
   copy,
   locale,
 }: Props) {
@@ -165,15 +175,17 @@ export function StreamMetaStrip({
             {copy.metaPeak} {formatCount(peakSoFar, locale)}
           </span>
         ) : null}
-        <button
-          type="button"
-          className={`stream-meta__reveal${reveal ? " is-active" : ""}`}
-          onClick={onToggleReveal}
-          title={copy.metaRevealHint}
-          aria-pressed={reveal}
-        >
-          {reveal ? "👁" : "🙈"}
-        </button>
+        {hideScale ? null : (
+          <button
+            type="button"
+            className={`stream-meta__reveal${reveal ? " is-active" : ""}`}
+            onClick={onToggleReveal}
+            title={copy.metaRevealHint}
+            aria-pressed={reveal}
+          >
+            {reveal ? "👁" : "🙈"}
+          </button>
+        )}
       </div>
 
       {current?.categoryName || current?.title ? (
@@ -190,6 +202,7 @@ export function StreamMetaStrip({
         </div>
       ) : null}
 
+      {hideScale ? null : (
       <div
         className="stream-meta__bar"
         role="img"
@@ -229,6 +242,7 @@ export function StreamMetaStrip({
           />
         ) : null}
       </div>
+      )}
     </div>
   );
 }

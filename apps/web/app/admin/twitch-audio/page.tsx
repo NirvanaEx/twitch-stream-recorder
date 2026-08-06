@@ -10,6 +10,7 @@ import { Pagination } from "../../components/Pagination";
 import { PageTabs } from "../../components/PageTabs";
 import { PlatformTag } from "../../components/PlatformTag";
 import { formatFileSize } from "../../lib/media";
+import { TableSkeleton } from "../../components/Skeleton";
 
 type AudioTrack = {
   id: string;
@@ -283,7 +284,7 @@ export default function TwitchAudioPage() {
         </div>
 
         {tracks === null ? (
-          <div className="empty-state">{t.common.loading}</div>
+          <TableSkeleton rows={6} columns={4} />
         ) : pageTracks.length === 0 ? (
           <div className="empty-state">{t.twitchAudio.tracksEmpty}</div>
         ) : (

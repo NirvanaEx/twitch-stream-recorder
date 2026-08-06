@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { apiGet, apiSend } from "../../lib/api";
 import { useLanguage } from "../../providers";
+import { TableSkeleton } from "../../components/Skeleton";
 
 type SettingsResponse = {
   recordChat: boolean;
@@ -12,6 +13,7 @@ type SettingsResponse = {
   telegramEnabled: boolean;
   telegramChatId: string;
   audioTrackEnabled: boolean;
+  spoilerFreeDefault: boolean;
   videoKeepLocalDays: number;
   audioKeepLocalDays: number;
   archiveKeepDays: number;
@@ -59,6 +61,7 @@ export default function SettingsPage() {
     telegramEnabled: false,
     telegramChatId: "",
     audioTrackEnabled: true,
+    spoilerFreeDefault: true,
     videoKeepLocalDays: 0,
     audioKeepLocalDays: 0,
     archiveKeepDays: 90,
@@ -197,6 +200,25 @@ export default function SettingsPage() {
               setForm((c) => ({ ...c, defaultChatOffsetSec: Number(event.target.value) }))
             }
           />
+        </label>
+
+        {/* A viewing default rather than a recording one, but this is where
+            every "how the replay behaves" switch already lives. */}
+        <label className="toggle-row">
+          <div className="toggle-copy">
+            <strong>{t.settings.spoilerFreeDefault}</strong>
+            <span>{t.settings.spoilerFreeDefaultHint}</span>
+          </div>
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={form.spoilerFreeDefault}
+              onChange={(event) =>
+                setForm((c) => ({ ...c, spoilerFreeDefault: event.target.checked }))
+              }
+            />
+            <span className="slider" />
+          </span>
         </label>
 
         <div className="settings-group">
@@ -365,7 +387,9 @@ export default function SettingsPage() {
       {saved ? <div className="notice success">{t.settings.saved}</div> : null}
 
       {loading ? (
-        <div className="empty-state">{t.common.loading}</div>
+        <div className="panel">
+          <TableSkeleton rows={7} columns={2} />
+        </div>
       ) : (
         <section className="panel">
           <div className="tab-bar" role="tablist">

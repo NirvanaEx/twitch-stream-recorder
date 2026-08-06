@@ -1,16 +1,11 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { computeSessionChatOffsetSec } from "../recording/playback.utils";
-import {
-  deletionOffsetSec,
-  extractChatRoles,
-  extractInlineEmotes,
-  extractPredictionBet,
-  resolveCaptureAnchorMs,
-} from "./chat-roles.utils";
+import { resolveCaptureAnchorMs } from "./chat-roles.utils";
 import { EmoteMirrorService } from "./emote-mirror.service";
+import { buildReplayMessage } from "./replay-message.utils";
 import type { EmoteSnapshotPayload } from "./seventv.service";
-import { parseStoredJson, parseStoredJsonString } from "./stored-chat.utils";
+import { parseStoredJson } from "./stored-chat.utils";
 
 // The replay draws from chat, not from a transcript: a session with more
 // messages than this is already far past what the player can render, and the
@@ -71,24 +66,12 @@ export class ArchiveBundleService {
         endedAt: session.endedAt?.toISOString() ?? null,
         chatOffsetSec: computeSessionChatOffsetSec(session),
       },
-      messages: messages.map((message) => ({
-        id: message.id,
-        authorLogin: message.authorLogin,
-        authorDisplayName: message.authorDisplayName,
-        authorColor: message.authorColor,
-        textRaw: message.textRaw,
-        badges: parseStoredJsonString(message.badgesJson),
-        roles: extractChatRoles(message.badgesJson),
-        emotes: parseStoredJsonString(message.emotesJson),
-        inlineEmotes: extractInlineEmotes(message.emotesJson),
-        predictionBet: extractPredictionBet(message.badgesJson, message.badgeInfoJson),
-        relativeTimeSec: message.relativeTimeSec,
-        messageTimestamp: message.messageTimestamp.toISOString(),
-        isDeleted: message.isDeleted,
-        deletedAtSec: deletionOffsetSec(message.deletedAt, anchorMs),
-        banDurationSec: message.banDurationSec,
-        isFirstMessage: message.isFirstMessage,
-      })),
+      // The bundle keeps the wall-clock times: it is meant to be readable
+      // years from now without this app, and the size saved is not worth a
+      // chat log with no timestamps in it.
+      messages: messages.map((message) =>
+        buildReplayMessage(message, anchorMs, { includeTimestamps: true }),
+      ),
       // Self-contained on purpose: the images of the emotes this chat actually
       // uses travel inside the file as data URIs, so the offline replay keeps
       // working with no network and after 7TV has dropped the emote.

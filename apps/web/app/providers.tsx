@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { AuthProvider } from "./lib/auth-context";
+import { SpoilerProvider } from "./lib/spoiler";
 
 type Locale = "ru" | "en";
 
@@ -22,6 +23,7 @@ type Dictionary = {
     telegramStorage: string;
     twitchAudio: string;
     filesCheck: string;
+    publicSite: string;
   };
   storage: {
     title: string;
@@ -283,6 +285,8 @@ type Dictionary = {
     defaultChatOffsetSec: string;
     saveSettings: string;
     saved: string;
+    spoilerFreeDefault: string;
+    spoilerFreeDefaultHint: string;
     telegramEnabled: string;
     telegramChatId: string;
     telegramChatIdHint: string;
@@ -388,6 +392,14 @@ type Dictionary = {
     notFound: string;
     notFoundHint: string;
   };
+  spoiler: {
+    label: string;
+    on: string;
+    off: string;
+    hint: string;
+    hiddenValue: string;
+    fogHint: string;
+  };
   auth: {
     login: string;
     logout: string;
@@ -471,6 +483,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       telegramStorage: "Telegram",
       twitchAudio: "Twitch аудио",
       filesCheck: "Файлы и диск",
+      publicSite: "К стримам",
     },
     storage: {
       title: "Telegram-хранилище",
@@ -746,6 +759,9 @@ const dictionaries: Record<Locale, Dictionary> = {
       defaultChatOffsetSec: "Смещение чата по умолчанию, сек",
       saveSettings: "Сохранить",
       saved: "Сохранено",
+      spoilerFreeDefault: "Режим без спойлеров по умолчанию",
+      spoilerFreeDefaultHint:
+        "Что видит тот, кто ни разу не трогал тумблер: новый браузер, гость без входа. Переключатель в шапке и в плеере перекрывает это значение только для своего браузера.",
       telegramEnabled: "Выгружать записи в Telegram-канал",
       telegramChatId: "ID канала/чата",
       telegramChatIdHint: "Например -1001234567890 или @имяканала. Бот должен быть админом канала.",
@@ -867,6 +883,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       notFound: "Запись не найдена.",
       notFoundHint: "Возможно, она была удалена или ещё не готова.",
     },
+    spoiler: {
+      label: "Без спойлеров",
+      on: "Режим без спойлеров включён",
+      off: "Режим без спойлеров выключен",
+      hint: "Скрывает длительность, размер файла и всё, что подсказывает, сколько осталось.",
+      hiddenValue: "скрыто",
+      fogHint: "Дальше вы ещё не смотрели",
+    },
     auth: {
       login: "Войти",
       logout: "Выйти",
@@ -948,6 +972,7 @@ const dictionaries: Record<Locale, Dictionary> = {
       telegramStorage: "Telegram",
       twitchAudio: "Twitch audio",
       filesCheck: "Files & disk",
+      publicSite: "To streams",
     },
     storage: {
       title: "Telegram storage",
@@ -1223,6 +1248,9 @@ const dictionaries: Record<Locale, Dictionary> = {
       defaultChatOffsetSec: "Default chat offset, sec",
       saveSettings: "Save",
       saved: "Saved",
+      spoilerFreeDefault: "Spoiler-free mode by default",
+      spoilerFreeDefaultHint:
+        "What someone who has never touched the toggle sees: a fresh browser, a viewer who is not logged in. The switch in the header and in the player overrides this for that browser only.",
       telegramEnabled: "Upload recordings to a Telegram channel",
       telegramChatId: "Channel/chat id",
       telegramChatIdHint: "E.g. -1001234567890 or @channelname. The bot must be an admin of the channel.",
@@ -1344,6 +1372,14 @@ const dictionaries: Record<Locale, Dictionary> = {
       notFound: "Recording not found.",
       notFoundHint: "It may have been deleted or is not ready yet.",
     },
+    spoiler: {
+      label: "No spoilers",
+      on: "Spoiler-free mode is on",
+      off: "Spoiler-free mode is off",
+      hint: "Hides the length, the file size and anything that hints at how much is left.",
+      hiddenValue: "hidden",
+      fogHint: "You have not watched past here",
+    },
     auth: {
       login: "Sign in",
       logout: "Sign out",
@@ -1450,7 +1486,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   return (
     <LanguageContext.Provider value={value}>
-      <AuthProvider>{children}</AuthProvider>
+      <AuthProvider>
+        <SpoilerProvider>{children}</SpoilerProvider>
+      </AuthProvider>
     </LanguageContext.Provider>
   );
 }

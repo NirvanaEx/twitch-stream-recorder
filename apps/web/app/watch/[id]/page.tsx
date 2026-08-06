@@ -6,8 +6,10 @@ import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
 import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
 import { clearResume, readResume, saveResume } from "../../lib/resume";
+import { readRevealed, saveRevealed, useSpoiler } from "../../lib/spoiler";
 import { useLanguage } from "../../providers";
 import { ChatReplay } from "../../components/ChatReplay";
+import { WatchSkeleton } from "../../components/Skeleton";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
 import { CloudIcon, DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
 
@@ -76,6 +78,7 @@ export default function PublicWatchPage({
 }) {
   const { id } = use(params);
   const { t } = useLanguage();
+  const { spoilerFree } = useSpoiler();
   const [data, setData] = useState<PublicStreamDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<PlayerMode>("normal");
@@ -116,6 +119,21 @@ export default function PublicWatchPage({
   const handleSegmentChange = useCallback((segment: number) => {
     setCurrentPart(segment);
   }, []);
+
+  // How far into this recording the viewer has ever got — the line the
+  // spoiler-free timeline draws its fog behind. Read once, so the player owns
+  // it for the rest of the session, and written back as it advances.
+  const initialRevealedRef = useRef(0);
+  if (initialRevealedRef.current === 0) {
+    initialRevealedRef.current = readRevealed(id);
+  }
+
+  const handleRevealed = useCallback(
+    (seconds: number) => {
+      saveRevealed(id, seconds);
+    },
+    [id],
+  );
 
   // Auto-advance to the next part when the current one finishes (fallback
   // mode only — with a playlist the player handles this internally).
@@ -298,8 +316,8 @@ export default function PublicWatchPage({
 
   if (!data) {
     return (
-      <div className="public-shell">
-        <div className="empty-state">{t.common.loading}</div>
+      <div className="public-shell public-shell--watch">
+        <WatchSkeleton withChat={chatVisible} />
       </div>
     );
   }
@@ -368,13 +386,15 @@ export default function PublicWatchPage({
               <span>
                 {t.archives.recordedAt}: <strong>{formatDate(data.startedAt)}</strong>
               </span>
-              {data.startedAt && data.endedAt ? (
+              {/* Length and file size are two ways of saying the same thing —
+                  how long this evening ran — so spoiler-free drops both. */}
+              {!spoilerFree && data.startedAt && data.endedAt ? (
                 <span>
                   {t.publicSite.durationLabel}:{" "}
                   <strong>{formatPeriod(data.startedAt, data.endedAt)}</strong>
                 </span>
               ) : null}
-              {data.fileSizeBytes ? (
+              {!spoilerFree && data.fileSizeBytes ? (
                 <span>
                   {t.archives.size}: <strong>{formatFileSize(data.fileSizeBytes)}</strong>
                 </span>
@@ -457,6 +477,9 @@ export default function PublicWatchPage({
               timelineStartAt={
                 data.mediaStartedAt ? new Date(data.mediaStartedAt).getTime() : null
               }
+              spoilerFree={spoilerFree}
+              initialRevealedSec={initialRevealedRef.current}
+              onRevealedChange={handleRevealed}
             />
           </div>
         </div>

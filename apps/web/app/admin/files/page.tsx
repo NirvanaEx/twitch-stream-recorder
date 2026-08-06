@@ -11,6 +11,7 @@ import { IconButton } from "../../components/IconButton";
 import { Pagination } from "../../components/Pagination";
 import { PageTabs } from "../../components/PageTabs";
 import { RefreshIcon, TrashIcon } from "../../components/icons";
+import { TableSkeleton } from "../../components/Skeleton";
 
 type DiskFile = {
   path: string;
@@ -233,7 +234,9 @@ export default function FilesPage() {
       {notice ? <div className="notice info">{notice}</div> : null}
 
       {!disk ? (
-        <div className="empty-state">{t.common.loading}</div>
+        <section className="panel">
+          <TableSkeleton rows={6} columns={3} />
+        </section>
       ) : (
         <section className="panel">
           <PageTabs tabs={tabs} active={tab} onChange={setTab} />

@@ -7,11 +7,20 @@ import type { ChatRole } from "./chat-prefs";
  * without importing each other.
  */
 
+/**
+ * Everything but the four fields every message has is optional.
+ *
+ * The API omits fields it has nothing to say about rather than sending
+ * `null` — at ~38 000 messages per broadcast the repeated key names alone
+ * were over half the response. A downloaded bundle (or one made before that
+ * change) still carries the nulls, so both shapes have to read the same.
+ */
 export type ChatMessage = {
   id: string;
   authorLogin: string;
-  authorDisplayName: string | null;
-  authorColor: string | null;
+  /** Absent when it equals the login, which is the common case. */
+  authorDisplayName?: string | null;
+  authorColor?: string | null;
   textRaw: string;
   badges?: string | null;
   /**
@@ -31,8 +40,13 @@ export type ChatMessage = {
   /** Set only on Twitch messages sent while a prediction was open. */
   predictionBet?: { badgeVersion: string; outcomeTitle: string | null } | null;
   relativeTimeSec: number;
-  messageTimestamp: string;
-  isDeleted: boolean;
+  /**
+   * Wall-clock moment of the message. The players place messages by
+   * `relativeTimeSec`, so the online endpoints leave this out; downloaded
+   * bundles keep it.
+   */
+  messageTimestamp?: string;
+  isDeleted?: boolean;
   /**
    * When the deletion happened, on the same timeline as relativeTimeSec — so
    * the replay can strike the message at the moment chat saw it vanish

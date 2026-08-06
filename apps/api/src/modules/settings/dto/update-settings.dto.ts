@@ -36,6 +36,11 @@ export class UpdateSettingsDto {
   @IsBoolean()
   audioTrackEnabled?: boolean;
 
+  // Spoiler-free viewing for anyone who has not set it themselves.
+  @IsOptional()
+  @IsBoolean()
+  spoilerFreeDefault?: boolean;
+
   // Local retention, in days: -1 keep forever, 0 delete right after the
   // Telegram upload, N delete N days after it.
   @IsOptional()

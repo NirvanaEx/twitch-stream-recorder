@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
+import { useSpoiler } from "../lib/spoiler";
 import { waveformHeights } from "../lib/waveform";
 import { useLanguage } from "../providers";
 import { IconButton, IconLink } from "./IconButton";
@@ -59,6 +60,7 @@ export function ArchiveCard({
   onDetails: (archive: ArchiveItem) => void;
 }) {
   const { t } = useLanguage();
+  const { spoilerFree } = useSpoiler();
   const isAudio = archive.audioOnly;
   const duration = archive.durationSec
     ? formatSeconds(archive.durationSec)
@@ -193,7 +195,9 @@ export function ArchiveCard({
           </span>
         ) : null}
 
-        {duration ? <span className="archive-cover-badge">{duration}</span> : null}
+        {!spoilerFree && duration ? (
+          <span className="archive-cover-badge">{duration}</span>
+        ) : null}
       </div>
 
       <div className="archive-card-body">
@@ -212,7 +216,8 @@ export function ArchiveCard({
           <span>
             {archive.startedAt ? new Date(archive.startedAt).toLocaleString() : "—"}
           </span>
-          <span>{size}</span>
+          {/* The file size is the length again, in gigabytes. */}
+          {spoilerFree ? null : <span>{size}</span>}
           {!isAudio && archive.audioAvailable ? <span title={t.archives.hasAudioTrack}>🎧</span> : null}
         </span>
 

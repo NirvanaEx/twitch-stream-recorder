@@ -28,6 +28,7 @@ import {
   TrashIcon,
 } from "../../../components/icons";
 import { clearResume, readResume, saveResume } from "../../../lib/resume";
+import { readRevealed, saveRevealed, useSpoiler } from "../../../lib/spoiler";
 
 type TelegramPart = {
   partIndex: number;
@@ -95,6 +96,7 @@ function readStoredChatPref(): boolean {
 
 export default function ArchiveReplayPage() {
   const { t } = useLanguage();
+  const { spoilerFree } = useSpoiler();
   const params = useParams<{ id: string }>();
   const router = useRouter();
 
@@ -195,6 +197,21 @@ export default function ArchiveReplayPage() {
   const handleSegmentChange = useCallback((segment: number) => {
     setCurrentPart(segment);
   }, []);
+
+  // Furthest point ever reached in this recording — the spoiler-free timeline
+  // draws its fog behind it. Shared storage with the public watch page, so
+  // switching between the two does not reset what has been seen.
+  const initialRevealedRef = useRef(0);
+  if (initialRevealedRef.current === 0) {
+    initialRevealedRef.current = readRevealed(params.id);
+  }
+
+  const handleRevealed = useCallback(
+    (seconds: number) => {
+      saveRevealed(params.id, seconds);
+    },
+    [params.id],
+  );
 
   useEffect(() => {
     setCurrentPart(1);
@@ -484,6 +501,9 @@ export default function ArchiveReplayPage() {
                 title={mode !== "normal" ? playerTitle : undefined}
                 emptyText={t.replay.videoPending}
                 timelineStartAt={mediaStartMs}
+                spoilerFree={spoilerFree}
+                initialRevealedSec={initialRevealedRef.current}
+                onRevealedChange={handleRevealed}
               />
             ) : (
               <div className="vp">
@@ -515,14 +535,16 @@ export default function ArchiveReplayPage() {
             <span title={t.archives.recordedAt}>
               {data?.item.startedAt ? new Date(data.item.startedAt).toLocaleString() : "—"}
             </span>
-            {recordingWindow ? (
+            {/* The recording window and the file size both spell out how long
+                the broadcast ran, so spoiler-free keeps neither. */}
+            {spoilerFree ? null : recordingWindow ? (
               <span title={`${t.replay.recordingWindow} (UTC): ${recordingWindow.utc}`}>
                 {t.replay.recordingWindow}: {recordingWindow.text}
               </span>
             ) : (
               <span>{formatPeriod(data?.item.startedAt, data?.item.endedAt)}</span>
             )}
-            <span>{formatFileSize(data?.item.fileSizeBytes)}</span>
+            {spoilerFree ? null : <span>{formatFileSize(data?.item.fileSizeBytes)}</span>}
 
             {activeSource ? (
               <span className="replay-facts__source">
