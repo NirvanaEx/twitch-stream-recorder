@@ -12,7 +12,10 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg python3 py3-pip \
+# rclone uploads finished recordings to the archive tier. Not a convenience:
+# writing them through the mount stages every byte in its VFS cache, on the
+# same disk the archive is meant to drain (see ArchiveStorageService).
+RUN apk add --no-cache ffmpeg python3 py3-pip rclone \
   && pip3 install --break-system-packages --no-cache-dir streamlink
 
 COPY --from=build /app/package*.json ./
