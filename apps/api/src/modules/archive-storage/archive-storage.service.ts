@@ -1,9 +1,11 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { AppSettings, Channel, StreamSession } from "@prisma/client";
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { computeSessionChatOffsetSec } from "../recording/playback.utils";
@@ -16,6 +18,8 @@ import {
   isArchiveAvailable,
   isUnderDataRoot,
 } from "./archive-paths";
+
+const execFileAsync = promisify(execFile);
 
 const SWEEP_INTERVAL_MS = 60_000;
 
@@ -477,22 +481,107 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
    */
   private async moveFile(source: string, target: string, logPrefix: string): Promise<string> {
     const expected = statSync(source).size;
+    const remote = this.remotePathFor(target);
 
-    await copyFile(source, target);
+    if (remote) {
+      await this.uploadViaRclone(source, remote, expected, logPrefix);
+    } else {
+      await copyFile(source, target);
 
-    const actual = statSync(target).size;
+      const actual = statSync(target).size;
 
-    if (actual !== expected) {
-      // Leave the original alone; the next sweep overwrites the short copy.
-      throw new Error(
-        `Copy of ${source} is truncated: ${actual} of ${expected} bytes reached the archive.`,
-      );
+      if (actual !== expected) {
+        // Leave the original alone; the next sweep overwrites the short copy.
+        throw new Error(
+          `Copy of ${source} is truncated: ${actual} of ${expected} bytes reached the archive.`,
+        );
+      }
     }
 
     rmSync(source, { force: true });
     this.logger.debug(`${logPrefix} moved ${source} -> ${target} (${expected} bytes)`);
 
     return target;
+  }
+
+  /**
+   * Where the same file lives as an rclone path, or null when uploads have to
+   * go through the mount after all (ARCHIVE_RCLONE_REMOTE unset, or a target
+   * outside the archive root).
+   *
+   * Why not just write to the mount. It is mounted --vfs-cache-mode full, so
+   * every byte written through it is first staged in the VFS cache — on the
+   * server's own disk, the very disk the archive exists to empty. Moving a
+   * 25 GB recording therefore demanded 25 GB free, which was missing precisely
+   * because that recording had not moved yet: the copy died with ENOSPC, was
+   * retried hourly, and each attempt ate the last of the free space until the
+   * live captures themselves died with "No space left on device". rclone talks
+   * to Drive directly and streams, so the upload needs no room at all.
+   */
+  private remotePathFor(target: string): string | null {
+    const remoteRoot = process.env.ARCHIVE_RCLONE_REMOTE?.trim().replace(/\/+$/, "");
+    const root = archiveRoot();
+
+    if (!remoteRoot || !root) {
+      return null;
+    }
+
+    const rel = relative(root, target);
+
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+      return null;
+    }
+
+    return `${remoteRoot}/${rel.split(sep).join("/")}`;
+  }
+
+  /**
+   * Upload and verify. rclone checks the transfer against Drive's own checksum
+   * and exits non-zero if it does not match, so a clean exit already means the
+   * copy is whole; the size is read back anyway because the caller's contract
+   * is "the original is deleted only after the archived byte count matches".
+   *
+   * The size is read from the remote rather than through the mount: the file
+   * has just appeared on Drive behind rclone's back, and the mount only learns
+   * about it at the next poll — statSync on the mount path would fail on a copy
+   * that is perfectly fine.
+   */
+  private async uploadViaRclone(
+    source: string,
+    remote: string,
+    expected: number,
+    logPrefix: string,
+  ) {
+    this.logger.log(`${logPrefix} uploading ${source} -> ${remote} (${expected} bytes)`);
+
+    await this.runRclone(["copyto", source, remote]);
+
+    const { stdout } = await this.runRclone(["size", "--json", remote]);
+    const actual = Number((JSON.parse(stdout) as { bytes?: number }).bytes ?? -1);
+
+    if (actual !== expected) {
+      throw new Error(
+        `Copy of ${source} is truncated: ${actual} of ${expected} bytes reached the archive.`,
+      );
+    }
+  }
+
+  private runRclone(args: string[]) {
+    const config = process.env.ARCHIVE_RCLONE_CONFIG?.trim();
+
+    return execFileAsync("rclone", [
+      ...(config ? ["--config", config] : []),
+      // Drive's default 8 MB upload chunk turns a multi-gigabyte recording into
+      // thousands of round trips; 32 MB costs 32 MB of RSS for the duration.
+      "--drive-chunk-size",
+      "32M",
+      // Progress belongs in the log of a human-run copy, not in the container's.
+      "--stats",
+      "0",
+      "--log-level",
+      "ERROR",
+      ...args,
+    ]);
   }
 
   /**
