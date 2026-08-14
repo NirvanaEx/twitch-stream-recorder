@@ -24,7 +24,11 @@ import { buildReplayMessage } from "../chat/replay-message.utils";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
-import { buildMediaCacheHeaders, parseMediaRange } from "../recording/playback.utils";
+import {
+  buildMediaCacheHeaders,
+  parseMediaRange,
+  pipeFileToResponse,
+} from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
 import { ThumbnailService } from "../recording/thumbnail.service";
 import { StreamEventsService } from "../stream-events/stream-events.service";
@@ -273,7 +277,7 @@ export class ArchivesController {
         ...cache.headers,
       });
 
-      createReadStream(absolutePath, { start, end }).pipe(res);
+      pipeFileToResponse(createReadStream(absolutePath, { start, end }), res);
       return;
     }
 
@@ -284,6 +288,6 @@ export class ArchivesController {
       ...cache.headers,
     });
 
-    createReadStream(absolutePath).pipe(res);
+    pipeFileToResponse(createReadStream(absolutePath), res);
   }
 }

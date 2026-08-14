@@ -1,4 +1,5 @@
-import { existsSync, statSync, type Stats } from "node:fs";
+import { existsSync, statSync, type ReadStream, type Stats } from "node:fs";
+import { type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
 
@@ -222,4 +223,28 @@ export function resolvePlaybackParts(session: {
     durationSec: part.durationSec,
     source: "telegram" as const,
   }));
+}
+
+/**
+ * Send a file to the client and hang up cleanly when the client does.
+ *
+ * `createReadStream(...).pipe(res)` looks complete and is not: pipe carries
+ * data forwards, never the client's disappearance backwards. A player that
+ * opens a range request and cancels it — which every browser does constantly
+ * while seeking — leaves the read stream open on a file nobody is reading.
+ * Deleting that file then frees no space at all: the kernel keeps its blocks
+ * until the last descriptor closes, so `df` stays full while `du` says the
+ * recording is gone. On 13.08.2026 five such descriptors held 26 GB hostage.
+ */
+export function pipeFileToResponse(stream: ReadStream, res: ServerResponse) {
+  const close = () => {
+    if (!stream.destroyed) {
+      stream.destroy();
+    }
+  };
+
+  res.once("close", close);
+  stream.once("end", () => res.off("close", close));
+
+  stream.pipe(res);
 }
