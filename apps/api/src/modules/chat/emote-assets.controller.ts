@@ -1,6 +1,7 @@
 import { Controller, Get, NotFoundException, Param, Res } from "@nestjs/common";
 import { createReadStream, statSync } from "node:fs";
 import { AllowAnonymous } from "../auth/auth.decorators";
+import { pipeFileToResponse } from "../recording/playback.utils";
 import { EmoteMirrorService } from "./emote-mirror.service";
 
 /**
@@ -30,6 +31,6 @@ export class EmoteAssetsController {
       "Access-Control-Allow-Origin": "*",
     });
 
-    createReadStream(absolutePath).pipe(res);
+    pipeFileToResponse(createReadStream(absolutePath), res);
   }
 }

@@ -61,6 +61,11 @@ type ActiveRecording = {
   // Last metadata sample, kept in memory so the 15s poll does not read the
   // table back just to decide whether anything changed.
   lastMeta: { title: string | null; categoryName: string | null; atSec: number } | null;
+  // Everything that has to happen once the capture stops: join or remux, then
+  // finalize. The lifecycle normally reaches it through the processes' exit
+  // events; the watchdog needs the same door when those never arrive.
+  conclude: (() => Promise<void>) | null;
+  concluding: boolean;
 };
 
 type ChunkedCapture = {
@@ -117,6 +122,25 @@ const OFFLINE_MISS_THRESHOLD = 3;
 // keeps failing instantly, while still allowing the recorder to resume the
 // stream after a crash, restart, or transient failure.
 const RESTART_COOLDOWN_MS = 60_000;
+
+/**
+ * Is this child still running? Node's own exitCode/signalCode answer only if
+ * the "exit" event was actually delivered, and the watchdog above exists
+ * precisely for the case where it was not — so the kernel gets the last word.
+ */
+function isProcessAlive(child: ChildProcess | null): boolean {
+  if (!child || child.exitCode !== null || child.signalCode !== null || !child.pid) {
+    return false;
+  }
+
+  try {
+    // Signal 0 performs the permission and existence checks without sending.
+    process.kill(child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Free space the data disk must have before a capture may start. A recording
 // needs room for the streamlink .ts AND the remuxed .mp4 at the same time, so
@@ -215,6 +239,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Channel ${channelId} was not found.`);
     }
 
+    // Before anything is decided about this channel: a capture whose processes
+    // are gone is not a recording, however alive it still looks in memory.
+    await this.concludeIfCaptureIsGone(channel.id);
+
     const liveStream = await this.platformsService.getLiveStream(channel.platform, {
       userId: channel.twitchUserId,
       login: channel.twitchLogin,
@@ -297,6 +325,53 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     return liveStream;
+  }
+
+  /**
+   * Finish a capture whose processes are gone but whose "exit" never arrived.
+   *
+   * The whole tail of a recording — the join, the finalize, the entry in
+   * activeRecordings — hangs off those events, and one of them can go missing:
+   * when the disk filled on 11.08.2026 the chunker died while nothing was
+   * listening for it yet (that listener is attached only once streamlink
+   * exits), so the session stayed "recording" for two days. The panel showed a
+   * broadcast that had ended, `stopRecording` politely killed a process that
+   * was already dead, and the channel was never recorded again because it
+   * still counted as busy.
+   *
+   * Asking the kernel whether the pid is alive is the one check that no lost
+   * event can defeat.
+   */
+  private async concludeIfCaptureIsGone(channelId: string) {
+    const activeRecording = this.activeRecordings.get(channelId);
+
+    if (!activeRecording?.conclude || activeRecording.concluding) {
+      return;
+    }
+
+    const stillCapturing =
+      isProcessAlive(activeRecording.streamlinkProcess) ||
+      isProcessAlive(activeRecording.chunks?.ffmpegProcess ?? null) ||
+      isProcessAlive(activeRecording.remuxProcess);
+
+    if (stillCapturing) {
+      return;
+    }
+
+    this.logger.warn(
+      `[${activeRecording.sessionId}] the capture processes are gone but the recording never ` +
+        `finished; concluding it now.`,
+    );
+
+    try {
+      await activeRecording.conclude();
+    } catch (error) {
+      this.logger.warn(
+        `[${activeRecording.sessionId}] concluding the abandoned capture failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
@@ -531,6 +606,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       stopRequested: false,
       captureAnchor,
       lastMeta: null,
+      conclude: null,
+      concluding: false,
     };
 
     this.activeRecordings.set(channel.id, activeRecording);
@@ -643,6 +720,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         stoppedByUser,
       },
     });
+
+    // A live capture is finished by the exit event the SIGTERM above will
+    // produce. One that is already dead has no event left to give: without
+    // this, stopping it would report success and change nothing at all.
+    void this.concludeIfCaptureIsGone(channelId);
 
     if (stoppedByUser) {
       await this.prisma.channel.update({
@@ -1182,6 +1264,59 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     const capture = activeRecording.chunks;
 
+    /**
+     * The tail of a capture: from "the processes have stopped" to a finished
+     * session. One function because two doors lead here — the exit events
+     * below, and the watchdog, for a capture whose processes died without ever
+     * delivering one.
+     */
+    const conclude = async () => {
+      if (activeRecording.concluding) {
+        return;
+      }
+
+      activeRecording.concluding = true;
+
+      // The last write to the capture IS its end. The watchdog arrives long
+      // after the fact, so the wall clock would put the recording's end at the
+      // moment the failure was noticed and shift the whole chat replay with it.
+      if (!captureEndedAt) {
+        captureEndedAt =
+          (capture ? lastChunkModifiedAt(capture.dir) : null) ??
+          (existsSync(activeRecording.tsPath) ? statSync(activeRecording.tsPath).mtime : null) ??
+          new Date();
+      }
+
+      if (!capture) {
+        await this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
+        return;
+      }
+
+      if (capture.pollTimer) {
+        clearInterval(capture.pollTimer);
+        capture.pollTimer = null;
+      }
+
+      if (capture.live) {
+        await this.collectClosedSegments(session.id, capture, logPrefix);
+        await finalize(capture.seen.size > 0 ? "completed" : "error");
+        return;
+      }
+
+      // The broadcast is over, so this is where the cutting is undone: the
+      // pieces become the one continuous .mp4 the player, Telegram and the
+      // archive all get to see.
+      const joined = await this.joinCaptureChunks(
+        capture.dir,
+        activeRecording.outputPath,
+        logPrefix,
+      );
+
+      await finalize(joined ? "completed" : "error");
+    };
+
+    activeRecording.conclude = conclude;
+
     if (capture?.live) {
       // Poll ffmpeg's manifest while the broadcast runs so each closed chunk
       // starts its journey to Telegram and the archive immediately.
@@ -1201,7 +1336,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`${logPrefix} streamlink exited with code ${String(code)}`);
 
       if (!capture) {
-        void this.runRemuxAndFinalize(channel, session, activeRecording, finalize);
+        void conclude();
         return;
       }
 
@@ -1212,30 +1347,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
       capture.ffmpegProcess.once("exit", (ffmpegCode) => {
         this.logger.log(`${logPrefix} ffmpeg chunker exited with code ${String(ffmpegCode)}`);
-
-        if (capture.pollTimer) {
-          clearInterval(capture.pollTimer);
-          capture.pollTimer = null;
-        }
-
-        void (async () => {
-          if (capture.live) {
-            await this.collectClosedSegments(session.id, capture, logPrefix);
-            await finalize(capture.seen.size > 0 ? "completed" : "error");
-            return;
-          }
-
-          // The broadcast is over, so this is where the cutting is undone:
-          // the pieces become the one continuous .mp4 the player, Telegram
-          // and the archive all get to see.
-          const joined = await this.joinCaptureChunks(
-            capture.dir,
-            activeRecording.outputPath,
-            logPrefix,
-          );
-
-          await finalize(joined ? "completed" : "error");
-        })();
+        void conclude();
       });
     });
 

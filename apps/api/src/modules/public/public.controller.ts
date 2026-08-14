@@ -29,6 +29,7 @@ import {
   buildMediaCacheHeaders,
   computeSessionChatOffsetSec,
   parseMediaRange,
+  pipeFileToResponse,
   resolvePlaybackParts,
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
@@ -540,7 +541,7 @@ export class PublicStreamsController {
         "Content-Type": "audio/mp4",
         ...cache.headers,
       });
-      createReadStream(absolutePath, { start, end }).pipe(res);
+      pipeFileToResponse(createReadStream(absolutePath, { start, end }), res);
       return;
     }
 
@@ -550,7 +551,7 @@ export class PublicStreamsController {
       "Accept-Ranges": "bytes",
       ...cache.headers,
     });
-    createReadStream(absolutePath).pipe(res);
+    pipeFileToResponse(createReadStream(absolutePath), res);
   }
 
   @Get(":id")
@@ -860,7 +861,7 @@ export class PublicStreamsController {
         "Content-Type": contentType,
         ...cache.headers,
       });
-      createReadStream(absolutePath, { start, end }).pipe(res);
+      pipeFileToResponse(createReadStream(absolutePath, { start, end }), res);
       return;
     }
 
@@ -870,6 +871,6 @@ export class PublicStreamsController {
       "Accept-Ranges": "bytes",
       ...cache.headers,
     });
-    createReadStream(absolutePath).pipe(res);
+    pipeFileToResponse(createReadStream(absolutePath), res);
   }
 }
