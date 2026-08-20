@@ -33,6 +33,7 @@ import {
   removeChunkDir,
 } from "./chunk-join";
 import { parseSegmentManifest } from "./segment-manifest.utils";
+import { decideCaptureRestart, type PreviousAttempt } from "./restart-policy";
 import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 import { TwitchEventsService } from "../stream-events/twitch-events.service";
@@ -117,11 +118,47 @@ const SEGMENT_POLL_MS = 5_000;
 // that is actually live; stopping on the first miss truncates recordings.
 const OFFLINE_MISS_THRESHOLD = 3;
 
-// Cooldown before re-recording the same twitchStreamId after the previous
-// session ended. Prevents a tight create-session/error loop when streamlink
-// keeps failing instantly, while still allowing the recorder to resume the
-// stream after a crash, restart, or transient failure.
-const RESTART_COOLDOWN_MS = 60_000;
+// How often to re-probe for streamlink/ffmpeg after they were found missing,
+// so installing them does not require restarting the API.
+const DEPENDENCY_RECHECK_MS = 60_000;
+
+// How many previous attempts at the same broadcast the restart policy looks
+// at. It only needs enough to see how long the current streak of empty
+// captures is, and the backoff table tops out well before this.
+const RESTART_HISTORY_DEPTH = 10;
+
+/**
+ * Flags that keep one broadcast inside one capture.
+ *
+ * Without them streamlink exits the moment anything goes wrong — and its exit
+ * is what this service reads as "the broadcast is over". Two things followed.
+ * At the top of a broadcast Helix flips to "live" before the HLS playlist is
+ * published, so the capture found nothing and died in about a second, and the
+ * real recording only began once the restart cooldown had passed: 94 seconds
+ * of the stream lost on 15.08.2026, and again on 06.08.2026. Mid-broadcast, a
+ * reload or a segment that failed more than the default three times ended the
+ * capture outright, and the archive got the broadcast as several entries with
+ * minutes missing between them (05.08.2026, four pieces, ~15 minutes gone).
+ *
+ * The numbers are deliberately bounded rather than infinite: a capture that
+ * cannot recover within roughly a minute is treated as a finished broadcast,
+ * which is what the restart policy then reasons about.
+ */
+const STREAMLINK_RESILIENCE_ARGS = [
+  // Opening: wait for a playlist that is seconds away from existing (~60 s).
+  "--retry-streams",
+  "4",
+  "--retry-max",
+  "15",
+  "--retry-open",
+  "3",
+  // Mid-stream: survive a reload or a segment that stumbles. The defaults are
+  // 3 and 3, which a single ad break or network blip can spend.
+  "--hls-playlist-reload-attempts",
+  "10",
+  "--stream-segment-attempts",
+  "5",
+];
 
 /**
  * Is this child still running? Node's own exitCode/signalCode answer only if
@@ -165,6 +202,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RecordingService.name);
   private readonly activeRecordings = new Map<string, ActiveRecording>();
   private readonly offlineMisses = new Map<string, number>();
+  /**
+   * Captures that were thrown away for producing nothing, per broadcast.
+   *
+   * `discardFruitlessSession` deletes the row, which also deletes the evidence
+   * that the attempt happened — and the restart policy backs off by counting
+   * exactly those attempts. Without this the recorder would try, discard, find
+   * a clean history, and try again for as long as Twitch kept the broadcast
+   * marked live. Memory is the right home for it: it describes one broadcast
+   * happening now, and losing it in a restart costs one extra attempt.
+   */
+  private readonly discardedAttempts = new Map<string, { count: number; endedAt: number }>();
   private monitorTimer: NodeJS.Timeout | null = null;
   private dependenciesReady = false;
   private dependenciesError: string | null = null;
@@ -209,7 +257,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     // If dependencies were missing at boot (e.g. streamlink installed after
     // the API started), re-probe periodically instead of staying disabled
     // until a manual restart.
-    if (!this.dependenciesReady && Date.now() - this.lastDependencyCheckAt > RESTART_COOLDOWN_MS) {
+    if (!this.dependenciesReady && Date.now() - this.lastDependencyCheckAt > DEPENDENCY_RECHECK_MS) {
       await this.checkRecordingDependencies();
     }
 
@@ -307,6 +355,12 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // Off the air, the failures of the broadcast that just ended are history:
+    // the next one gets a clean slate (and its own twitchStreamId anyway).
+    if (!liveStream) {
+      this.forgetDiscardedAttempts(channel.id, null);
+    }
+
     if (!liveStream && isRecording) {
       // Tolerate a few consecutive misses before stopping: Twitch sometimes
       // reports a live stream as offline for a single poll, and stopping
@@ -376,37 +430,49 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Decide whether the auto-recorder should (re)start a recording for the
-   * given live stream. Previously any session with the same twitchStreamId
-   * blocked auto-record permanently — so a crashed/interrupted recording was
-   * never resumed for the rest of the stream. Now only an in-progress
-   * session (or a very recent attempt) blocks it.
+   * given live stream. Any session with the same twitchStreamId once blocked
+   * auto-record permanently, so a crashed recording was never resumed for the
+   * rest of the broadcast; the fix for that then swung the other way and
+   * restarted a capture the instant the previous one closed, which is how one
+   * broadcast turned into several archive entries. `decideCaptureRestart`
+   * holds the rule that replaced both — see restart-policy.ts.
    */
   private async shouldAutoRecordStream(channelId: string, twitchStreamId: string | null) {
     if (!twitchStreamId) {
       return true;
     }
 
-    const lastSession = await this.prisma.streamSession.findFirst({
+    const stored = await this.prisma.streamSession.findMany({
       where: { channelId, twitchStreamId },
       orderBy: { createdAt: "desc" },
-      select: { status: true, createdAt: true, stoppedByUser: true },
+      take: RESTART_HISTORY_DEPTH,
+      select: {
+        status: true,
+        createdAt: true,
+        endedAt: true,
+        stoppedByUser: true,
+        fileSizeBytes: true,
+      },
     });
 
-    if (!lastSession) {
-      return true;
+    const verdict = decideCaptureRestart({
+      now: Date.now(),
+      attempts: [
+        ...this.replayDiscardedAttempts(channelId, twitchStreamId),
+        ...stored,
+      ],
+    });
+
+    if (!verdict.restart) {
+      // Debug, not warn: on a channel that has just finished a broadcast this
+      // is the expected answer on every 15-second poll until Helix catches up.
+      this.logger.debug(
+        `Not restarting the capture of stream ${twitchStreamId}: ${verdict.reason}` +
+          `${verdict.retryInMs > 0 ? ` (rechecking in ${Math.ceil(verdict.retryInMs / 1000)}s)` : ""}.`,
+      );
     }
 
-    if (lastSession.status === "recording") {
-      return false;
-    }
-
-    // Manual stop is handled separately via manualStopUntilOffline, but keep
-    // a guard here in case that flag was reset while the stream stayed live.
-    if (lastSession.stoppedByUser) {
-      return false;
-    }
-
-    return Date.now() - lastSession.createdAt.getTime() > RESTART_COOLDOWN_MS;
+    return verdict.restart;
   }
 
   async startRecording(channelId: string, trigger: "automatic" | "manual" = "manual") {
@@ -545,6 +611,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         ...streamlinkCommand.args,
         "--force",
         "--hls-live-restart",
+        ...STREAMLINK_RESILIENCE_ARGS,
         "--stream-segment-threads",
         "2",
         "--loglevel",
@@ -916,8 +983,20 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Chat messages and emote snapshots reference the session without a
-    // foreign key, so they must be removed explicitly or they leak.
+    await this.deleteSessionRow(id);
+
+    return { ok: true };
+  }
+
+  /**
+   * Delete a session row and everything in the database that hangs off it.
+   *
+   * Chat messages, emote snapshots, metadata points and events reference the
+   * session by id but WITHOUT a foreign key, so the database will not cascade
+   * for them: dropping the row alone leaves them behind as rows nothing can
+   * ever reach again. Only RecordingSegment and TelegramUploadPart cascade.
+   */
+  private async deleteSessionRow(id: string) {
     await this.prisma.chatMessage.deleteMany({
       where: { streamSessionId: id },
     });
@@ -944,8 +1023,6 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.streamSession.delete({
       where: { id },
     });
-
-    return { ok: true };
   }
 
   /**
@@ -1193,26 +1270,46 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : await this.probeDurationSec(activeRecording.outputPath)
           : null;
 
-      await this.prisma.streamSession.update({
-        where: { id: session.id },
-        data: {
-          endedAt: new Date(),
-          status: finalStatus,
-          videoStatus: finalStatus === "completed" ? "ready" : "error",
-          replayStatus: finalStatus === "completed" ? "ready" : "error",
-          isLive: false,
-          fileSizeBytes: String(fileSizeBytes),
-          errorMessage,
-          ...(fileSizeBytes === 0 && leftoverChunks === 0
-            ? { recordingPath: null, playbackPath: null }
-            : {}),
-          ...(audio
-            ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
-            : {}),
-          ...(durationSec ? { durationSec } : {}),
-          ...(captureEndedAt ? { captureEndedAt } : {}),
-        },
-      });
+      // An automatic capture that came back empty-handed is not a failure worth
+      // keeping: it is the recorder having tried a broadcast that had already
+      // ended, which Twitch keeps reporting as live for up to a minute or two
+      // after the fact. Seventeen such rows had piled up by 20.08.2026. They
+      // are invisible in the archive (no playbackPath), so all they ever did
+      // was make the history unreadable — and the restart policy is free to
+      // retry promptly precisely because this attempt costs nothing.
+      const discarded =
+        fileSizeBytes === 0 &&
+        leftoverChunks === 0 &&
+        (await this.discardFruitlessSession(session.id, channel.id, logPrefix));
+
+      // A capture that produced something clears the slate: whatever kept the
+      // earlier attempts empty is over.
+      if (fileSizeBytes > 0) {
+        this.forgetDiscardedAttempts(channel.id, session.twitchStreamId);
+      }
+
+      if (!discarded) {
+        await this.prisma.streamSession.update({
+          where: { id: session.id },
+          data: {
+            endedAt: new Date(),
+            status: finalStatus,
+            videoStatus: finalStatus === "completed" ? "ready" : "error",
+            replayStatus: finalStatus === "completed" ? "ready" : "error",
+            isLive: false,
+            fileSizeBytes: String(fileSizeBytes),
+            errorMessage,
+            ...(fileSizeBytes === 0 && leftoverChunks === 0
+              ? { recordingPath: null, playbackPath: null }
+              : {}),
+            ...(audio
+              ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
+              : {}),
+            ...(durationSec ? { durationSec } : {}),
+            ...(captureEndedAt ? { captureEndedAt } : {}),
+          },
+        });
+      }
 
       try {
         await this.prisma.channel.update({
@@ -1354,6 +1451,128 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     activeRecording.streamlinkProcess.once("error", (error) => {
       this.logger.warn(`${logPrefix} streamlink failed: ${error.message}`);
     });
+  }
+
+  private discardedAttemptsKey(channelId: string, twitchStreamId: string) {
+    return `${channelId}:${twitchStreamId}`;
+  }
+
+  /**
+   * The discarded captures of this broadcast, in the shape the restart policy
+   * reads — newest first, and capped at the depth the backoff table can use.
+   */
+  private replayDiscardedAttempts(
+    channelId: string,
+    twitchStreamId: string,
+  ): PreviousAttempt[] {
+    const discarded = this.discardedAttempts.get(
+      this.discardedAttemptsKey(channelId, twitchStreamId),
+    );
+
+    if (!discarded) {
+      return [];
+    }
+
+    const endedAt = new Date(discarded.endedAt);
+
+    return Array.from({ length: Math.min(discarded.count, RESTART_HISTORY_DEPTH) }, () => ({
+      status: "error",
+      createdAt: endedAt,
+      endedAt,
+      stoppedByUser: false,
+      fileSizeBytes: "0",
+    }));
+  }
+
+  /** Forget the failures of a broadcast that is over, or has been captured. */
+  private forgetDiscardedAttempts(channelId: string, twitchStreamId: string | null) {
+    if (twitchStreamId) {
+      this.discardedAttempts.delete(this.discardedAttemptsKey(channelId, twitchStreamId));
+      return;
+    }
+
+    // No id to key on (a platform that reports none): drop everything this
+    // channel accumulated rather than leaking entries for it.
+    for (const key of this.discardedAttempts.keys()) {
+      if (key.startsWith(`${channelId}:`)) {
+        this.discardedAttempts.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Remove a session whose capture produced nothing and gathered nothing.
+   *
+   * Everything that could make such a session worth keeping is checked first,
+   * because "no video" is not the same as "no record of the broadcast":
+   *
+   * - a capture started by hand stays, error and all — somebody is watching
+   *   the panel for the answer and deleting the row would answer nothing;
+   * - chat messages are a recording in their own right. One 0-byte session
+   *   holds 33 737 of them: the video failed, the chat replay did not;
+   * - closed segments mean pieces of the broadcast exist on disk.
+   *
+   * @returns whether the row was actually removed.
+   */
+  private async discardFruitlessSession(
+    sessionId: string,
+    channelId: string,
+    logPrefix: string,
+  ): Promise<boolean> {
+    try {
+      const [session, chatMessages, segments] = await Promise.all([
+        this.prisma.streamSession.findUnique({
+          where: { id: sessionId },
+          select: { stoppedByUser: true, recordingSource: true, twitchStreamId: true },
+        }),
+        this.prisma.chatMessage.count({ where: { streamSessionId: sessionId } }),
+        this.prisma.recordingSegment.count({ where: { streamSessionId: sessionId } }),
+      ]);
+
+      if (
+        !session ||
+        session.stoppedByUser ||
+        session.recordingSource !== "automatic" ||
+        chatMessages > 0 ||
+        segments > 0
+      ) {
+        return false;
+      }
+
+      // The capture gathered no chat, but a 7TV snapshot is taken the moment a
+      // session starts and the metadata sampler may have got a point in, so
+      // this goes through the same full cleanup a manual delete does.
+      await this.deleteSessionRow(sessionId);
+
+      // Remember the attempt the deleted row can no longer testify to, so the
+      // restart policy still backs off instead of retrying in a tight loop.
+      if (session.twitchStreamId) {
+        const key = this.discardedAttemptsKey(channelId, session.twitchStreamId);
+        const previous = this.discardedAttempts.get(key);
+
+        this.discardedAttempts.set(key, {
+          count: (previous?.count ?? 0) + 1,
+          endedAt: Date.now(),
+        });
+      }
+
+      this.logger.log(
+        `${logPrefix} the capture produced nothing and gathered no chat; the session was discarded ` +
+          `(the broadcast had most likely already ended).`,
+      );
+
+      return true;
+    } catch (error) {
+      // Keeping an empty session is harmless — it is invisible in the archive
+      // either way — so a failure here must never break finishing the capture.
+      this.logger.warn(
+        `${logPrefix} could not discard the empty session: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+
+      return false;
+    }
   }
 
   private async runRemuxAndFinalize(
