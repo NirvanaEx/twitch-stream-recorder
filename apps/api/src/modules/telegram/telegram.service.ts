@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { statfs } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { Api } from "telegram";
-import { isArchiveAvailable, isUnderDataRoot } from "../archive-storage/archive-paths";
+import { archiveRoot, isArchiveAvailable, isUnderDataRoot } from "../archive-storage/archive-paths";
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
@@ -1184,6 +1184,27 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Prisma filter that leaves out recordings already living on the archive
+   * tier, for the two local-retention sweeps below.
+   *
+   * They can never delete anything there — `isDeletableLocalCopy` refuses a
+   * path outside the data root — but without this they re-examined every
+   * archived recording on every pass and wrote a DEBUG line for each. That was
+   * around forty lines a sweep, which is what rotated streamlink's own
+   * diagnostics out of a 10 MB container log within a day and left the capture
+   * failures of 05.08.2026 unexplainable after the fact.
+   *
+   * Paths are matched rather than resolved because the sweeps run in SQL; every
+   * stored path is absolute, and one that somehow is not simply stays in the
+   * candidate set and is rejected in code as before.
+   */
+  private notOnArchiveTier(field: "playbackPath" | "audioPath") {
+    const root = archiveRoot();
+
+    return root ? { NOT: { [field]: { startsWith: `${root}/` } } } : {};
+  }
+
+  /**
    * "Uploaded at least keepDays ago" boundary. A negative value means "keep
    * the local copy forever" and is reported as null.
    */
@@ -1208,6 +1229,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         localFileDeletedAt: null,
         telegramUploadedAt: { lte: cutoff },
         playbackPath: { not: null },
+        ...this.notOnArchiveTier("playbackPath"),
       },
     });
 
@@ -1269,6 +1291,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         // Never drop a local track Telegram does not hold yet.
         telegramAudioMessageId: { not: null },
         telegramAudioUploadedAt: { lte: cutoff },
+        ...this.notOnArchiveTier("audioPath"),
       },
       take: 50,
     });
