@@ -81,6 +81,7 @@ export function buildTwitchAudioPayload(origin: string): string {
   var vodChannelLogin = '';
   var chatMessages = []; // merged from all sessions of the broadcast, sorted
   var chatEmoteMap = {}; // 7tv name -> url (из снапшота записи)
+  var chatAuthors = {}; // ник и отображаемое имя -> { login, name, color }
   var chatDeletedCount = 0;
   var chatLoadedKey = '';
   var chatLoading = false;
@@ -2397,6 +2398,8 @@ export function buildTwitchAudioPayload(origin: string): string {
                 isDeleted: Boolean(msgs[m].isDeleted),
                 vodTime: 0,
               });
+              rememberChatAuthor(
+                msgs[m].authorLogin, msgs[m].authorDisplayName, msgs[m].authorColor);
             }
           } catch (e) {}
           step();
@@ -2723,6 +2726,7 @@ export function buildTwitchAudioPayload(origin: string): string {
           isDeleted: Boolean(msg.isDeleted),
           vodTime: 0,
         });
+        rememberChatAuthor(msg.authorLogin, msg.authorDisplayName, msg.authorColor);
         if (msg.isDeleted) chatDeletedCount += 1;
       }
     }
@@ -3007,6 +3011,8 @@ export function buildTwitchAudioPayload(origin: string): string {
       '.tsr-chat-ts:hover{opacity:1 !important;color:#bf94ff;}' +
       '.tsr-chat-nick{cursor:pointer;}' +
       '.tsr-chat-nick:hover{text-decoration:underline;}' +
+      '.tsr-chat-mention{cursor:pointer;}' +
+      '.tsr-chat-mention:hover{text-decoration:underline;filter:brightness(1.25);}' +
       '.tsr-btn{transition:background 0.12s,transform 0.05s;}' +
       '.tsr-btn:hover{filter:brightness(1.25);}' +
       '.tsr-btn:active{transform:scale(0.96);}';
@@ -3067,41 +3073,114 @@ export function buildTwitchAudioPayload(origin: string): string {
     parent.appendChild(img);
   }
 
+  // Ник, который упомянули: от него в тексте остаётся одно слово, а цвет и
+  // регистр имени живут в собственных сообщениях человека. Заодно
+  // запоминаем отображаемое имя отдельным ключом: Twitch разрешает
+  // нелатинские display name, и в чате тегают именно их, а не логин.
+  function rememberChatAuthor(login, name, color) {
+    if (!login) return;
+    var key = String(login).toLowerCase();
+    var known = Object.prototype.hasOwnProperty.call(chatAuthors, key) ? chatAuthors[key] : null;
+    // Цвет в чате есть не у каждого сообщения, поэтому запись с цветом не
+    // перезаписываем бесцветной.
+    if (known && known.color) return;
+    var info = {
+      login: key,
+      name: name || login,
+      color: color || (known && known.color) || '',
+    };
+    chatAuthors[key] = info;
+    var alias = String(name || '').toLowerCase();
+    if (alias && alias !== key) chatAuthors[alias] = info;
+  }
+
+  function chatAuthorInfo(typed) {
+    var key = String(typed || '').toLowerCase();
+    if (!key) return null;
+    return Object.prototype.hasOwnProperty.call(chatAuthors, key) ? chatAuthors[key] : null;
+  }
+
+  // Само упоминание: выделено, как в Twitch, и по клику открывает
+  // историю того, кого упомянули — ту же, что и клик по нику автора.
+  //
+  // Текст остаётся тем, что набрали: чат — это запись, подменять в нём
+  // написание на каноническое нельзя. Из справочника берём только цвет и
+  // настоящий логин для поиска сообщений.
+  function appendChatMention(parent, typed) {
+    var info = chatAuthorInfo(typed);
+    var mention = el('span', {
+      color: (info && readableColor(info.color)) || '#bf94ff',
+      background: 'rgba(145,71,255,0.2)',
+      borderRadius: '3px',
+      padding: '0 3px',
+      fontWeight: '600',
+    }, '@' + typed);
+    mention.className = 'tsr-chat-mention';
+    mention.title = 'История сообщений пользователя';
+    mention.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      openUserHistory(
+        info ? info.login : String(typed).toLowerCase(),
+        info ? info.name : typed,
+        info ? info.color : '',
+      );
+    });
+    parent.appendChild(mention);
+  }
+
+  // Хвост вроде запятой после ника остаётся обычным текстом. Тот же
+  // шаблон, что и в веб-панели (chat-render.ts), чтобы два чата выделяли одно и то же.
+  var MENTION_RE = /^@([\\p{L}\\p{N}_.-]{1,32})([\\s\\S]*)$/u;
+
   // Кусок обычного текста: слова, совпадающие с 7tv-эмоутами из снапшота
-  // записи, заменяются картинками. Только текстовые узлы — без innerHTML.
+  // записи, становятся картинками, ссылки — ссылками, @упоминания —
+  // кликабельным ником. Только текстовые узлы — без innerHTML.
   function appendChatText(parent, str) {
     if (!str) return;
     var parts = str.split(/(\\s+)/);
     var buf = '';
+
+    function flush() {
+      if (!buf) return;
+      parent.appendChild(document.createTextNode(buf));
+      buf = '';
+    }
+
     for (var i = 0; i < parts.length; i++) {
-      var hit = parts[i] && Object.prototype.hasOwnProperty.call(chatEmoteMap, parts[i])
-        ? chatEmoteMap[parts[i]]
+      var part = parts[i];
+      var hit = part && Object.prototype.hasOwnProperty.call(chatEmoteMap, part)
+        ? chatEmoteMap[part]
         : null;
       if (hit) {
-        if (buf) {
-          parent.appendChild(document.createTextNode(buf));
-          buf = '';
-        }
-        appendChatEmote(parent, hit, parts[i]);
-      } else if (parts[i] &&
-          (parts[i].indexOf('http://') === 0 || parts[i].indexOf('https://') === 0)) {
-        if (buf) {
-          parent.appendChild(document.createTextNode(buf));
-          buf = '';
-        }
+        flush();
+        appendChatEmote(parent, hit, part);
+        continue;
+      }
+      if (part && (part.indexOf('http://') === 0 || part.indexOf('https://') === 0)) {
+        flush();
         var link = document.createElement('a');
-        link.href = parts[i];
-        link.textContent = parts[i];
+        link.href = part;
+        link.textContent = part;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.style.color = '#bf94ff';
         link.style.textDecoration = 'underline';
         parent.appendChild(link);
-      } else {
-        buf += parts[i];
+        continue;
       }
+      var mention = part && part.charAt(0) === '@' && part.length > 1
+        ? MENTION_RE.exec(part)
+        : null;
+      if (mention) {
+        flush();
+        appendChatMention(parent, mention[1]);
+        buf += mention[2];
+        continue;
+      }
+      buf += part;
     }
-    if (buf) parent.appendChild(document.createTextNode(buf));
+
+    flush();
   }
 
   function appendChatBody(parent, m) {

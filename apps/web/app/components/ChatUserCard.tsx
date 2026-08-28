@@ -27,6 +27,8 @@ type Props = {
   copy: ChatCopy;
   locale: "ru" | "en";
   onClose: () => void;
+  /** Open the history of whoever a message mentions, without leaving the card. */
+  onMentionClick?: (name: string) => void;
   /** Seek the player to a message, given its whole-stream time. */
   onSeek: (relativeTimeSec: number) => void;
   /**
@@ -59,6 +61,7 @@ export function ChatUserCard({
   copy,
   locale,
   onClose,
+  onMentionClick,
   onSeek,
   canSeek,
   toRenderTime,
@@ -287,6 +290,8 @@ export function ChatUserCard({
                     twitchEmotes={message.emotes}
                     inlineEmotes={message.inlineEmotes}
                     emotePx={Math.min(emotePx, 24)}
+                    onMentionClick={onMentionClick}
+                    mentionTitle={copy.userCardTitle}
                   />
                 </span>
               </button>

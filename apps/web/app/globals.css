@@ -2544,6 +2544,16 @@ textarea {
   background: #facc15;
 }
 
+/* Clickable only where a handler was passed — role="button" marks exactly that. */
+.chat-mention[role="button"] {
+  cursor: pointer;
+}
+
+.chat-mention[role="button"]:hover {
+  filter: brightness(1.15);
+  text-decoration: underline;
+}
+
 .chat-badge--subscriber { background: #8b5cf6; }
 .chat-badge--verified { background: #3b82f6; }
 .chat-badge--staff { background: #f59e0b; color: #1f1300; }
