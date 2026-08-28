@@ -148,14 +148,34 @@ export function buildTwitchAudioPayload(origin: string): string {
     {
       id: 'seekbar',
       label: 'Шкала',
-      hint: 'Полоса перемотки, общая длительность и превью кадров. Текущее ' +
-        'время остаётся: где ты сейчас — не спойлер, спойлер — сколько осталось.',
-      selectors: [
-        '[data-a-target="player-seekbar"]',
-        '[data-a-target="player-seekbar-duration"]',
-        '[data-test-selector="seekbar-segment__segment"]',
-        '[class*="seekbar-preview"]',
-        '[class*="seek-preview"]',
+      hint: 'Шкала остаётся на месте и выглядит как обычно, но не говорит, ' +
+        'сколько пройдено и сколько осталось. Текущее время не прячем: где ' +
+        'ты сейчас — не спойлер, спойлер — сколько впереди.',
+      // Единственная группа со своими правилами, а не с размытием.
+      //
+      // Размытая шкала выглядит поломкой, да и прятать её незачем: спойлер
+      // тут не сама полоса, а пропорция — ползунок на четверти говорит, что
+      // впереди ещё втрое больше. Поэтому полоса остаётся, но перестаёт быть
+      // картинкой записи: сегменты скрываются, а поверх кладётся ровная
+      // заливка во всю ширину. Получается как у живого эфира — видно, что
+      // шкала есть, и ничего о том, сколько её.
+      //
+      // Это упрощение того, что делает свой проигрыватель: там полоса
+      // становится картинкой пройденного пути, а справа фиксированная
+      // полоска тумана. Здесь так не выйдет — шкалу рисует Twitch, и её
+      // геометрия остаётся его. Перемотка кликом поэтому вслепую.
+      //
+      // Скрываем через visibility, а не display: наведение возвращает всё
+      // одним словом, без попыток угадать, каким display у Twitch был
+      // каждый сегмент.
+      css: [
+        '[data-a-target="player-seekbar"] .seekbar-bar > * { visibility: hidden !important; }',
+        '[data-a-target="player-seekbar"] .seekbar-bar::after { content: ""; position: absolute !important; inset: 0 !important; border-radius: inherit !important; background-color: rgba(169, 112, 255, 0.85) !important; }',
+        '[data-a-target="player-seekbar"]:hover .seekbar-bar > * { visibility: visible !important; }',
+        '[data-a-target="player-seekbar"]:hover .seekbar-bar::after { display: none !important; }',
+        '[data-a-target="player-seekbar-duration"] { visibility: hidden !important; }',
+        '.vod-seekbar-time-labels:hover [data-a-target="player-seekbar-duration"] { visibility: visible !important; }',
+        '[class*="seekbar-preview"], [class*="seek-preview"] { display: none !important; }',
       ],
     },
     {
@@ -223,27 +243,41 @@ export function buildTwitchAudioPayload(origin: string): string {
   }
 
   function buildAntiSpoilerCss(flags) {
-    var selectors = [];
+    var blurred = [];
+    var rules = [];
+
     for (var i = 0; i < AS_GROUPS.length; i++) {
-      if (flags[AS_GROUPS[i].id]) selectors = selectors.concat(AS_GROUPS[i].selectors);
+      var group = AS_GROUPS[i];
+      if (!flags[group.id]) continue;
+      if (group.selectors) blurred = blurred.concat(group.selectors);
+      if (group.css) rules = rules.concat(group.css);
     }
-    if (!selectors.length) return '';
-    // Наведение снимает размытие с самого элемента. Поэтому замазывается
-    // именно то, на что можно навести: у карточки — вся карточка, а не
-    // отдельно картинка и подпись, иначе до подписи не добраться.
-    // transition: none — не украшение, а суть. У Twitch на этих
-    // элементах свой переход, и без запрета размытие проявлялось бы
-    // плавно: первые миллисекунды спойлер видно. Проверено на живой
-    // странице — с переходом filter застревает на blur(0px).
-    //
-    // Переход остаётся только на наведении: открывается плавно,
-    // закрывается мгновенно, как и должно быть у того, что прячут.
-    return selectors.join(',\\n') +
-      ' {\\n  filter: blur(14px) !important;\\n' +
-      '  transition: none !important;\\n}\\n' +
-      selectors.join(':hover,\\n') +
-      ':hover {\\n  filter: none !important;\\n' +
-      '  transition: filter 0.1s ease !important;\\n}\\n';
+
+    if (blurred.length) {
+      // Наведение снимает размытие с самого элемента. Поэтому замазывается
+      // именно то, на что можно навести: у карточки — вся карточка, а не
+      // отдельно картинка и подпись, иначе до подписи не добраться.
+      //
+      // transition: none — не украшение, а суть. У Twitch на этих элементах
+      // свой переход, и без запрета размытие проявлялось бы плавно: первые
+      // миллисекунды спойлер видно. Проверено на живой странице — с
+      // переходом filter застревает на blur(0px).
+      //
+      // Переход остаётся только на наведении: открывается плавно,
+      // закрывается мгновенно, как и должно быть у того, что прячут.
+      rules.push(
+        blurred.join(',\\n') +
+        ' {\\n  filter: blur(14px) !important;\\n' +
+        '  transition: none !important;\\n}'
+      );
+      rules.push(
+        blurred.join(':hover,\\n') +
+        ':hover {\\n  filter: none !important;\\n' +
+        '  transition: filter 0.1s ease !important;\\n}'
+      );
+    }
+
+    return rules.length ? rules.join('\\n') + '\\n' : '';
   }
 
   function antiSpoilerLevel() {
