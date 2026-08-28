@@ -2681,9 +2681,17 @@ export function buildTwitchAudioPayload(origin: string): string {
           // 7TV. localUrl is API-relative, and this page is twitch.tv, so it
           // has to be anchored to the panel origin. Snapshots taken before the
           // mirror have only the CDN url.
-          var emoteSrc = snap[e].localUrl
+          //
+          // Unless the panel is served over http while Twitch is https: the
+          // browser blocks such an <img> as mixed content and the whole set
+          // turns into broken boxes. The data itself is unaffected — it
+          // arrives through GM_xmlhttpRequest, which that rule does not touch
+          // — so the chat read normally and only the emotes were gone. There
+          // the CDN url is the one that can still load.
+          var mirrored = snap[e].localUrl
             ? SERVER + '/api/' + String(snap[e].localUrl).replace(/^\\/+/, '')
-            : snap[e].url;
+            : '';
+          var emoteSrc = mirrored && !mixedContent ? mirrored : snap[e].url || mirrored;
           if (emoteSrc) chatEmoteMap[snap[e].name] = emoteSrc;
         }
       }
