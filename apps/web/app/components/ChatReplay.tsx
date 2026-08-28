@@ -351,6 +351,28 @@ export function ChatReplay({
   // The user card needs the unfiltered history: hiding bots or searching must
   // not silently shorten someone's record when you open their card.
   const allMessages = data?.messages ?? [];
+
+  // A mention carries whatever the person typed — usually the login, but
+  // Twitch also allows a non-Latin display name, and that is what chat tags.
+  // Both spellings have to lead to the same card, or clicking one opens an
+  // empty history for a user who is right there in the chat.
+  const loginByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const message of data?.messages ?? []) {
+      map.set(message.authorLogin.toLowerCase(), message.authorLogin);
+      if (message.authorDisplayName) {
+        map.set(message.authorDisplayName.toLowerCase(), message.authorLogin);
+      }
+    }
+    return map;
+  }, [data?.messages]);
+
+  // Someone mentioned but silent in this broadcast keeps the typed name: the
+  // card then shows an empty history rather than nothing happening at all.
+  const openMention = useCallback(
+    (name: string) => setActiveUser(loginByName.get(name.toLowerCase()) ?? name.toLowerCase()),
+    [loginByName],
+  );
   const userThreshold = isLive
     ? Number.POSITIVE_INFINITY
     : currentTime + baseOffsetSec - offset;
@@ -485,6 +507,7 @@ export function ChatReplay({
                 selfNames={selfNames}
                 isActiveUser={activeUser === entry.message.authorLogin}
                 onAuthorClick={setActiveUser}
+                onMentionClick={openMention}
                 locale={locale}
                 copy={copy}
               />
@@ -509,6 +532,7 @@ export function ChatReplay({
             copy={copy}
             locale={locale}
             onClose={() => setActiveUser(null)}
+            onMentionClick={openMention}
             onSeek={seekTo}
             canSeek={canSeek}
             toRenderTime={toRenderTime}
@@ -534,6 +558,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   selfNames,
   isActiveUser,
   onAuthorClick,
+  onMentionClick,
   locale,
   copy,
 }: {
@@ -552,6 +577,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   selfNames: Set<string>;
   isActiveUser: boolean;
   onAuthorClick: (login: string) => void;
+  onMentionClick: (name: string) => void;
   locale: "ru" | "en";
   copy: ChatCopy;
 }) {
@@ -627,6 +653,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
           inlineEmotes={message.inlineEmotes}
           emotePx={emotePx}
           selfNames={selfNames}
+          onMentionClick={onMentionClick}
+          mentionTitle={copy.userCardTitle}
         />
       </span>
       {ban !== null ? (
