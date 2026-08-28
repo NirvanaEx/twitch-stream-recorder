@@ -125,6 +125,183 @@ export function buildTwitchAudioPayload(origin: string): string {
       }
     }
   } catch (e) {}
+  // ---- Антиспойлер: Twitch не должен рассказывать, чем кончилось ---------
+  //
+  // Запись смотрят, чтобы узнать, что было, а интерфейс вокруг отвечает
+  // раньше видео: по шкале видно, много ли осталось, в названии соседнего
+  // VOD написан результат, на обложке — финал. Правило то же, что и в
+  // панели записи: видно, где ты сейчас, и ничего о том, что впереди.
+  //
+  // Замазываем, а не срезаем: вёрстка Twitch остаётся целой, а посмотреть
+  // можно осознанно — наведением. И только css, без наблюдателей за DOM:
+  // при переходах внутри SPA правило уже на месте и ничего не мигает.
+  var AS_KEY = 'tsr-antispoiler';
+  // Готовый css лежит отдельно: его вешает загрузчик на document-start,
+  // когда этого кода ещё нет и в помине.
+  var AS_CSS_KEY = 'tsr-antispoiler-css';
+  var AS_STYLE_ID = 'tsr-antispoiler';
+
+  var AS_GROUPS = [
+    {
+      id: 'seekbar',
+      label: 'Шкала',
+      hint: 'Полоса перемотки, общая длительность и превью кадров. Текущее ' +
+        'время остаётся: где ты сейчас — не спойлер, спойлер — сколько осталось.',
+      selectors: [
+        '[data-a-target="player-seekbar"]',
+        '[data-a-target="player-seekbar-duration"]',
+        '[data-test-selector="seekbar-segment__segment"]',
+        '[class*="seekbar-preview"]',
+        '[class*="seek-preview"]',
+      ],
+    },
+    {
+      id: 'cards',
+      label: 'Чужие видео',
+      hint: 'Обложки, названия и длительности других видео, клипов и ' +
+        'рекомендаций — на странице записи, у канала, на главной.',
+      selectors: [
+        '[data-a-target^="video-carousel-card-"]',
+        '[data-a-target="preview-card-image-link"]',
+        '[data-test-selector="preview-card-thumbnail__image-selector"]',
+        '.preview-card-thumbnail__image',
+      ],
+    },
+    {
+      id: 'title',
+      label: 'Шапка видео',
+      hint: 'Название открытого видео, дата эфира, раздел и число просмотров.',
+      selectors: ['[data-test-selector="metadata-layout__split-top"]'],
+    },
+    {
+      id: 'chat',
+      label: 'Родной чат',
+      hint: 'Встроенный чат Twitch и счётчик зрителей — у записи есть свой чат.',
+      selectors: [
+        '.video-chat__header',
+        // :not(.tsr-chat-host) — на случай, если чат записи сядет именно
+        // сюда: свою же панель замазывать нельзя, а filter предка накрывает
+        // и потомков, так что исключить её изнутри уже не выйдет.
+        '.video-chat__message-list-wrapper:not(.tsr-chat-host)',
+        '[data-test-selector="chat-scrollable-area__message-container"]:not(.tsr-chat-host)',
+        '[data-a-target="animated-channel-viewers-count"]',
+      ],
+    },
+  ];
+
+  // Уровни — это готовые наборы тех же переключателей, а не отдельная
+  // настройка: тронул галочку — набор просто перестал совпадать с уровнем.
+  var AS_LEVELS = [
+    { id: 'off', label: 'Выкл', on: [], hint: 'Twitch как обычно' },
+    { id: 'soft', label: 'Мягкий', on: ['seekbar'], hint: 'Только шкала и длительность' },
+    {
+      id: 'medium', label: 'Средний', on: ['seekbar', 'cards'],
+      hint: 'Шкала и обложки чужих видео',
+    },
+    {
+      id: 'hard', label: 'Жёсткий', on: ['seekbar', 'cards', 'title', 'chat'],
+      hint: 'Ещё шапка видео и родной чат',
+    },
+  ];
+
+  var antiSpoiler = {};
+  var asLevelButtons = {};
+  var asGroupBoxes = {};
+
+  try {
+    var savedAntiSpoiler = JSON.parse(GM_getValue(AS_KEY, '') || 'null');
+    for (var asI = 0; asI < AS_GROUPS.length; asI++) {
+      var asId = AS_GROUPS[asI].id;
+      antiSpoiler[asId] = Boolean(savedAntiSpoiler && savedAntiSpoiler[asId]);
+    }
+  } catch (e) {
+    for (var asJ = 0; asJ < AS_GROUPS.length; asJ++) antiSpoiler[AS_GROUPS[asJ].id] = false;
+  }
+
+  function buildAntiSpoilerCss(flags) {
+    var selectors = [];
+    for (var i = 0; i < AS_GROUPS.length; i++) {
+      if (flags[AS_GROUPS[i].id]) selectors = selectors.concat(AS_GROUPS[i].selectors);
+    }
+    if (!selectors.length) return '';
+    // Наведение снимает размытие с самого элемента. Поэтому замазывается
+    // именно то, на что можно навести: у карточки — вся карточка, а не
+    // отдельно картинка и подпись, иначе до подписи не добраться.
+    // transition: none — не украшение, а суть. У Twitch на этих
+    // элементах свой переход, и без запрета размытие проявлялось бы
+    // плавно: первые миллисекунды спойлер видно. Проверено на живой
+    // странице — с переходом filter застревает на blur(0px).
+    //
+    // Переход остаётся только на наведении: открывается плавно,
+    // закрывается мгновенно, как и должно быть у того, что прячут.
+    return selectors.join(',\\n') +
+      ' {\\n  filter: blur(14px) !important;\\n' +
+      '  transition: none !important;\\n}\\n' +
+      selectors.join(':hover,\\n') +
+      ':hover {\\n  filter: none !important;\\n' +
+      '  transition: filter 0.1s ease !important;\\n}\\n';
+  }
+
+  function antiSpoilerLevel() {
+    for (var i = 0; i < AS_LEVELS.length; i++) {
+      var same = true;
+      for (var g = 0; g < AS_GROUPS.length; g++) {
+        var id = AS_GROUPS[g].id;
+        if (Boolean(antiSpoiler[id]) !== (AS_LEVELS[i].on.indexOf(id) !== -1)) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return AS_LEVELS[i].id;
+    }
+    return 'custom';
+  }
+
+  function applyAntiSpoiler(save) {
+    var css = buildAntiSpoilerCss(antiSpoiler);
+    var node = document.getElementById(AS_STYLE_ID);
+    if (!node) {
+      node = document.createElement('style');
+      node.id = AS_STYLE_ID;
+      (document.head || document.documentElement).appendChild(node);
+    }
+    // Тот же id, что вешает загрузчик: перехватываем его элемент, а не
+    // кладём второй стиль поверх.
+    node.textContent = css;
+    if (!save) return;
+    try {
+      GM_setValue(AS_KEY, JSON.stringify(antiSpoiler));
+      GM_setValue(AS_CSS_KEY, css);
+    } catch (e) {}
+  }
+
+  function setAntiSpoilerLevel(id) {
+    var level = null;
+    for (var i = 0; i < AS_LEVELS.length; i++) if (AS_LEVELS[i].id === id) level = AS_LEVELS[i];
+    if (!level) return;
+    for (var g = 0; g < AS_GROUPS.length; g++) {
+      antiSpoiler[AS_GROUPS[g].id] = level.on.indexOf(AS_GROUPS[g].id) !== -1;
+    }
+    applyAntiSpoiler(true);
+    renderAntiSpoilerUi();
+  }
+
+  function renderAntiSpoilerUi() {
+    var level = antiSpoilerLevel();
+    for (var i = 0; i < AS_LEVELS.length; i++) {
+      var button = asLevelButtons[AS_LEVELS[i].id];
+      if (button) button.style.background = AS_LEVELS[i].id === level ? '#9147ff' : '#2f2f35';
+    }
+    for (var g = 0; g < AS_GROUPS.length; g++) {
+      var box = asGroupBoxes[AS_GROUPS[g].id];
+      if (box) box.checked = Boolean(antiSpoiler[AS_GROUPS[g].id]);
+    }
+  }
+
+  // Перезаписываем сохранённый css сразу: если обновление скрипта принесло
+  // новые селекторы, загрузчик должен получить их, а не вешать прошлогодние.
+  applyAntiSpoiler(true);
+
   var chatSettingsEl = null;
   var chatSettingsOpen = false;
   var chatSizeLabelEl = null;
@@ -2972,6 +3149,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     wrap.appendChild(chatJumpEl);
     chatOverlay.appendChild(wrap);
 
+    // Метка для антиспойлера: этот узел размывать нельзя, внутри наш чат.
+    host.classList.add('tsr-chat-host');
     host.appendChild(chatOverlay);
 
     // Стрелка Twitch «свернуть чат» рисуется поверх нашей шапки — сдвигаем
@@ -3747,6 +3926,42 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatOffsetRow.appendChild(makeButton('+5', function () { setChatOffset(chatOffset + 5); }));
     bodyEl.appendChild(chatOffsetRow);
 
+    bodyEl.appendChild(sectionLabel('Антиспойлер'));
+    var asLevelRow = el('div', {
+      display: 'flex', gap: '3px', marginBottom: '6px',
+      background: '#26262c', borderRadius: '10px', padding: '3px',
+    });
+    for (var a = 0; a < AS_LEVELS.length; a++) {
+      (function (level) {
+        var button = makeButton(level.label, function () { setAntiSpoilerLevel(level.id); });
+        button.style.flex = '1';
+        button.style.borderRadius = '8px';
+        button.title = level.hint;
+        asLevelButtons[level.id] = button;
+        asLevelRow.appendChild(button);
+      })(AS_LEVELS[a]);
+    }
+    bodyEl.appendChild(asLevelRow);
+
+    var asGroupRow = el('div', {
+      display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
+      marginBottom: '8px', fontSize: '11px',
+    });
+    for (var b = 0; b < AS_GROUPS.length; b++) {
+      (function (group) {
+        var check = makeCheck(group.label, Boolean(antiSpoiler[group.id]), function (on) {
+          antiSpoiler[group.id] = on;
+          applyAntiSpoiler(true);
+          renderAntiSpoilerUi();
+        });
+        check.title = group.hint;
+        asGroupBoxes[group.id] = check.querySelector('input');
+        asGroupRow.appendChild(check);
+      })(AS_GROUPS[b]);
+    }
+    bodyEl.appendChild(asGroupRow);
+    renderAntiSpoilerUi();
+
     bodyEl.appendChild(sectionLabel('Громкость записи'));
     var volumeRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' });
     volumeLabelEl = el('span', { opacity: '0.7', minWidth: '78px' }, '');
@@ -3994,6 +4209,7 @@ export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): 
 // @version      ${USERSCRIPT_VERSION}
 // @description  Загрузчик TSR: при каждом открытии Twitch подтягивает с сервера свежий скрипт звука и чата записи (звук на VOD там, где Twitch его заглушил, чат с удалёнными и самыми первыми сообщениями). Обновлять вручную ничего не нужно.
 // @match        https://www.twitch.tv/*
+// @run-at       document-start
 // @updateURL    ${resolvedUpdateUrl}
 // @downloadURL  ${resolvedUpdateUrl}
 // @grant        GM_xmlhttpRequest
@@ -4011,6 +4227,33 @@ export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): 
   var CACHE_KEY = 'tsr-audio-payload';
   var MARKER = '/* tsr-payload */';
 
+  // Антиспойлер вешается первым делом, до всего остального.
+  //
+  // Иначе не успеть: пока идёт запрос за основным скриптом, Twitch уже
+  // нарисует и шкалу, и обложки соседних записей. Прятать их после этого
+  // поздно — спойлер уже мелькнул, а мелькнувшего не вернёшь. Поэтому
+  // скрипт держит готовый css в хранилище, а здесь он только вешается:
+  // синхронно, на document-start, до первой отрисовки.
+  try {
+    var antiSpoilerCss = GM_getValue('tsr-antispoiler-css', '');
+    if (antiSpoilerCss) {
+      var antiSpoilerStyle = document.createElement('style');
+      antiSpoilerStyle.id = 'tsr-antispoiler';
+      antiSpoilerStyle.textContent = antiSpoilerCss;
+      (document.head || document.documentElement).appendChild(antiSpoilerStyle);
+    }
+  } catch (e) {}
+
+  // Сам скрипт при этом ждёт готовый DOM — ему нужны и плеер, и место под
+  // панель. То есть ровно тот момент, в который он запускался раньше.
+  function whenReady(fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn, { once: true });
+    } else {
+      fn();
+    }
+  }
+
   function looksValid(code) {
     return typeof code === 'string' && code.slice(0, MARKER.length) === MARKER;
   }
@@ -4018,13 +4261,13 @@ export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): 
   // Прямой eval: код нагрузки видит GM_*-функции песочницы через цепочку
   // областей видимости и пользуется GM_xmlhttpRequest как своим.
   function run(code, sourceLabel) {
-    try {
-      eval(code);
-      return true;
-    } catch (e) {
-      console.error('[TSR] скрипт (' + sourceLabel + ') не запустился:', e);
-      return false;
-    }
+    whenReady(function () {
+      try {
+        eval(code);
+      } catch (e) {
+        console.error('[TSR] скрипт (' + sourceLabel + ') не запустился:', e);
+      }
+    });
   }
 
   function runCached(reason) {
