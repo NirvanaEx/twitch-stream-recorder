@@ -140,6 +140,9 @@ export function buildTwitchAudioPayload(origin: string): string {
   // когда этого кода ещё нет и в помине.
   var AS_CSS_KEY = 'tsr-antispoiler-css';
   var AS_STYLE_ID = 'tsr-antispoiler';
+  // Заголовок вкладки живёт отдельным флагом: загрузчик читает его до того,
+  // как здесь появится хоть что-нибудь.
+  var AS_TITLE_KEY = 'tsr-antispoiler-title';
 
   var AS_GROUPS = [
     {
@@ -170,7 +173,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     {
       id: 'title',
       label: 'Шапка видео',
-      hint: 'Название открытого видео, дата эфира, раздел и число просмотров.',
+      hint: 'Название открытого видео, дата эфира, раздел, число просмотров ' +
+        'и название во вкладке браузера.',
       selectors: ['[data-test-selector="metadata-layout__split-top"]'],
     },
     {
@@ -268,10 +272,17 @@ export function buildTwitchAudioPayload(origin: string): string {
     // Тот же id, что вешает загрузчик: перехватываем его элемент, а не
     // кладём второй стиль поверх.
     node.textContent = css;
+    // Заголовок вкладки прячет загрузчик — он один успевает к моменту,
+    // когда Twitch присылает название в html. Отсюда только решение.
+    // typeof — на случай старого загрузчика без этой части.
+    try {
+      if (typeof titleGuard !== 'undefined') titleGuard.set(antiSpoiler.title);
+    } catch (e) {}
     if (!save) return;
     try {
       GM_setValue(AS_KEY, JSON.stringify(antiSpoiler));
       GM_setValue(AS_CSS_KEY, css);
+      GM_setValue(AS_TITLE_KEY, antiSpoiler.title ? '1' : '');
     } catch (e) {}
   }
 
@@ -4242,6 +4253,70 @@ export function buildTwitchAudioUserscript(origin: string, updateUrl?: string): 
       antiSpoilerStyle.textContent = antiSpoilerCss;
       (document.head || document.documentElement).appendChild(antiSpoilerStyle);
     }
+  } catch (e) {}
+
+
+  // Название открытого видео видно ещё и во вкладке браузера, а до заголовка
+  // страницы css не достаёт. Прятать его нужно именно отсюда: Twitch
+  // присылает название уже в html — <title>... - strogo on Twitch</title>, —
+  // так что к моменту, когда основной скрипт дождётся DOM, спойлер во вкладке
+  // уже висит. Здесь же document-start, до разбора head.
+  //
+  // Подменяем на нейтральное 'Twitch', а не на имя канала: формат заголовка
+  // у Twitch разный на разных страницах и меняется после гидратации, и
+  // разбирать его — значит однажды показать во вкладке чужую выдумку.
+  var TITLE_MASK = 'Twitch';
+  var titleGuard = {
+    on: false,
+    real: '',
+    observers: [],
+    watched: {},
+    watch: function (key, node, options) {
+      if (!node || titleGuard.watched[key] === node) return;
+      var observer = new MutationObserver(titleGuard.apply);
+      observer.observe(node, options);
+      titleGuard.observers.push(observer);
+      titleGuard.watched[key] = node;
+    },
+    // Наблюдателей до-вешиваем на каждом срабатывании, а не один раз при
+    // включении. На document-start ни head, ни <title> ещё не разобраны —
+    // навесить на них тогда нечего, — а позже Twitch подменяет <title>
+    // целиком. Один раз при включении дало бы наблюдателя только за
+    // documentElement, и правки заголовка при переходах прошли бы мимо.
+    ensure: function () {
+      titleGuard.watch('root', document.documentElement, { childList: true });
+      titleGuard.watch('head', document.head, { childList: true });
+      titleGuard.watch('title', document.querySelector('title'), {
+        childList: true, characterData: true, subtree: true,
+      });
+    },
+    apply: function () {
+      if (!titleGuard.on) return;
+      titleGuard.ensure();
+      var current = document.title;
+      if (current === TITLE_MASK) return;
+      // Запоминаем то, что поставил Twitch: иначе при выключении режима
+      // вкладка так и останется безымянной до следующего перехода.
+      if (current) titleGuard.real = current;
+      document.title = TITLE_MASK;
+    },
+    set: function (on) {
+      titleGuard.on = Boolean(on);
+      if (!titleGuard.on) {
+        for (var i = 0; i < titleGuard.observers.length; i++) {
+          titleGuard.observers[i].disconnect();
+        }
+        titleGuard.observers = [];
+        titleGuard.watched = {};
+        if (titleGuard.real) document.title = titleGuard.real;
+        return;
+      }
+      titleGuard.apply();
+    },
+  };
+
+  try {
+    titleGuard.set(GM_getValue('tsr-antispoiler-title', '') === '1');
   } catch (e) {}
 
   // Сам скрипт при этом ждёт готовый DOM — ему нужны и плеер, и место под
