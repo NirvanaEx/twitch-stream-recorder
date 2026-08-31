@@ -9,18 +9,23 @@ import { PartSplitter, shouldHoldSplit } from "./part-splitter";
 const GB = 1024 ** 3;
 const PART = 1900 * 1024 * 1024;
 
-test("keeps cutting while the disk has room for several more parts", () => {
-  assert.equal(shouldHoldSplit(20 * GB, PART, 1), false);
+test("keeps cutting while the disk has the recording reserve and room for more parts", () => {
+  assert.equal(shouldHoldSplit(30 * GB, PART, 1), false);
 });
 
-test("holds the split once free space is down to a couple of parts", () => {
-  assert.equal(shouldHoldSplit(3 * GB, PART, 1), true);
+test("holds the split before it consumes the recording reserve", () => {
+  assert.equal(shouldHoldSplit(20 * GB, PART, 1), true);
 });
 
 test("never holds with nothing pending: there would be nobody to release it", () => {
   // The upload of a finished part is what frees space, so holding before the
   // first one has been cut would wait forever.
   assert.equal(shouldHoldSplit(1 * GB, PART, 0), false);
+});
+
+test("honours an explicitly configured recording reserve", () => {
+  assert.equal(shouldHoldSplit(12 * GB, PART, 1, 5 * GB), false);
+  assert.equal(shouldHoldSplit(8 * GB, PART, 1, 5 * GB), true);
 });
 
 test("keeps cutting when free space cannot be measured", () => {

@@ -19,11 +19,24 @@ export type SplitPart = {
 // long a finished part waits before its upload starts.
 const POLL_MS = 2_000;
 
-// Below this much free space — measured in parts, since one part is the unit
-// the splitter writes in — the splitter stops reading the recording until an
-// uploaded part has been deleted. Three is one part being written, one being
-// uploaded, and one part of slack for everything else on the disk.
-const HOLD_BELOW_PARTS = 3;
+// Preserve the same free-space reserve that protects new captures. Telegram
+// post-processing must not consume that reserve and prevent the recorder from
+// starting the next live broadcast.
+const DEFAULT_MIN_FREE_DISK_GB = 20;
+
+// Above the recording reserve, keep room for the part being written and one
+// part of slack for unrelated disk activity.
+const HOLD_BELOW_PARTS = 2;
+
+function configuredMinFreeBytes() {
+  const configured = Number(process.env.RECORDING_MIN_FREE_GB);
+  const minFreeGb =
+    Number.isFinite(configured) && configured > 0
+      ? configured
+      : DEFAULT_MIN_FREE_DISK_GB;
+
+  return minFreeGb * 1024 ** 3;
+}
 
 /**
  * Whether the splitter should stop feeding ffmpeg right now.
@@ -37,12 +50,13 @@ export function shouldHoldSplit(
   freeBytes: number | null,
   maxPartBytes: number,
   pendingParts: number,
+  minFreeBytes = configuredMinFreeBytes(),
 ) {
   if (freeBytes === null || pendingParts === 0) {
     return false;
   }
 
-  return freeBytes < maxPartBytes * HOLD_BELOW_PARTS;
+  return freeBytes < minFreeBytes + maxPartBytes * HOLD_BELOW_PARTS;
 }
 
 type PartSplitterOptions = {
@@ -79,6 +93,8 @@ export class PartSplitter {
   private exitError: Error | null = null;
   private disposed = false;
   private held = false;
+  private spaceTimer: NodeJS.Timeout | null = null;
+  private checkingSpace = false;
   private releaseWaiters: Array<() => void> = [];
   private readonly delivered = new Set<number>();
   private readonly pending = new Map<number, number>();
@@ -163,6 +179,13 @@ export class PartSplitter {
         this.exitError = error;
       }
     });
+
+    // next() is blocked while Telegram uploads a part. Re-checking here is
+    // essential: otherwise ffmpeg can keep producing parts for minutes without
+    // another free-space probe and fill the disk behind the uploader's back.
+    this.spaceTimer = setInterval(() => {
+      void this.pollSpace();
+    }, POLL_MS);
   }
 
   /**
@@ -220,6 +243,11 @@ export class PartSplitter {
   async dispose() {
     this.disposed = true;
     this.wakeWaiters();
+
+    if (this.spaceTimer) {
+      clearInterval(this.spaceTimer);
+      this.spaceTimer = null;
+    }
 
     if (this.child && !this.exit) {
       this.child.stdin?.destroy();
@@ -331,6 +359,20 @@ export class PartSplitter {
 
     if (!held) {
       this.wakeWaiters();
+    }
+  }
+
+  private async pollSpace() {
+    if (this.checkingSpace || this.disposed || this.exit || this.pending.size === 0) {
+      return;
+    }
+
+    this.checkingSpace = true;
+
+    try {
+      await this.updateHold();
+    } finally {
+      this.checkingSpace = false;
     }
   }
 
