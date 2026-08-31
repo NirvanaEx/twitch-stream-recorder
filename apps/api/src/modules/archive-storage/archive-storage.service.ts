@@ -39,8 +39,8 @@ type SessionWithChannel = StreamSession & { channel: Channel };
  * fine for whole-file reads and writes and hopeless for the thousands of small
  * appends streamlink and ffmpeg produce while capturing. So a recording is
  * always captured onto the server's own disk, and only the finished artefacts
- * are moved across — after Telegram has taken its copy from the fast local
- * file, so the offload never has to pull gigabytes back down through rclone.
+ * are moved across. Drive is the first durable destination so a slow Telegram
+ * upload can never pin a finished recording on the small server disk.
  *
  * The tiers in order, and what each one guarantees:
  *
@@ -162,29 +162,25 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
    * Move finished recordings onto the Drive, oldest first, one at a time so a
    * backlog cannot saturate the uplink or the rclone cache.
    *
-   * Telegram goes first on purpose: a session is only picked up once its
-   * Telegram copy exists (or has definitively failed), because the uploader
-   * reads `playbackPath` and that path points at the Drive the moment this
-   * runs. Uploading from the local file costs a disk read; uploading from the
-   * Drive costs the same gigabytes back over the network.
+   * Whole-file recordings still wait for Telegram, but live segments do not:
+   * keeping the data disk small matters more than avoiding a later Drive read.
+   * The Telegram uploader understands archivePath, so a closed chunk can move
+   * to Drive immediately even if Telegram is slow or unavailable.
    */
   /**
    * Move the chunks of segmented captures onto the drive, one at a time,
    * oldest first — including chunks of broadcasts that are still running.
    *
-   * Each chunk leaves the server disk as soon as Telegram has it, so a
+   * Each chunk leaves the server disk as soon as Drive has verified it, so a
    * recording in progress costs the disk one open chunk rather than its whole
-   * eventual size. That is the property this whole exercise was about.
+   * eventual size. Telegram may consume the archived copy later.
    */
-  private async archiveSegments(settings: AppSettings) {
-    const telegramInPlay = settings.telegramEnabled && Boolean(settings.telegramChatId);
-
+  private async archiveSegments(_settings: AppSettings) {
     for (;;) {
       const segment = await this.prisma.recordingSegment.findFirst({
         where: {
           localPath: { not: null },
           archivePath: null,
-          ...(telegramInPlay ? { telegramStatus: "uploaded" } : {}),
         },
         orderBy: { createdAt: "asc" },
         include: { session: { include: { channel: true } } },
@@ -326,11 +322,7 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
     return dir;
   }
 
-  private async archivePending(settings: AppSettings) {
-    // With Telegram switched off nothing is ever going to claim the local
-    // copy, so waiting for it would strand every recording on the disk.
-    const telegramInPlay = settings.telegramEnabled && Boolean(settings.telegramChatId);
-
+  private async archivePending(_settings: AppSettings) {
     for (;;) {
       const session = await this.prisma.streamSession.findFirst({
         where: {
@@ -338,10 +330,6 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
           playbackPath: { not: null },
           localFileDeletedAt: null,
           archiveStatus: { in: ["none", "pending"] },
-          // "error" counts as done with the local file: the uploader keeps
-          // retrying on its own schedule, and a recording should not be
-          // stranded on the server disk because the channel rejected it once.
-          ...(telegramInPlay ? { telegramStatus: { in: ["uploaded", "error"] } } : {}),
         },
         include: { channel: true },
         orderBy: { createdAt: "asc" },

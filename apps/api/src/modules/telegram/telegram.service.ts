@@ -298,32 +298,36 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * reaches the channel while the streamer is still talking, so a crash, a full
    * disk or a power cut at 23:00 costs the last chunk instead of the evening.
    *
-   * Chunks are uploaded oldest-first across all sessions: the ones that have
-   * been on the disk longest are the ones worth getting rid of first.
+   * Chunks are uploaded oldest-first across all sessions. ArchiveStorage may
+   * already have moved one to Drive to protect the local disk; in that case we
+   * read archivePath through the mount instead of requiring a local copy.
    */
   private async processSegments(settings: AppSettings) {
     for (;;) {
       const segment = await this.prisma.recordingSegment.findFirst({
         where: {
-          localPath: { not: null },
           telegramStatus: { in: ["pending", "error"] },
+          OR: [{ localPath: { not: null } }, { archivePath: { not: null } }],
         },
         orderBy: { createdAt: "asc" },
         include: { session: { include: { channel: true } } },
       });
 
-      if (!segment || !segment.localPath) {
+      if (!segment) {
         return;
       }
 
       const logPrefix = `[telegram/${segment.session.channel.twitchLogin}/${segment.session.id}]`;
+      const sourcePath = [segment.localPath, segment.archivePath].find(
+        (candidate): candidate is string => Boolean(candidate && existsSync(candidate)),
+      );
 
-      if (!existsSync(segment.localPath)) {
+      if (!sourcePath) {
         await this.prisma.recordingSegment.update({
           where: { id: segment.id },
           data: {
             telegramStatus: "error",
-            telegramError: "The chunk is missing from the local disk.",
+            telegramError: "The chunk is missing from both local and archive storage.",
           },
         });
         continue;
@@ -334,7 +338,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       try {
         let meta: VideoMeta | null = null;
         try {
-          meta = await this.probeVideoMeta(segment.localPath);
+          meta = await this.probeVideoMeta(sourcePath);
         } catch {
           // Metadata is best-effort; the upload itself must not fail.
         }
@@ -344,7 +348,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         // read the part rows, not the caption.
         const caption = this.buildCaption(segment.session, segment.index, 0);
         const sent = await this.sendVideo(
-          segment.localPath,
+          sourcePath,
           settings.telegramChatId,
           caption,
           meta,
