@@ -78,6 +78,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    // A hard stop can leave multi-gigabyte Telegram parts behind. No uploader
+    // survives an API restart, and every retry recreates deterministic parts
+    // from the original recording, so stale temp files are always disposable.
+    const tempRoot = resolve(process.env.DATA_DIR ?? "./data", "tmp", "telegram");
+    rmSync(tempRoot, { recursive: true, force: true });
+    mkdirSync(tempRoot, { recursive: true });
+
     // Uploads interrupted by a restart should be retried, not stuck forever.
     await this.prisma.streamSession.updateMany({
       where: { telegramStatus: "uploading" },
