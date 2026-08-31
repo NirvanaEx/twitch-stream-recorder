@@ -271,7 +271,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // to be enabled for the disk cache of already uploaded files to shrink.
       await this.cleanupLocalCopies(settings);
 
-      if (!configured || !settings.telegramChatId) {
+      if (!settings.telegramEnabled || !configured || !settings.telegramChatId) {
         return;
       }
 
