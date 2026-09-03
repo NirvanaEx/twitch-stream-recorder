@@ -106,6 +106,7 @@ export function buildTwitchAudioPayload(origin: string): string {
   var chatZebra = false;
   var chatReadableColors = true;
   var chatShowDeleted = true;
+  var chatFirstMsg = true;
   var chatHighlightWords = '';
   try {
     var savedChatSize = parseInt(localStorage.getItem('tsr-chat-size') || '', 10);
@@ -119,6 +120,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       if (typeof savedView.zebra === 'boolean') chatZebra = savedView.zebra;
       if (typeof savedView.readable === 'boolean') chatReadableColors = savedView.readable;
       if (typeof savedView.showDeleted === 'boolean') chatShowDeleted = savedView.showDeleted;
+      if (typeof savedView.firstMsg === 'boolean') chatFirstMsg = savedView.firstMsg;
       if (typeof savedView.highlight === 'string') chatHighlightWords = savedView.highlight;
       if (savedView.historyLimit >= 1 && savedView.historyLimit <= 30) {
         chatHistoryLimit = savedView.historyLimit;
@@ -2441,7 +2443,8 @@ export function buildTwitchAudioPayload(origin: string): string {
       localStorage.setItem('tsr-chat-view', JSON.stringify({
         fontPx: chatFontPx, emoteScale: chatEmoteScale, showTime: chatShowTime,
         showBadges: chatShowBadges, zebra: chatZebra, readable: chatReadableColors,
-        showDeleted: chatShowDeleted, highlight: chatHighlightWords,
+        showDeleted: chatShowDeleted, firstMsg: chatFirstMsg,
+        highlight: chatHighlightWords,
         historyLimit: chatHistoryLimit,
       }));
     } catch (e) {}
@@ -2520,6 +2523,11 @@ export function buildTwitchAudioPayload(origin: string): string {
     if (chatHistoryStatusEl) chatHistoryStatusEl.textContent = text || '';
   }
 
+  // Сессия считается прошлой, только если началась заметно раньше эфира из
+  // VOD: перезапуск рекордера посреди того же эфира стартует позже начала и
+  // прошлым стримом не является.
+  var HISTORY_PAST_GAP_MS = 5 * 60 * 1000;
+
   // Подгрузка чата прошлых стримов канала: попадает в общий поиск и в
   // историю пользователей, но НЕ в живое окно (оно только про этот VOD).
   function loadChatHistory() {
@@ -2534,8 +2542,11 @@ export function buildTwitchAudioPayload(origin: string): string {
     chatHistoryStatus('ищу стримы…');
     GM_xmlhttpRequest({
       method: 'GET',
+      // Когда дата эфира известна, свежие стримы отсеиваются на клиенте, и
+      // из-под фильтра должно остаться chatHistoryLimit прошлых — поэтому
+      // берём максимум списка, а не ровно лимит.
       url: SERVER + '/api/public/streams/chat-replay/history?channel=' +
-        encodeURIComponent(login) + '&limit=' + chatHistoryLimit,
+        encodeURIComponent(login) + '&limit=' + (vodCreatedAtMs ? 30 : chatHistoryLimit),
       timeout: 15000,
       onload: function (res) {
         var items = [];
@@ -2547,13 +2558,31 @@ export function buildTwitchAudioPayload(origin: string): string {
         for (var i = 0; i < chatSessions.length; i++) liveIds[chatSessions[i].id] = true;
         for (var g = 0; g < groupTracks.length; g++) liveIds[groupTracks[g].id] = true;
         if (currentTrackId) liveIds[currentTrackId] = true;
+        // «Прошлые стримы» — строго те, что были ДО этого эфира. Без этого
+        // в историю пользователя и в поиск попадал чат сегодняшнего стрима,
+        // хотя смотрят старый VOD, — то есть чистый спойлер.
+        var skippedNewer = 0;
         var wanted = [];
         for (var k = 0; k < items.length; k++) {
-          if (!liveIds[items[k].id]) wanted.push(items[k]);
+          if (liveIds[items[k].id]) continue;
+          if (vodCreatedAtMs) {
+            var startedMs = items[k].startedAt
+              ? (new Date(items[k].startedAt).getTime() || 0)
+              : 0;
+            // Сессию без даты старта не с чем сравнить — не берём её вовсе.
+            if (!startedMs || startedMs >= vodCreatedAtMs - HISTORY_PAST_GAP_MS) {
+              skippedNewer += 1;
+              continue;
+            }
+          }
+          wanted.push(items[k]);
+          if (wanted.length >= chatHistoryLimit) break;
         }
         if (!wanted.length) {
           chatHistoryLoading = false;
-          chatHistoryStatus('прошлых стримов с чатом нет');
+          chatHistoryStatus(skippedNewer
+            ? 'стримов раньше этого эфира нет'
+            : 'прошлых стримов с чатом нет');
           return;
         }
         fetchHistorySessions(wanted);
@@ -2618,6 +2647,7 @@ export function buildTwitchAudioPayload(origin: string): string {
                 badges: msgs[m].badges || null,
                 isAction: isAction,
                 isDeleted: Boolean(msgs[m].isDeleted),
+                isFirstMessage: Boolean(msgs[m].isFirstMessage),
                 vodTime: 0,
               });
               rememberChatAuthor(
@@ -2737,6 +2767,11 @@ export function buildTwitchAudioPayload(origin: string): string {
     // VOD, чтобы история не спойлерила события дальше по стриму.
     var vv = getVideo();
     var cutoff = !userModalSpoilers && vv ? vv.currentTime + chatOffset : Infinity;
+    // Тот же порог, но в абсолютном времени: сообщения прошлых стримов живут
+    // не на шкале VOD, и сравнивать их с vodTime бессмысленно.
+    var absCutoff = !userModalSpoilers && vv && vodCreatedAtMs
+      ? vodCreatedAtMs + (vv.currentTime + chatOffset) * 1000
+      : Infinity;
     var pool = chatMessages.concat(chatHistoryMessages);
     var hits = [];
     var hiddenFuture = 0;
@@ -2745,6 +2780,10 @@ export function buildTwitchAudioPayload(origin: string): string {
       if ((m.authorLogin || '').toLowerCase() !== userModalLogin) continue;
       if (userModalQuery && m.textRaw.toLowerCase().indexOf(userModalQuery) === -1) continue;
       if (!m.historic && m.vodTime > cutoff) {
+        hiddenFuture += 1;
+        continue;
+      }
+      if (m.historic && m.tsMs && m.tsMs > absCutoff) {
         hiddenFuture += 1;
         continue;
       }
@@ -2946,6 +2985,7 @@ export function buildTwitchAudioPayload(origin: string): string {
           badges: msg.badges || null,
           isAction: isAction,
           isDeleted: Boolean(msg.isDeleted),
+          isFirstMessage: Boolean(msg.isFirstMessage),
           vodTime: 0,
         });
         rememberChatAuthor(msg.authorLogin, msg.authorDisplayName, msg.authorColor);
@@ -3093,6 +3133,9 @@ export function buildTwitchAudioPayload(origin: string): string {
     }));
     togglesRow.appendChild(makeCheck('Удалённые', chatShowDeleted, function (on) {
       chatShowDeleted = on; applyChatViewChange();
+    }));
+    togglesRow.appendChild(makeCheck('Первое сообщение', chatFirstMsg, function (on) {
+      chatFirstMsg = on; applyChatViewChange();
     }));
     chatSettingsEl.appendChild(togglesRow);
 
@@ -3436,13 +3479,20 @@ export function buildTwitchAudioPayload(origin: string): string {
       lineHeight: '1.5',
     });
     row.className = 'tsr-chat-row';
+    var firstMsg = chatFirstMsg && Boolean(m.isFirstMessage);
     row.title = (m.historic
       ? 'Прошлый стрим' + (m.sessionTitle ? ': ' + m.sessionTitle : '')
       : 'Место на VOD: ' + fmtTime(Math.max(0, m.vodTime))) +
+      (firstMsg ? ' · первое сообщение пользователя в канале' : '') +
       (m.isDeleted ? ' · сообщение удалено модератором' : '');
-    // Приоритет фона: удалённое > подсветка слов > чередование.
+    // Приоритет фона: удалённое > подсветка слов > первое сообщение >
+    // чередование.
     if (chatZebra && typeof idx === 'number' && idx % 2 === 1) {
       row.style.background = 'rgba(255,255,255,0.035)';
+    }
+    if (firstMsg) {
+      row.style.background = 'rgba(34,197,94,0.10)';
+      row.style.borderLeft = '2px solid #22c55e';
     }
     if (chatHighlightWords && chatMessageMatchesHighlight(m)) {
       row.style.background = 'rgba(145,71,255,0.16)';
@@ -3472,6 +3522,15 @@ export function buildTwitchAudioPayload(origin: string): string {
         });
       }
       row.appendChild(ts);
+    }
+    if (firstMsg) {
+      // Один зелёный фон читается просто как «подсветка» — метка говорит, какая.
+      row.appendChild(el('span', {
+        display: 'inline-block', marginRight: '0.35em', padding: '0 0.3em',
+        borderRadius: '0.2em', background: 'rgba(34,197,94,0.18)',
+        color: '#4ade80', fontSize: '0.78em', fontWeight: '700',
+        whiteSpace: 'nowrap',
+      }, '1-е сообщение'));
     }
     if (chatShowBadges) appendChatBadges(row, m.badges);
     var nameColor = readableColor(m.authorColor) || '#adadb8';
