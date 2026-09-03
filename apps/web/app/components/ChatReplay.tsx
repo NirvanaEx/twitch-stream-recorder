@@ -607,6 +607,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   // the author's whole history with it, and the length is worth showing. The
   // chip appears together with the strike, not before it.
   const ban = deleted ? message.banDurationSec ?? null : null;
+  const isFirst = highlightFirstMessage && Boolean(message.isFirstMessage);
   const color = readableColors ? readableAuthorColor(message.authorColor) : message.authorColor;
   const bet = showBets ? message.predictionBet ?? null : null;
 
@@ -615,6 +616,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
       <span className="chat-time" title="Time in video">
         {formatRenderTime(renderTime)}
       </span>
+      {isFirst ? (
+        // A tint alone reads as "some highlight"; the chip says which one.
+        <span className="chat-first" title={copy.firstMessageTitle}>
+          {copy.firstMessage}
+        </span>
+      ) : null}
       {roles.length > 0 ? (
         <span className="chat-badges">
           {roles.map((entry) => (
