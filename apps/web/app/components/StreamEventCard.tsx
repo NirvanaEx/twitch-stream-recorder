@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { apiGet } from "../lib/api";
 import type { ChatCopy } from "../lib/chat-copy";
 import { outcomeColor, type ReplayEvent } from "../lib/stream-events";
@@ -24,6 +24,8 @@ type Props = {
   chatTimeSec: number;
   copy: ChatCopy;
   locale: "ru" | "en";
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 };
 
 // How long a finished card stays up. Twitch keeps the result on screen for a
@@ -34,7 +36,7 @@ function formatCount(value: number, locale: "ru" | "en") {
   return value.toLocaleString(locale === "ru" ? "ru-RU" : "en-US");
 }
 
-export function StreamEventCard({ eventsUrl, chatTimeSec, copy, locale }: Props) {
+export function StreamEventCard({ eventsUrl, chatTimeSec, copy, locale, collapsed, onToggleCollapsed }: Props) {
   const [events, setEvents] = useState<ReplayEvent[] | null>(null);
 
   useEffect(() => {
@@ -89,6 +91,8 @@ export function StreamEventCard({ eventsUrl, chatTimeSec, copy, locale }: Props)
           chatTimeSec={chatTimeSec}
           copy={copy}
           locale={locale}
+          collapsed={collapsed}
+          onToggleCollapsed={onToggleCollapsed}
         />
       ))}
     </div>
@@ -100,12 +104,17 @@ function EventCard({
   chatTimeSec,
   copy,
   locale,
+  collapsed,
+  onToggleCollapsed,
 }: {
   event: ReplayEvent;
   chatTimeSec: number;
   copy: ChatCopy;
   locale: "ru" | "en";
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }) {
+  const detailsId = useId();
   // The totals as of now: the last sample at or before the playback position.
   // Before the first sample the card is up but empty, exactly as it was live.
   const sample = useMemo(() => {
@@ -147,65 +156,76 @@ function EventCard({
           : copy.eventOpen;
 
   return (
-    <div className={`stream-event stream-event--${phase}${cancelled ? " is-cancelled" : ""}`}>
-      <div className="stream-event__head">
+    <div className={`stream-event stream-event--${phase}${cancelled ? " is-cancelled" : ""}${collapsed ? " is-collapsed" : ""}`}>
+      <button
+        type="button"
+        className="stream-event__head"
+        onClick={onToggleCollapsed}
+        aria-expanded={!collapsed}
+        aria-controls={detailsId}
+        aria-label={`${collapsed ? copy.eventExpand : copy.eventCollapse}: ${event.title}`}
+        title={collapsed ? copy.eventExpand : copy.eventCollapse}
+      >
         <span className={`stream-event__kind stream-event__kind--${event.kind}`}>
           {isPoll ? copy.eventPoll : copy.eventPrediction}
         </span>
-        <span className="stream-event__title">{event.title}</span>
+        <span className="stream-event__title" title={event.title}>{event.title}</span>
+        <span className="stream-event__chevron" aria-hidden="true">{collapsed ? "▾" : "▴"}</span>
         <span className="stream-event__status">{statusLabel}</span>
-      </div>
+      </button>
 
-      <div className="stream-event__outcomes">
-        {event.outcomes.map((outcome, index) => {
-          const value = points[index] ?? 0;
-          const share = pool > 0 ? value / pool : 0;
-          // Twitch's payout: the whole pool split among the backers of the
-          // outcome that wins. Meaningless for a poll, and meaningless before
-          // anyone has staked anything.
-          const ratio = !isPoll && value > 0 ? pool / value : null;
-          const won = ended && !cancelled && event.winningOutcomeId === outcome.id;
-          const lost = ended && !cancelled && event.winningOutcomeId !== null && !won;
+      <div id={detailsId} hidden={collapsed}>
+        <div className="stream-event__outcomes">
+          {event.outcomes.map((outcome, index) => {
+            const value = points[index] ?? 0;
+            const share = pool > 0 ? value / pool : 0;
+            // Twitch's payout: the whole pool split among the backers of the
+            // outcome that wins. Meaningless for a poll, and meaningless before
+            // anyone has staked anything.
+            const ratio = !isPoll && value > 0 ? pool / value : null;
+            const won = ended && !cancelled && event.winningOutcomeId === outcome.id;
+            const lost = ended && !cancelled && event.winningOutcomeId !== null && !won;
 
-          return (
-            <div
-              key={outcome.id}
-              className={`stream-event__outcome${won ? " is-won" : ""}${lost ? " is-lost" : ""}`}
-            >
-              <span
-                className="stream-event__fill"
-                style={{
-                  width: `${Math.round(share * 100)}%`,
-                  background: outcomeColor(outcome, index),
-                }}
-              />
-              <span className="stream-event__label">
-                {won ? <span className="stream-event__crown">👑</span> : null}
-                {outcome.title}
-              </span>
-              <span className="stream-event__numbers">
-                <span className="stream-event__share">{Math.round(share * 100)}%</span>
-                <span className="stream-event__count">
-                  {formatCount(value, locale)} {isPoll ? copy.eventVotes : copy.eventPoints}
+            return (
+              <div
+                key={outcome.id}
+                className={`stream-event__outcome${won ? " is-won" : ""}${lost ? " is-lost" : ""}`}
+              >
+                <span
+                  className="stream-event__fill"
+                  style={{
+                    width: `${Math.round(share * 100)}%`,
+                    background: outcomeColor(outcome, index),
+                  }}
+                />
+                <span className="stream-event__label">
+                  {won ? <span className="stream-event__crown">👑</span> : null}
+                  {outcome.title}
                 </span>
-                {ratio !== null ? (
-                  <span className="stream-event__ratio" title={copy.eventReturn}>
-                    ×{ratio.toFixed(2)}
+                <span className="stream-event__numbers">
+                  <span className="stream-event__share">{Math.round(share * 100)}%</span>
+                  <span className="stream-event__count">
+                    {formatCount(value, locale)} {isPoll ? copy.eventVotes : copy.eventPoints}
                   </span>
-                ) : null}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+                  {ratio !== null ? (
+                    <span className="stream-event__ratio" title={copy.eventReturn}>
+                      ×{ratio.toFixed(2)}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
+        </div>
 
-      <div className="stream-event__foot">
-        {backers > 0 ? <span>{formatCount(backers, locale)} {copy.eventUsers}</span> : null}
-        {event.startedAtSec < 0 ? (
-          <span className="stream-event__early" title={copy.eventAlreadyOpen}>
-            ⏳
-          </span>
-        ) : null}
+        <div className="stream-event__foot">
+          {backers > 0 ? <span>{formatCount(backers, locale)} {copy.eventUsers}</span> : null}
+          {event.startedAtSec < 0 ? (
+            <span className="stream-event__early" title={copy.eventAlreadyOpen}>
+              ⏳
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );

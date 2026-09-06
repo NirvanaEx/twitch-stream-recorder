@@ -195,6 +195,15 @@ export function ChatSettingsPanel({
         <span>{copy.eventsShow}</span>
       </label>
 
+      <label className="chat-toggle" title={copy.eventsCollapseHint}>
+        <input
+          type="checkbox"
+          checked={prefs.collapseEvents}
+          onChange={(event) => update("collapseEvents", event.target.checked)}
+        />
+        <span>{copy.eventsCollapse}</span>
+      </label>
+
       <label className="chat-toggle" title={copy.eventsHint}>
         <input
           type="checkbox"

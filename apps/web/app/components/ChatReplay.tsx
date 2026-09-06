@@ -466,6 +466,8 @@ export function ChatReplay({
       {prefs.showEvents ? (
         <StreamEventCard
           eventsUrl={eventsUrl}
+          collapsed={prefs.collapseEvents}
+          onToggleCollapsed={() => update("collapseEvents", !prefs.collapseEvents)}
           chatTimeSec={userThreshold}
           copy={copy}
           locale={locale}
