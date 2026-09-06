@@ -2830,10 +2830,44 @@ textarea {
 }
 
 .stream-event__head {
-  display: flex;
-  align-items: baseline;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   margin-bottom: 6px;
+}
+
+.stream-event__head:focus-visible {
+  outline: 2px solid var(--accent, #7c5cff);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.stream-event__chevron {
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.stream-event.is-collapsed .stream-event__head {
+  margin-bottom: 0;
+}
+
+.stream-event.is-collapsed .stream-event__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-event.is-collapsed .stream-event__status {
+  display: none;
 }
 
 .stream-event__kind {
@@ -2860,6 +2894,7 @@ textarea {
 }
 
 .stream-event__status {
+  grid-column: 1 / -1;
   flex: none;
   font-size: 10px;
   color: var(--muted);

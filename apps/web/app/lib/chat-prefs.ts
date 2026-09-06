@@ -65,6 +65,8 @@ export type ChatPrefs = {
   revealTimeline: boolean;
   /** Replay the prediction/poll cards above the chat. */
   showEvents: boolean;
+  /** Keep event cards as compact headers until the viewer expands them. */
+  collapseEvents: boolean;
   /** Show the "bet on X" chip before a nick while a prediction was open. */
   showBets: boolean;
 };
@@ -85,6 +87,7 @@ export const DEFAULT_CHAT_PREFS: ChatPrefs = {
   hiddenUsers: "",
   revealTimeline: false,
   showEvents: true,
+  collapseEvents: false,
   showBets: true,
 };
 

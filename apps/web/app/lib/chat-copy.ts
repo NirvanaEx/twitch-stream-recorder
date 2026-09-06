@@ -76,6 +76,10 @@ export const CHAT_COPY = {
     metaCategory: "Категория",
 
     eventsShow: "Ставки и опросы",
+    eventsCollapse: "Сворачивать ставки и опросы",
+    eventsCollapseHint: "Оставляет только заголовок карточки. Нажмите на него, чтобы раскрыть. Выбор сохраняется для следующих просмотров.",
+    eventCollapse: "Свернуть карточку",
+    eventExpand: "Развернуть карточку",
     eventsHint:
       "Карточка ставки или опроса всплывает там же, где всплывала в эфире, и обновляется по ходу записи. Итог показывается только после того, как стример его объявил.",
     eventPrediction: "Ставка",
@@ -163,6 +167,10 @@ export const CHAT_COPY = {
     metaCategory: "Category",
 
     eventsShow: "Predictions and polls",
+    eventsCollapse: "Collapse predictions and polls",
+    eventsCollapseHint: "Keep only the card header. Click it to expand. Your choice is saved for future visits.",
+    eventCollapse: "Collapse card",
+    eventExpand: "Expand card",
     eventsHint:
       "A prediction or poll card appears where it appeared live and updates as the recording plays. The result shows only once the streamer called it.",
     eventPrediction: "Prediction",
