@@ -86,7 +86,25 @@ const render = async () => act(async () => {
   assert.equal(document.querySelectorAll('.chat-user-card__row').length, 1);
   assert.equal(document.querySelectorAll('.chat-user-card__row button').length, 0, 'past messages cannot seek current video');
   assert.ok(historyCalls[0].includes('/chat/users/'));
+  // A body portal disappears behind the browser fullscreen top layer.
+  // Move the existing card into/out of that layer without losing its search.
+  const fullscreenRoot = document.createElement('div');
+  document.body.append(fullscreenRoot);
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: fullscreenRoot });
+  await act(async () => document.dispatchEvent(new Event('fullscreenchange')));
+  assert.ok(fullscreenRoot.contains(document.querySelector('.chat-user-card')), 'history must be inside the fullscreen element');
+  assert.equal(document.querySelector('.chat-user-card__search').value, 'past broadcast');
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null });
+  await act(async () => document.dispatchEvent(new Event('fullscreenchange')));
+  assert.ok(document.querySelector('.chat-user-card').parentElement === document.body, 'restore the portal on fullscreen exit');
+  fullscreenRoot.remove();
+  await act(async () => document.querySelector('.chat-user-card__close').click());
+  await act(async () => root.render(React.createElement(AppProviders, null, React.createElement(ChatReplay, {
+    staticData: { messages, emotes: null }, videoElement: video, isLive: false, archiveId: 'admin-archive',
+  }))));
+  await act(async () => document.querySelector('.chat-author').click());
+  assert.ok(historyCalls.some(url => url.includes('/streams/admin-archive/chat/users/')), 'admin archives must load earlier broadcasts too');
   await act(async () => root.unmount());
   assert.equal(callbacks.length, 0, 'resize observer is cleaned up');
-  console.log('PASS: growth/resize, manual pause, resume, 200-row eviction, user history, case matching, search and past-message seek protection');
+  console.log('PASS: chat scrolling, history/search, fullscreen portal transitions and admin archive history');
 })().catch(error => { console.error(error); process.exitCode = 1; });

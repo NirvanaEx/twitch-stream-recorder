@@ -81,7 +81,7 @@ const MAX_VISIBLE = 200;
 export function ChatReplay({
   archiveId,
   chatUrl,
-  historySessionId,
+  historySessionId = archiveId,
   liveEmotesUrl,
   timelineUrl,
   eventsUrl,
