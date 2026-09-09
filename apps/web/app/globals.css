@@ -3014,7 +3014,8 @@ textarea {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
-  z-index: 60;
+  /* The theater stage is at 100; user history must stay above the video. */
+  z-index: 120;
   overflow: hidden;
 }
 

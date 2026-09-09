@@ -73,10 +73,9 @@ export function ChatUserCard({
   toRenderTime,
   anchorEl,
 }: Props) {
-  // Rendered into <body>: the card is dragged anywhere on screen, and a
-  // position:fixed element trapped inside a transformed ancestor would be
-  // clipped to the chat column instead.
-  const [mounted, setMounted] = useState(false);
+  // Outside the chat column so dragging is not clipped. Native fullscreen
+  // has its own top layer: body portals are invisible behind that layer.
+  const [portalTarget, setPortalTarget] = useState<Element | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [search, setSearch] = useState("");
   const [history, setHistory] = useState<HistoryResponse | null>(null);
@@ -102,12 +101,17 @@ export function ChatUserCard({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    const updateTarget = () => setPortalTarget(document.fullscreenElement ?? document.body);
+    updateTarget();
+    document.addEventListener("fullscreenchange", updateTarget);
+    return () => document.removeEventListener("fullscreenchange", updateTarget);
+  }, []);
 
   // Reopen where it was left, unless that spot no longer fits (window resized
   // or a smaller screen) — then fall back to sitting over the chat column.
   useEffect(() => {
-    if (!mounted || position) return;
+    if (!portalTarget || position) return;
 
     let stored: { x: number; y: number } | null = null;
     try {
@@ -129,7 +133,20 @@ export function ChatUserCard({
     const y = rect ? rect.bottom - height - 8 : 80;
 
     setPosition(clampToViewport(x, y, CARD_WIDTH, height));
-  }, [mounted, position, anchorEl]);
+  }, [portalTarget, position, anchorEl]);
+
+  useEffect(() => {
+    if (!portalTarget) return;
+    const reposition = () => {
+      const rect = cardRef.current?.getBoundingClientRect();
+      setPosition((current) => current
+        ? clampToViewport(current.x, current.y, rect?.width || CARD_WIDTH, rect?.height || 420)
+        : current);
+    };
+    reposition();
+    window.addEventListener("resize", reposition);
+    return () => window.removeEventListener("resize", reposition);
+  }, [portalTarget]);
 
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     // Let the close button and the search field behave normally.
@@ -212,7 +229,7 @@ export function ChatUserCard({
   // happened yet at this point in the video.
   const deletedCount = upToNow.filter((message) => isVisiblyDeleted(message, thresholdSec)).length;
 
-  if (!mounted || !position) return null;
+  if (!portalTarget || !position) return null;
 
   return createPortal(
     <div
@@ -348,6 +365,6 @@ export function ChatUserCard({
         ) : null}
       </div>
     </div>,
-    document.body,
+    portalTarget,
   );
 }
