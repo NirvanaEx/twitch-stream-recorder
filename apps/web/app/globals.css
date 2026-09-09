@@ -2279,6 +2279,7 @@ textarea {
 }
 
 .chat-list {
+  overflow-anchor: none;
   flex: 1;
   min-height: 0;
   width: 100%;
@@ -4407,3 +4408,9 @@ textarea {
 .nav-link--out:hover {
   border-color: var(--border-strong);
 }
+
+/* Observe the actual content height as late emotes load. */
+.chat-list-content { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.chat-user-card__seek { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.chat-user-card__seek:disabled { cursor: default; opacity: .65; }
+.chat-user-card__more { display: block; margin: 8px auto; }

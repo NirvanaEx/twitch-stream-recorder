@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { apiGet } from "../lib/api";
 import type { ChatCopy } from "../lib/chat-copy";
 import { ROLE_LABELS } from "../lib/chat-copy";
 import { readableAuthorColor } from "../lib/chat-prefs";
@@ -17,6 +18,7 @@ import { ChatText } from "./ChatText";
 
 type Props = {
   login: string;
+  historyUrl?: string;
   /** Whole-stream message list, already sorted by relativeTimeSec. */
   messages: ChatMessage[];
   /** Chat time already reached by the player, on the whole-stream timeline. */
@@ -42,6 +44,9 @@ type Props = {
   anchorEl: HTMLElement | null;
 };
 
+type HistoryMessage = ChatMessage & { historySessionId?: string };
+type HistoryResponse = { messages: HistoryMessage[]; sessions: number; truncated: boolean };
+
 const CARD_WIDTH = 330;
 const POSITION_KEY = "tsr-chat-user-card-pos";
 
@@ -53,6 +58,7 @@ function clampToViewport(x: number, y: number, width: number, height: number) {
 
 export function ChatUserCard({
   login,
+  historyUrl,
   messages,
   thresholdSec,
   emoteMap,
@@ -73,6 +79,26 @@ export function ChatUserCard({
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [search, setSearch] = useState("");
+  const [history, setHistory] = useState<HistoryResponse | null>(null);
+  const [historyError, setHistoryError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [shownLimit, setShownLimit] = useState(100);
+
+  useEffect(() => {
+    if (!historyUrl) return;
+    let cancelled = false;
+    setHistory(null);
+    setHistoryError(false);
+    void apiGet<HistoryResponse>(historyUrl).then((response) => {
+      if (!cancelled) setHistory(response);
+    }).catch(() => {
+      if (!cancelled) setHistoryError(true);
+    });
+    return () => { cancelled = true; };
+  }, [historyUrl, retry]);
+
+  useEffect(() => { setShownLimit(100); }, [search]);
+
   const cardRef = useRef<HTMLDivElement | null>(null);
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
 
@@ -161,7 +187,7 @@ export function ChatUserCard({
   }, [onClose]);
 
   const own = useMemo(
-    () => messages.filter((message) => message.authorLogin === login),
+    () => messages.filter((message) => message.authorLogin.toLowerCase() === login.toLowerCase()).sort((a, b) => a.relativeTimeSec - b.relativeTimeSec),
     [messages, login],
   );
 
@@ -173,10 +199,10 @@ export function ChatUserCard({
   );
 
   const term = search.trim().toLowerCase();
-  const shown = useMemo(
-    () => (term ? upToNow.filter((m) => m.textRaw.toLowerCase().includes(term)) : upToNow),
-    [upToNow, term],
-  );
+  const shown = useMemo(() => {
+    const pool: HistoryMessage[] = [...upToNow].reverse().concat(history?.messages ?? []);
+    return term ? pool.filter((m) => m.textRaw.toLowerCase().includes(term)) : pool;
+  }, [upToNow, term, history]);
 
   const latest = upToNow[upToNow.length - 1] ?? own[0];
   const displayName = latest?.authorDisplayName ?? login;
@@ -257,6 +283,16 @@ export function ChatUserCard({
         />
 
         <div className="chat-user-card__hint">{copy.userCardHint}</div>
+        {historyUrl ? (
+          <div className="chat-user-card__hint" role="status">
+            {historyError ? (
+              <button type="button" onClick={() => setRetry((value) => value + 1)}>{copy.userCardHistoryRetry}</button>
+            ) : history ? (
+              <>{copy.userCardHistory}: {history.sessions} · {history.messages.length} {copy.messages}
+                {history.truncated ? ` · ${copy.userCardHistoryLimit}` : ""}</>
+            ) : copy.userCardHistoryLoading}
+          </div>
+        ) : null}
       </div>
 
       <div className="chat-user-card__list thin-scroll">
@@ -265,24 +301,31 @@ export function ChatUserCard({
         ) : (
           // Newest first: the reason to open this card is almost always "what
           // did they just say", not "how did they start".
-          [...shown].reverse().map((message) => {
+          shown.slice(0, shownLimit).map((message) => {
             const display = parseActionMessage(message.textRaw);
-            const seekable = canSeek(message.relativeTimeSec);
+            const historic = Boolean(message.historySessionId);
+            const seekable = !historic && canSeek(message.relativeTimeSec);
+            const deleted = isVisiblyDeleted(message, historic ? Infinity : thresholdSec);
 
             return (
-              <button
+              <div
                 key={message.id}
-                type="button"
                 className={`chat-user-card__row${
-                  isVisiblyDeleted(message, thresholdSec) ? " is-deleted" : ""
+                  deleted ? " is-deleted" : ""
                 }`}
-                onClick={() => onSeek(message.relativeTimeSec)}
-                disabled={!seekable}
-                title={seekable ? copy.userCardSeek : copy.userCardOtherPart}
+                title={historic ? copy.userCardPastStream : undefined}
               >
-                <span className="chat-time">
-                  {formatRenderTime(toRenderTime(message.relativeTimeSec))}
-                </span>
+                {historic ? (
+                  <span className="chat-time">
+                    {message.messageTimestamp ? new Date(message.messageTimestamp).toLocaleString(locale === "ru" ? "ru-RU" : "en-US") : copy.userCardPastStream}
+                  </span>
+                ) : (
+                  <button type="button" className="chat-user-card__seek chat-time"
+                    onClick={() => onSeek(message.relativeTimeSec)} disabled={!seekable}
+                    title={seekable ? copy.userCardSeek : copy.userCardOtherPart}>
+                    {formatRenderTime(toRenderTime(message.relativeTimeSec))}
+                  </button>
+                )}
                 <span className="chat-text">
                   <ChatText
                     text={display.text}
@@ -294,10 +337,15 @@ export function ChatUserCard({
                     mentionTitle={copy.userCardTitle}
                   />
                 </span>
-              </button>
+              </div>
             );
           })
         )}
+        {shown.length > shownLimit ? (
+          <button type="button" className="chat-user-card__more" onClick={() => setShownLimit((value) => value + 100)}>
+            {copy.userCardMore}
+          </button>
+        ) : null}
       </div>
     </div>,
     document.body,

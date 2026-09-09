@@ -4,6 +4,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -43,6 +44,8 @@ type ChatReplayProps = {
   archiveId?: string;
   /** Override the API path used to load chat (e.g. the public endpoint). */
   chatUrl?: string;
+  /** Public session whose earlier channel history can be loaded. */
+  historySessionId?: string;
   /**
    * API path returning the channel's 7TV set as it is now. Omit to hide the
    * "current emotes" switch — an offline bundle has no server to ask.
@@ -78,6 +81,7 @@ const MAX_VISIBLE = 200;
 export function ChatReplay({
   archiveId,
   chatUrl,
+  historySessionId,
   liveEmotesUrl,
   timelineUrl,
   eventsUrl,
@@ -104,6 +108,9 @@ export function ChatReplay({
   const [currentTime, setCurrentTime] = useState(0);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const lastScrollTop = useRef(0);
   // State, not a ref: the card positions itself against this element and has
   // to re-render once it exists.
   const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
@@ -293,33 +300,46 @@ export function ChatReplay({
     return entries;
   }, [timeline, currentTime, offset, baseOffsetSec, isLive, videoElement]);
 
-  // Twitch-style auto-scroll: only stick to the bottom while the user is
-  // already there. If they scroll up to read older messages we stop forcing
-  // them down and show a "jump to latest" pill instead.
-  useEffect(() => {
+  const pinToLatest = useCallback(() => {
     const list = listRef.current;
-    if (!list || !pinnedToBottom) return;
-
+    if (!list) return;
     list.scrollTop = list.scrollHeight;
-  }, [visibleMessages, pinnedToBottom]);
+    lastScrollTop.current = list.scrollTop;
+  }, []);
 
-  // Track whether the user is near the bottom of the chat. We use a small
-  // threshold so tiny rounding errors don't unpin them.
+  // Set the final position before paint, including row eviction at the 200
+  // message limit. The resulting scroll event is not a user scrolling up.
+  useLayoutEffect(() => {
+    if (pinnedRef.current) pinToLatest();
+  });
+
+  // Emotes, font changes and event cards can resize the list without a new
+  // message. Keep following those changes too, but never move a paused reader.
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) pinToLatest();
+    });
+    if (listRef.current) observer.observe(listRef.current);
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [pinToLatest]);
+
   const handleScroll = () => {
     const list = listRef.current;
     if (!list) return;
-
-    const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
-    const nearBottom = distanceFromBottom < 24;
-
-    setPinnedToBottom((prev) => (prev === nearBottom ? prev : nearBottom));
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+    const movedUp = list.scrollTop < lastScrollTop.current - 1;
+    lastScrollTop.current = list.scrollTop;
+    // Growing content alone must never show the pause pill.
+    if (nearBottom || movedUp) {
+      pinnedRef.current = nearBottom;
+      setPinnedToBottom(nearBottom);
+    }
   };
 
   const jumpToLatest = () => {
-    const list = listRef.current;
-    if (!list) return;
-
-    list.scrollTop = list.scrollHeight;
+    pinnedRef.current = true;
+    pinToLatest();
     setPinnedToBottom(true);
   };
 
@@ -373,7 +393,7 @@ export function ChatReplay({
     (name: string) => setActiveUser(loginByName.get(name.toLowerCase()) ?? name.toLowerCase()),
     [loginByName],
   );
-  const userThreshold = isLive
+  const userThreshold = isLive || !videoElement
     ? Number.POSITIVE_INFINITY
     : currentTime + baseOffsetSec - offset;
 
@@ -476,14 +496,15 @@ export function ChatReplay({
 
       <div className="chat-list-wrap" ref={setWrapEl}>
         <div ref={listRef} className="chat-list thin-scroll" onScroll={handleScroll}>
-          {loading ? (
-            // The chat is the heaviest thing on the page — several megabytes
-            // for a long broadcast — so this placeholder is on screen the
-            // longest and has the most work to do.
-            Array.from({ length: 16 }, (_, index) => (
-              <div className="chat-message chat-message--skeleton" key={index}>
-                <SkeletonText width={`${34 + ((index * 17) % 40)}px`} />
-                <SkeletonText width={`${45 + ((index * 29) % 45)}%`} />
+          <div ref={contentRef} className="chat-list-content">
+            {loading ? (
+              // The chat is the heaviest thing on the page — several megabytes
+              // for a long broadcast — so this placeholder is on screen the
+              // longest and has the most work to do.
+              Array.from({ length: 16 }, (_, index) => (
+                <div className="chat-message chat-message--skeleton" key={index}>
+                  <SkeletonText width={`${34 + ((index * 17) % 40)}px`} />
+                  <SkeletonText width={`${45 + ((index * 29) % 45)}%`} />
               </div>
             ))
           ) : loadError ? (
@@ -515,6 +536,7 @@ export function ChatReplay({
               />
             ))
           )}
+          </div>
         </div>
 
         {!pinnedToBottom ? (
@@ -525,7 +547,9 @@ export function ChatReplay({
 
         {activeUser ? (
           <ChatUserCard
+            key={`${historySessionId ?? endpoint ?? "offline"}:${activeUser.toLowerCase()}`}
             login={activeUser}
+            historyUrl={historySessionId ? `public/streams/${historySessionId}/chat/users/${encodeURIComponent(activeUser)}/history` : undefined}
             messages={allMessages}
             thresholdSec={userThreshold}
             emoteMap={emoteMap}
