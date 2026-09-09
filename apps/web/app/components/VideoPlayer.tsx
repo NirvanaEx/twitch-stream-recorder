@@ -98,6 +98,8 @@ const SKIP_SECONDS = 5;
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 const HIDE_DELAY_MS = 2500;
 const DOUBLE_TAP_MS = 350;
+const CENTER_HINT_MS = 450;
+type CenterHint = "play" | "pause" | "back" | "forward";
 // The volume slider goes past 100%: values above 1 are applied as Web Audio
 // gain on top of the element's full volume (quiet recordings happen).
 const MAX_VOLUME_BOOST = 3;
@@ -149,6 +151,9 @@ export function VideoPlayer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const centerIconTimerRef = useRef<number | null>(null);
+  const centerHintSequenceRef = useRef(0);
+  const tapTimerRef = useRef<number | null>(null);
+  const surfacePointerRef = useRef<{ id: number; x: number; y: number; at: number; moved: boolean } | null>(null);
   const autoRetryRef = useRef<{ count: number; timer: number | null }>({
     count: 0,
     timer: null,
@@ -170,9 +175,7 @@ export function VideoPlayer({
   const [showRateMenu, setShowRateMenu] = useState(false);
   const [scrubPreview, setScrubPreview] = useState<{ time: number; left: number } | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [centerHint, setCenterHint] = useState<"play" | "pause" | "back" | "forward" | null>(
-    null,
-  );
+  const [centerHint, setCenterHint] = useState<{ kind: CenterHint; sequence: number } | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // How far into the recording this viewer has ever got. Only ever grows —
@@ -588,10 +591,14 @@ export function VideoPlayer({
     v.addEventListener("loadedmetadata", onLoaded);
   }, []);
 
-  const flashCenterHint = useCallback((kind: "play" | "pause" | "back" | "forward") => {
-    setCenterHint(kind);
+  const flashCenterHint = useCallback((kind: CenterHint) => {
+    // A new animation belongs to an action, never to a timeupdate/render.
+    setCenterHint({ kind, sequence: ++centerHintSequenceRef.current });
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
-    centerIconTimerRef.current = window.setTimeout(() => setCenterHint(null), 600);
+    centerIconTimerRef.current = window.setTimeout(() => {
+      centerIconTimerRef.current = null;
+      setCenterHint(null);
+    }, CENTER_HINT_MS);
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -767,21 +774,59 @@ export function VideoPlayer({
   useEffect(() => () => {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
+    if (tapTimerRef.current) window.clearTimeout(tapTimerRef.current);
     if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
     // Free the audio rendering thread; a remount builds a fresh graph.
     void audioGraphRef.current?.ctx.close().catch(() => undefined);
     audioGraphRef.current = null;
   }, []);
 
-  // ---- Touch gestures -----------------------------------------------------
+  // ---- Video surface gestures -------------------------------------------
 
-  // Mobile UX mirrors YouTube: a single tap toggles the controls overlay
-  // (it must NOT pause), pausing is done with the pause button, and a
-  // double-tap on the left/right third of the video seeks -/+5 seconds.
+  // Mouse clicks have one owner. Touch/pen taps are handled below; ignore the
+  // compatibility click that the browser emits after that same gesture.
+  const handleVideoClick = (event: React.MouseEvent) => {
+    if (event.button !== 0 || Date.now() - lastTouchAtRef.current < 700) return;
+    togglePlay();
+  };
+
+  const handleVideoPointerDown = (event: React.PointerEvent) => {
+    if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+    lastTouchAtRef.current = Date.now();
+    surfacePointerRef.current = event.isPrimary && event.button === 0
+      ? { id: event.pointerId, x: event.clientX, y: event.clientY, at: Date.now(), moved: false }
+      : null;
+  };
+
+  const handleVideoPointerMove = (event: React.PointerEvent) => {
+    const start = surfacePointerRef.current;
+    if (start && start.id === event.pointerId && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
+      start.moved = true;
+    }
+  };
+
+  const cancelSurfaceTap = () => {
+    surfacePointerRef.current = null;
+    lastTapRef.current = null;
+    if (tapTimerRef.current) window.clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = null;
+  };
+
+  useEffect(() => cancelSurfaceTap, [effectiveSrc]);
+
+  // Delay single touch taps only long enough to preserve left/right double
+  // tap seeking. A swipe, long press or cancelled gesture is never a pause.
   const handleVideoPointerUp = (event: React.PointerEvent) => {
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
-
     lastTouchAtRef.current = Date.now();
+    const start = surfacePointerRef.current;
+    surfacePointerRef.current = null;
+    if (!start || start.id !== event.pointerId || start.moved
+      || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10
+      || Date.now() - start.at > 500) {
+      cancelSurfaceTap();
+      return;
+    }
 
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const x = (event.clientX - rect.left) / Math.max(1, rect.width);
@@ -790,7 +835,7 @@ export function VideoPlayer({
     const lastTap = lastTapRef.current;
 
     if (lastTap && now - lastTap.time < DOUBLE_TAP_MS && lastTap.zone === zone) {
-      lastTapRef.current = null;
+      cancelSurfaceTap();
 
       if (zone === "left") {
         seekBy(-SKIP_SECONDS);
@@ -804,14 +849,17 @@ export function VideoPlayer({
       return;
     }
 
-    lastTapRef.current = { time: now, zone };
-
-    if (!controlsVisible) {
-      setControlsVisible(true);
-      armHide();
-    } else if (isPlaying && !audioOnly) {
-      setControlsVisible(false);
+    // A tap in another zone is a separate single-tap action.
+    if (tapTimerRef.current) {
+      window.clearTimeout(tapTimerRef.current);
+      togglePlay();
     }
+    lastTapRef.current = { time: now, zone };
+    tapTimerRef.current = window.setTimeout(() => {
+      tapTimerRef.current = null;
+      lastTapRef.current = null;
+      togglePlay();
+    }, DOUBLE_TAP_MS);
   };
 
   // ---- Keyboard shortcuts ----------------------------------------------
@@ -827,8 +875,15 @@ export function VideoPlayer({
 
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
       if (isTypingTarget(event.target)) return;
+
+      // Holding a toggle must not repeatedly pause/resume or enter/exit a mode.
+      // Repeating seek/volume keys remains intentional and useful.
+      if (event.repeat && [" ", "k", "m", "f", "t", "c"].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        return;
+      }
 
       const v = videoRef.current;
       if (!v) return;
@@ -1082,7 +1137,9 @@ export function VideoPlayer({
       }}
     >
       {effectiveSrc && audioOnly ? (
-        <div className="vp__audio-stage" onPointerUp={handleVideoPointerUp}>
+        <div className="vp__audio-stage" onClick={handleVideoClick}
+          onPointerDown={handleVideoPointerDown} onPointerMove={handleVideoPointerMove}
+          onPointerCancel={cancelSurfaceTap} onPointerUp={handleVideoPointerUp}>
           <audio
             ref={setVideoNode}
             className="vp__audio-media"
@@ -1116,6 +1173,10 @@ export function VideoPlayer({
           poster={poster}
           preload="metadata"
           playsInline
+          onClick={handleVideoClick}
+          onPointerDown={handleVideoPointerDown}
+          onPointerMove={handleVideoPointerMove}
+          onPointerCancel={cancelSurfaceTap}
           onPointerUp={handleVideoPointerUp}
         />
       ) : (
@@ -1153,22 +1214,22 @@ export function VideoPlayer({
         </div>
       ) : null}
 
-      {waiting && !mediaError && effectiveSrc ? (
+      {waiting && !centerHint && !mediaError && effectiveSrc ? (
         <div className="vp__buffering" aria-hidden>
           <SpinnerIcon size={36} />
         </div>
       ) : null}
 
       {centerHint ? (
-        <div className="vp__center-hint" key={`${centerHint}-${Date.now()}`} aria-hidden>
-          {centerHint === "play" ? <PlayIcon size={36} /> : null}
-          {centerHint === "pause" ? <PauseIcon size={36} /> : null}
-          {centerHint === "back" ? <SkipBack5Icon size={36} /> : null}
-          {centerHint === "forward" ? <SkipForward5Icon size={36} /> : null}
+        <div className="vp__center-hint" key={centerHint.sequence} data-action={centerHint.kind} aria-hidden>
+          {centerHint.kind === "play" ? <PlayIcon size={36} /> : null}
+          {centerHint.kind === "pause" ? <PauseIcon size={36} /> : null}
+          {centerHint.kind === "back" ? <SkipBack5Icon size={36} /> : null}
+          {centerHint.kind === "forward" ? <SkipForward5Icon size={36} /> : null}
         </div>
       ) : null}
 
-      {!isPlaying && currentTime === 0 && effectiveSrc && !mediaError && !audioOnly ? (
+      {!isPlaying && !centerHint && currentTime === 0 && effectiveSrc && !mediaError && !audioOnly ? (
         <button type="button" className="vp__big-play" onClick={togglePlay} aria-label="Play">
           <PlayIcon size={44} />
         </button>
@@ -1242,7 +1303,7 @@ export function VideoPlayer({
             <button
               type="button"
               className="vp__btn"
-              onClick={() => seekBy(-SKIP_SECONDS)}
+              onClick={() => { seekBy(-SKIP_SECONDS); flashCenterHint("back"); }}
               title="Назад 5 сек (← / J)"
             >
               <SkipBack5Icon size={20} />
@@ -1251,7 +1312,7 @@ export function VideoPlayer({
             <button
               type="button"
               className="vp__btn"
-              onClick={() => seekBy(SKIP_SECONDS)}
+              onClick={() => { seekBy(SKIP_SECONDS); flashCenterHint("forward"); }}
               title="Вперёд 5 сек (→ / L)"
             >
               <SkipForward5Icon size={20} />
