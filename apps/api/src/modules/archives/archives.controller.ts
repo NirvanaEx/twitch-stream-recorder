@@ -26,6 +26,7 @@ import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
+  matchesMediaEtag,
   parseMediaRange,
   pipeFileToResponse,
 } from "../recording/playback.utils";
@@ -65,7 +66,7 @@ export class ArchivesController {
   async getThumbnail(@Param("id") id: string, @Req() req: any, @Res() res: any) {
     const cover = await this.thumbnailService.getCover(id);
 
-    if (req.headers["if-none-match"] === cover.etag) {
+    if (matchesMediaEtag(req.headers["if-none-match"], cover.etag)) {
       res.writeHead(304, { ETag: cover.etag, "Cache-Control": "private, max-age=86400" });
       res.end();
       return;
@@ -243,7 +244,7 @@ export class ArchivesController {
     // video ranges are bulkier, an hour matches the Telegram-backed path.
     const cache = buildMediaCacheHeaders(stat, isAudioFile ? 86_400 : 3_600);
 
-    if (!range && req.headers["if-none-match"] === cache.etag) {
+    if (!range && matchesMediaEtag(req.headers["if-none-match"], cache.etag)) {
       res.writeHead(304, cache.headers);
       res.end();
       return;

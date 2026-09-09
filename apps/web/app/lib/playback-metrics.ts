@@ -24,10 +24,6 @@ export function trackPlaybackMetrics(video: HTMLMediaElement, now = () => perfor
       firstFrame = true;
       video.dataset.startupMs = String(Math.round(now() - startedAt));
     }
-    if (seekAt !== null) {
-      video.dataset.seekMs = String(Math.round(now() - seekAt));
-      seekAt = null;
-    }
     finishStall();
   };
   const ready = () => {
@@ -39,7 +35,13 @@ export function trackPlaybackMetrics(video: HTMLMediaElement, now = () => perfor
   const handlers: Record<string, () => void> = {
     play: () => { if (!firstFrame && startedAt === null) startedAt = now(); },
     seeking: () => { seekAt = now(); finishStall(); },
-    seeked: ready,
+    // A paused seek may display its frame before a frame callback can be
+    // registered. Measure completion here, never include the user's pause.
+    seeked: () => {
+      if (seekAt !== null) video.dataset.seekMs = String(Math.round(now() - seekAt));
+      seekAt = null;
+      finishStall();
+    },
     playing: ready,
     waiting: () => {
       if (firstFrame && !video.paused && !video.seeking && seekAt === null && stallAt === null) {

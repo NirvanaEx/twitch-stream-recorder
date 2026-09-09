@@ -46,11 +46,11 @@ No public request triggers ffmpeg and no scheduled mass processing is enabled.
 ## Measurement and verification
 
 The main `<video>` exposes local diagnostics in `data-startup-ms` (play request
-to first displayed frame), `data-seek-ms` (last seek to frame), `data-stall-count`,
+to first displayed frame), `data-seek-ms` (last seek to `seeked`), `data-stall-count`,
 `data-stall-ms`, and `data-delivery`. Nothing is transmitted. For an MP4 comparison
 use the same watch URL with `?delivery=mp4`; keep cache/network conditions in mind.
 
-- Linux/Node 22 API suite: 163/163 passed.
+- Linux/Node 22 API suite: 163/163 passed; additional ETag revalidation test passed.
 - TypeScript API/web checks and Next production build passed.
 - `scripts/test-playback-ui.cjs`: dwell cancellation, JPEG selection, initial
   metadata seek, one media element at mount, spoiler fog, HLS fallback/resume,
@@ -61,3 +61,9 @@ use the same watch URL with `?delivery=mp4`; keep cache/network conditions in mi
 
 UI harnesses use `node --import tsx scripts/test-playback-ui.cjs` with jsdom
 available through NODE_PATH, as for the existing chat harness.
+
+External-domain validation also found Cloudflare adding weak ETags when Brotli
+compressing the playlist. Public/admin media now accept weak If-None-Match and
+multiple tags, so those responses can return 304 correctly. Browser testing
+confirmed one video element and restored position on native HLS. Runtime files
+changed from 492.2 MiB dependencies + 156.8 MiB Next output to 60.9 + 4.6 MiB.
