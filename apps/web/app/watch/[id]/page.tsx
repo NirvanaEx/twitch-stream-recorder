@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
@@ -38,6 +39,8 @@ type PublicStreamDetail = {
   endedAt: string | null;
   fileSizeBytes: string | null;
   videoUrl: string;
+  hlsUrl?: string;
+  previewFrames?: { baseUrl: string; count: number; intervalSec: number };
   videoSource: "local" | "drive" | "telegram";
   audioOnly: boolean;
   chatOffsetSec: number;
@@ -77,6 +80,7 @@ export default function PublicWatchPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const searchParams = useSearchParams();
   const { t } = useLanguage();
   const { spoilerFree } = useSpoiler();
   const [data, setData] = useState<PublicStreamDetail | null>(null);
@@ -461,6 +465,10 @@ export default function PublicWatchPage({
           <div className="replay-stage__player">
             <VideoPlayer
               src={videoSrc}
+              hlsUrl={data.hlsUrl && searchParams.get("delivery") !== "mp4" ? buildMediaUrl(data.hlsUrl) : undefined}
+              previewFrames={data.previewFrames ? {
+                ...data.previewFrames, baseUrl: buildMediaUrl(data.previewFrames.baseUrl),
+              } : undefined}
               playlist={playlist ?? undefined}
               initialSegment={initialSegmentRef.current}
               onSegmentChange={handleSegmentChange}

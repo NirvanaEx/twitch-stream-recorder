@@ -1,3 +1,4 @@
+import { mediaStat } from "./media-stat";
 import {
   BadRequestException,
   Injectable,
@@ -503,7 +504,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
 
     if (existingSession) {
       return {
-        item: this.serializeSession(existingSession, existingSession.channel),
+        item: await this.serializeSession(existingSession, existingSession.channel),
       };
     }
 
@@ -531,7 +532,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // the resume-after-crash case, and it creates a new "part" session.
       if (duplicateSession?.status === "recording") {
         return {
-          item: this.serializeSession(duplicateSession, duplicateSession.channel),
+          item: await this.serializeSession(duplicateSession, duplicateSession.channel),
         };
       }
     }
@@ -854,7 +855,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     return {
-      items: items.map((session) => this.serializeSession(session, session.channel)),
+      items: await Promise.all(items.map((session) => this.serializeSession(session, session.channel))),
       total,
       page: safePage,
       pageSize: safePageSize,
@@ -882,7 +883,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Archive ${id} was not found.`);
     }
 
-    const serialized = this.serializeSession(session, session.channel);
+    const serialized = await this.serializeSession(session, session.channel);
     const item = {
       ...serialized,
       chatOffsetSec: serialized.chatOffsetSec + (settings?.defaultChatOffsetSec ?? 0),
@@ -915,7 +916,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     });
 
     return {
-      items: items.map((session) => this.serializeSession(session, session.channel)),
+      items: await Promise.all(items.map((session) => this.serializeSession(session, session.channel))),
     };
   }
 
@@ -1101,8 +1102,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // a stale localPath must not send the viewer to Telegram while the
       // drive copy sits right there.
       for (const candidate of [segment?.localPath, segment?.archivePath]) {
-        if (candidate && existsSync(candidate)) {
-          return { absolutePath: candidate, stat: statSync(candidate) };
+        const stat = candidate ? await mediaStat(candidate) : null;
+        if (candidate && stat && stat.size > 0) {
+          return { absolutePath: candidate, stat };
         }
       }
 
@@ -1113,16 +1115,11 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Playback file for archive ${id} was not found.`);
     }
 
-    const playback = resolveSessionPlaybackState(session);
-
-    if (!playback.absolutePath || !playback.fileExists || !playback.videoReady) {
+    const stat = await mediaStat(session.playbackPath);
+    if (!stat || stat.size <= 0) {
       throw new NotFoundException(`Playback file for archive ${id} is missing on disk.`);
     }
-
-    return {
-      absolutePath: playback.absolutePath,
-      stat: statSync(playback.absolutePath),
-    };
+    return { absolutePath: resolve(session.playbackPath), stat };
   }
 
   async getSessionById(id: string) {
@@ -1144,7 +1141,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     return {
-      item: this.serializeSession(session, session.channel),
+      item: await this.serializeSession(session, session.channel),
     };
   }
 
@@ -2575,14 +2572,14 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private serializeSession(
+  private async serializeSession(
     session: StreamSession & {
       telegramParts?: TelegramUploadPart[];
       segments?: RecordingSegment[];
     },
     channel: Pick<Channel, "displayName" | "twitchLogin" | "profileImageUrl" | "platform">,
   ) {
-    const playback = resolveSessionPlaybackState(session);
+    const playback = await resolveSessionPlaybackState(session);
 
     const telegramParts = (session.telegramParts ?? []).map((part) => ({
       partIndex: part.partIndex,

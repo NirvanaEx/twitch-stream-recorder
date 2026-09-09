@@ -1,3 +1,5 @@
+import { getPlaybackAssets, playbackAssetPath } from "../recording/playback-assets";
+import { mediaStat } from "../recording/media-stat";
 import {
   Controller,
   Get,
@@ -8,7 +10,7 @@ import {
   Req,
   Res,
 } from "@nestjs/common";
-import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
+import { createReadStream, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
 import { getUserChatHistory } from "./user-chat-history";
@@ -133,9 +135,9 @@ export class PublicStreamsController {
       }),
     ]);
 
-    const items = sessions
-      .map((session) => {
-        const playback = resolveSessionPlaybackState(session);
+    const items = (await Promise.all(sessions
+      .map(async (session) => {
+        const playback = await resolveSessionPlaybackState(session);
         // Chunks on the archive drive are a perfectly good source even when
         // nothing of this broadcast is in Telegram.
         const hasParts =
@@ -173,7 +175,7 @@ export class PublicStreamsController {
           endedAt: session.endedAt?.toISOString() ?? null,
           fileSizeBytes: playback.fileSizeBytes,
         };
-      })
+      })))
       .filter(Boolean);
 
     return {
@@ -207,7 +209,8 @@ export class PublicStreamsController {
       take: 60,
     });
 
-    const available = sessions.filter((session) => this.hasUsableAudio(session));
+    const usable = await Promise.all(sessions.map((session) => this.hasUsableAudio(session)));
+    const available = sessions.filter((_, index) => usable[index]);
     const parts = annotateBroadcastParts(available, (session) => session.channelId);
     const items = available.map((session) => this.mapAudioTrack(session, parts.get(session.id)));
 
@@ -250,7 +253,8 @@ export class PublicStreamsController {
       take: 50,
     });
 
-    const available = sessions.filter((session) => this.hasUsableAudio(session));
+    const usable = await Promise.all(sessions.map((session) => this.hasUsableAudio(session)));
+    const available = sessions.filter((_, index) => usable[index]);
     const { best, group } = matchSessionsToVod(available, date, length);
 
     if (!best) {
@@ -381,12 +385,12 @@ export class PublicStreamsController {
     };
   }
 
-  private hasUsableAudio(
+  private async hasUsableAudio(
     session: StreamSession & { audioPath: string | null; telegramAudioMessageId: string | null },
   ) {
     return Boolean(
-      (session.audioPath && existsSync(resolve(session.audioPath))) ||
-        session.telegramAudioMessageId,
+      session.telegramAudioMessageId ||
+        (session.audioPath && await mediaStat(resolve(session.audioPath), true)),
     );
   }
 
@@ -505,13 +509,13 @@ export class PublicStreamsController {
 
     const absolutePath = session.audioPath ? resolve(session.audioPath) : null;
 
-    if (!absolutePath || !existsSync(absolutePath)) {
+    const stat = absolutePath ? await mediaStat(absolutePath) : null;
+    if (!absolutePath || !stat) {
       // The local file is gone — stream the Telegram copy instead.
       await this.telegramStreamService.streamAudioToResponse(id, req, res, downloadName);
       return;
     }
 
-    const stat = statSync(absolutePath);
     const range = req.headers.range as string | undefined;
     // A day, per how often the userscript reopens the same VOD's overlay.
     const cache = buildMediaCacheHeaders(stat, 86_400);
@@ -555,6 +559,33 @@ export class PublicStreamsController {
     pipeFileToResponse(createReadStream(absolutePath), res);
   }
 
+  @Get(":id/playback/:filename")
+  async playbackAsset(@Param("id") id: string, @Param("filename") filename: string,
+    @Req() req: any, @Res() res: any) {
+    const asset = playbackAssetPath(id, filename);
+    if (!asset || !await getPlaybackAssets(id)) throw new NotFoundException("Media asset not found");
+    const stat = await mediaStat(asset.path);
+    if (!stat) throw new NotFoundException("Media asset not found");
+    const cache = buildMediaCacheHeaders(stat, 86400);
+    const headers = { ...cache.headers, "Content-Type": asset.contentType, "Accept-Ranges": "bytes" };
+    if (req.headers["if-none-match"] === cache.etag && !req.headers.range) {
+      res.writeHead(304, headers); res.end(); return;
+    }
+    const range = req.headers.range ? parseMediaRange(req.headers.range, stat.size) : null;
+    if (req.headers.range && !range) {
+      res.writeHead(416, { "Content-Range": `bytes */${stat.size}` }); res.end(); return;
+    }
+    res.writeHead(range ? 206 : 200, {
+      ...headers,
+      "Content-Length": range ? range.end - range.start + 1 : stat.size,
+      ...(range ? { "Content-Range": `bytes ${range.start}-${range.end}/${stat.size}` } : {}),
+    });
+    if (req.method === "HEAD") { res.end(); return; }
+    const stream = createReadStream(asset.path, range ?? undefined);
+    stream.once("error", () => res.destroy());
+    pipeFileToResponse(stream, res);
+  }
+
   @Get(":id")
   async get(@Param("id") id: string) {
     const [session, settings] = await Promise.all([
@@ -573,7 +604,7 @@ export class PublicStreamsController {
       throw new NotFoundException("Запись не найдена.");
     }
 
-    const playback = resolveSessionPlaybackState(session);
+    const playback = await resolveSessionPlaybackState(session);
     const parts = resolvePlaybackParts({
       hasSingleFile: playback.videoReady,
       audioOnly: session.audioOnly,
@@ -616,6 +647,7 @@ export class PublicStreamsController {
         fileSizeBytes: playback.fileSizeBytes,
         // Public clients hit the public video endpoint — never the admin one.
         videoUrl: `/api/public/streams/${session.id}/video`,
+        ...await getPlaybackAssets(id),
         videoSource: playback.tier ?? parts[0]?.source ?? "telegram",
         audioOnly: session.audioOnly,
         chatOffsetSec:
