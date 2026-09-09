@@ -31,6 +31,16 @@ export function buildMediaCacheHeaders(stat: Stats, maxAgeSec: number) {
   };
 }
 
+/** GET/HEAD If-None-Match uses weak comparison. Proxies can add W/ while
+ * compressing a playlist without changing the underlying recording asset. */
+export function matchesMediaEtag(header: unknown, etag: string) {
+  if (typeof header !== "string") return false;
+  return header.split(",").some((value) => {
+    const candidate = value.trim();
+    return candidate === "*" || candidate.replace(/^W\//, "") === etag.replace(/^W\//, "");
+  });
+}
+
 /** Parse one RFC 7233 byte range, including suffix ranges used by browsers. */
 export function parseMediaRange(range: string, size: number) {
   const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());

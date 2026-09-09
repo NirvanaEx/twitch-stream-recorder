@@ -2,9 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   computeSessionChatOffsetSec,
+  matchesMediaEtag,
   parseMediaRange,
   resolvePlaybackParts,
 } from "./playback.utils";
+
+test("compressed playlists revalidate using weak or multiple ETags", () => {
+  assert.equal(matchesMediaEtag('W/"137a-1a08751ded0"', '"137a-1a08751ded0"'), true);
+  assert.equal(matchesMediaEtag('"old", W/"current"', '"current"'), true);
+  assert.equal(matchesMediaEtag('*', '"current"'), true);
+  assert.equal(matchesMediaEtag('W/"old"', '"current"'), false);
+  assert.equal(matchesMediaEtag(undefined, '"current"'), false);
+});
 
 function segment(index: number, overrides: Record<string, unknown> = {}) {
   return {

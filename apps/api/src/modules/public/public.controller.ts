@@ -30,6 +30,7 @@ import { StreamEventsService } from "../stream-events/stream-events.service";
 import { PrismaService } from "../prisma/prisma.service";
 import {
   buildMediaCacheHeaders,
+  matchesMediaEtag,
   computeSessionChatOffsetSec,
   parseMediaRange,
   pipeFileToResponse,
@@ -467,7 +468,7 @@ export class PublicStreamsController {
 
     const cover = await this.thumbnailService.getCover(id);
 
-    if (req.headers["if-none-match"] === cover.etag) {
+    if (matchesMediaEtag(req.headers["if-none-match"], cover.etag)) {
       res.writeHead(304, { ETag: cover.etag, "Cache-Control": "public, max-age=86400" });
       res.end();
       return;
@@ -520,7 +521,7 @@ export class PublicStreamsController {
     // A day, per how often the userscript reopens the same VOD's overlay.
     const cache = buildMediaCacheHeaders(stat, 86_400);
 
-    if (!range && req.headers["if-none-match"] === cache.etag) {
+    if (!range && matchesMediaEtag(req.headers["if-none-match"], cache.etag)) {
       res.writeHead(304, cache.headers);
       res.end();
       return;
@@ -568,7 +569,7 @@ export class PublicStreamsController {
     if (!stat) throw new NotFoundException("Media asset not found");
     const cache = buildMediaCacheHeaders(stat, 86400);
     const headers = { ...cache.headers, "Content-Type": asset.contentType, "Accept-Ranges": "bytes" };
-    if (req.headers["if-none-match"] === cache.etag && !req.headers.range) {
+    if (matchesMediaEtag(req.headers["if-none-match"], cache.etag) && !req.headers.range) {
       res.writeHead(304, headers); res.end(); return;
     }
     const range = req.headers.range ? parseMediaRange(req.headers.range, stat.size) : null;
@@ -865,7 +866,7 @@ export class PublicStreamsController {
     // video ranges are bulkier, an hour matches the Telegram-backed path.
     const cache = buildMediaCacheHeaders(stat, isAudioFile ? 86_400 : 3_600);
 
-    if (!range && req.headers["if-none-match"] === cache.etag) {
+    if (!range && matchesMediaEtag(req.headers["if-none-match"], cache.etag)) {
       res.writeHead(304, cache.headers);
       res.end();
       return;
