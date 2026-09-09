@@ -488,6 +488,7 @@ export default function PublicWatchPage({
           <aside className="replay-stage__chat">
             <ChatReplay
               chatUrl={`public/streams/${id}/chat`}
+              historySessionId={id}
               liveEmotesUrl={`public/streams/${id}/emotes/live`}
               timelineUrl={`public/streams/${id}/timeline`}
               eventsUrl={`public/streams/${id}/events`}

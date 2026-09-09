@@ -11,6 +11,7 @@ import {
 import { createReadStream, existsSync, statSync, type Stats } from "node:fs";
 import { resolve } from "node:path";
 import { Prisma, StreamSession, TelegramUploadPart } from "@prisma/client";
+import { getUserChatHistory } from "./user-chat-history";
 import { AllowAnonymous } from "../auth/auth.decorators";
 import {
   deletionOffsetSec,
@@ -668,6 +669,12 @@ export class PublicStreamsController {
       messages: messages.map((message) => buildReplayMessage(message, anchorMs)),
       emotes: parseStoredJson(snapshot?.payloadJson),
     };
+  }
+
+  /** Earlier broadcasts only; filter by author before sending history. */
+  @Get(":id/chat/users/:login/history")
+  async getUserHistory(@Param("id") id: string, @Param("login") login: string) {
+    return getUserChatHistory(this.prisma, id, login);
   }
 
   /** Viewers / title / category over the course of the broadcast. */
