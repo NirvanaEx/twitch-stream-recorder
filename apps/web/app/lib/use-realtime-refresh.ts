@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { createRefreshQueue } from "./refresh-queue";
 import { io } from "socket.io-client";
 
 type RefreshCallback = () => void | Promise<void>;
@@ -20,6 +21,8 @@ function getSocketBaseUrl() {
 }
 
 export function useRealtimeRefresh(onRefresh: RefreshCallback) {
+  const callback = useRef(onRefresh);
+  callback.current = onRefresh;
   useEffect(() => {
     const baseUrl = getSocketBaseUrl();
 
@@ -32,9 +35,10 @@ export function useRealtimeRefresh(onRefresh: RefreshCallback) {
       reconnection: true,
     });
 
-    const refresh = () => {
-      void onRefresh();
-    };
+    const queue = createRefreshQueue(() => callback.current(), () => !document.hidden);
+    const refresh = () => queue.request();
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
 
     socket.on("system:hello", refresh);
     socket.on("channel:updated", refresh);
@@ -43,6 +47,8 @@ export function useRealtimeRefresh(onRefresh: RefreshCallback) {
     socket.on("telegram:updated", refresh);
 
     return () => {
+      queue.dispose();
+      document.removeEventListener("visibilitychange", onVisible);
       socket.off("system:hello", refresh);
       socket.off("channel:updated", refresh);
       socket.off("recording:started", refresh);
@@ -50,5 +56,5 @@ export function useRealtimeRefresh(onRefresh: RefreshCallback) {
       socket.off("telegram:updated", refresh);
       socket.close();
     };
-  }, [onRefresh]);
+  }, []);
 }

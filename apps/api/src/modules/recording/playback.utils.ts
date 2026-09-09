@@ -1,4 +1,5 @@
-import { existsSync, statSync, type ReadStream, type Stats } from "node:fs";
+import { type ReadStream, type Stats } from "node:fs";
+import { mediaStat } from "./media-stat";
 import { type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
@@ -84,7 +85,7 @@ export function computeSessionChatOffsetSec(session: SessionChatTimingFields) {
   return Math.abs(offset) <= 60 * 60 ? offset : 0;
 }
 
-export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
+export async function resolveSessionPlaybackState(session: SessionPlaybackFields) {
   if (!session.playbackPath) {
     return {
       absolutePath: null,
@@ -99,19 +100,9 @@ export function resolveSessionPlaybackState(session: SessionPlaybackFields) {
   const absolutePath = resolve(session.playbackPath);
   const tier: MediaTier = isUnderArchiveRoot(absolutePath) ? "drive" : "local";
 
-  if (!existsSync(absolutePath)) {
-    return {
-      absolutePath,
-      fileExists: false,
-      fileSizeBytes: session.fileSizeBytes,
-      videoReady: false,
-      videoUrl: null,
-      tier: null as MediaTier | null,
-    };
-  }
-
   try {
-    const stat = statSync(absolutePath);
+    const stat = await mediaStat(absolutePath, true);
+    if (!stat) throw new Error("Missing media");
     const fileSizeBytes = String(stat.size);
     const videoReady = stat.size > 0;
 

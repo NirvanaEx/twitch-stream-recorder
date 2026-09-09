@@ -8,6 +8,9 @@ import {
   spoilerPctToTime,
   spoilerTimeToPct,
 } from "../lib/spoiler-timeline";
+import { TimelinePreview, type PreviewFrames } from "./TimelinePreview";
+import { useHlsPlayback } from "../lib/use-hls-playback";
+import { trackPlaybackMetrics } from "../lib/playback-metrics";
 import { waveformHeights } from "../lib/waveform";
 import { SpoilerToggle } from "./SpoilerToggle";
 import {
@@ -36,6 +39,8 @@ export type PlaylistSegment = {
 
 type VideoPlayerProps = {
   src: string;
+  hlsUrl?: string;
+  previewFrames?: PreviewFrames | null;
   autoPlay?: boolean;
   poster?: string;
   mode: PlayerMode;
@@ -115,6 +120,8 @@ const AUTO_RETRY_DELAY_MS = 1500;
  */
 export function VideoPlayer({
   src,
+  hlsUrl,
+  previewFrames,
   autoPlay = false,
   poster,
   mode,
@@ -236,6 +243,14 @@ export function VideoPlayer({
     ? segments[Math.min(segmentIndex, segments.length - 1)].src
     : src;
 
+  const { mediaSrc, handlesErrors } = useHlsPlayback(
+    videoRef, effectiveSrc, !audioOnly && (!segments || segments.length === 1) ? hlsUrl : undefined,
+  );
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) return trackPlaybackMetrics(video);
+  }, [effectiveSrc, audioOnly]);
+
   // Media event handlers and seek callbacks must not capture stale state.
   const virtualRef = useRef({
     segments,
@@ -333,6 +348,7 @@ export function VideoPlayer({
     };
     const onRate = () => setPlaybackRate(v.playbackRate);
     const onError = () => {
+      if (handlesErrors) return;
       const code = v.error?.code;
       // NETWORK is a playing stream that broke; SRC_NOT_SUPPORTED is the same
       // server hiccup at load time — a 502 during the deploy window, a 500
@@ -406,7 +422,7 @@ export function VideoPlayer({
       v.removeEventListener("volumechange", onVolume);
       v.removeEventListener("ratechange", onRate);
     };
-  }, [effectiveSrc, audioOnly]);
+  }, [effectiveSrc, audioOnly, handlesErrors]);
 
   // Restore stored volume / muted / boost / compressor across visits.
   useEffect(() => {
@@ -965,56 +981,15 @@ export function VideoPlayer({
   );
 
   const progressRef = useRef<HTMLDivElement | null>(null);
-  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Hovering the timeline seeks a second, muted <video> to the hovered
-  // position so the tooltip shows an actual frame (YouTube-style preview).
-  // In virtual-playlist mode the hovered global time maps to a segment-local
-  // one (the preview element's src is switched in render).
-  useEffect(() => {
-    const preview = previewVideoRef.current;
-    if (!preview || !scrubPreview) return;
-    // Spoiler-free: do not even fetch the frame. Seeking the hidden preview
-    // element would pull the picture down and put it one CSS rule away from
-    // being on screen.
-    if (spoilerFree && scrubPreview.time > clearSpanSec(revealedSec)) return;
-
-    const vr = virtualRef.current;
-    let local = scrubPreview.time;
-
-    if (vr.segments) {
-      let index = vr.segments.length - 1;
-      for (let i = 0; i < vr.segments.length; i += 1) {
-        if (scrubPreview.time < vr.offsets[i] + vr.segments[i].durationSec) {
-          index = i;
-          break;
-        }
-      }
-      local = Math.max(0, scrubPreview.time - vr.offsets[index]);
-    }
-
-    const target = Math.max(0, Math.floor(local));
-
-    if (Math.abs((preview.currentTime || 0) - target) >= 1) {
-      try {
-        preview.currentTime = target;
-      } catch {
-        // Metadata not loaded yet; the next hover move will retry.
-      }
-    }
-  }, [scrubPreview, spoilerFree, revealedSec]);
-
-  // Src for the hover-preview element: the hovered segment in playlist mode.
   let previewSrc = effectiveSrc;
-  if (segments && scrubPreview) {
+  let previewTime = scrubPreview?.time ?? 0;
+  if (segments && scrubPreview && !previewFrames) {
     let index = segments.length - 1;
     for (let i = 0; i < segments.length; i += 1) {
-      if (scrubPreview.time < segmentOffsets[i] + segments[i].durationSec) {
-        index = i;
-        break;
-      }
+      if (scrubPreview.time < segmentOffsets[i] + segments[i].durationSec) { index = i; break; }
     }
     previewSrc = segments[index].src;
+    previewTime = Math.max(0, scrubPreview.time - segmentOffsets[index]);
   }
 
   const computePctFromEvent = (clientX: number) => {
@@ -1136,7 +1111,7 @@ export function VideoPlayer({
         <video
           ref={setVideoNode}
           className="vp__video"
-          src={effectiveSrc}
+          src={mediaSrc}
           autoPlay={autoPlay}
           poster={poster}
           preload="metadata"
@@ -1221,8 +1196,7 @@ export function VideoPlayer({
                 aria-hidden
               />
             ) : null}
-            {/* Kept mounted so the preview video's metadata loads only once.
-                Audio has no frames — only the hovered timestamp is shown. */}
+            {/* Hidden and spoiler-covered tooltips do no media I/O. */}
             <div
               className={`vp__scrub-preview${
                 audioOnly || scrubInFog ? " vp__scrub-preview--time" : ""
@@ -1233,16 +1207,8 @@ export function VideoPlayer({
               }}
               aria-hidden
             >
-              {audioOnly || scrubInFog ? null : (
-                <video
-                  ref={previewVideoRef}
-                  className="vp__scrub-video"
-                  src={previewSrc || undefined}
-                  muted
-                  playsInline
-                  preload="metadata"
-                  tabIndex={-1}
-                />
+              {audioOnly || scrubInFog || !scrubPreview ? null : (
+                <TimelinePreview src={previewSrc} time={previewTime} frames={previewFrames} />
               )}
               <span className="vp__scrub-time">
                 {/* In the fog the absolute position would be a number the

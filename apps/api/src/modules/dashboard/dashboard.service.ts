@@ -79,9 +79,9 @@ export class DashboardService {
       trackedChannels,
       liveChannels,
       activeRecordings,
-      channels: channelsRaw.map((channel) => {
+      channels: await Promise.all(channelsRaw.map(async (channel) => {
         const latestSession = channel.streamSessions[0];
-        const playback = latestSession ? resolveSessionPlaybackState(latestSession) : null;
+        const playback = latestSession ? await resolveSessionPlaybackState(latestSession) : null;
 
         return {
           id: channel.id,
@@ -103,9 +103,9 @@ export class DashboardService {
               }
             : null,
         };
-      }),
-      latestArchives: latestArchives.map((session) => {
-        const playback = resolveSessionPlaybackState(session);
+      })),
+      latestArchives: await Promise.all(latestArchives.map(async (session) => {
+        const playback = await resolveSessionPlaybackState(session);
 
         return {
           id: session.id,
@@ -118,7 +118,7 @@ export class DashboardService {
           videoUrl: playback.videoUrl,
           createdAt: session.createdAt,
         };
-      }),
+      })),
       settings,
       diskUsage,
     };

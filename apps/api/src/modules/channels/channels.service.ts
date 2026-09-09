@@ -59,9 +59,9 @@ export class ChannelsService implements OnModuleInit {
     });
 
     return {
-      items: items.map((channel) => {
+      items: await Promise.all(items.map(async (channel) => {
         const latestSession = channel.streamSessions[0];
-        const playback = latestSession ? resolveSessionPlaybackState(latestSession) : null;
+        const playback = latestSession ? await resolveSessionPlaybackState(latestSession) : null;
 
         return {
           id: channel.id,
@@ -95,7 +95,7 @@ export class ChannelsService implements OnModuleInit {
               }
             : null,
         };
-      }),
+      })),
     };
   }
 

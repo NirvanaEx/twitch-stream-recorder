@@ -1,9 +1,8 @@
 import { Injectable, Logger, NotFoundException, OnModuleDestroy } from "@nestjs/common";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdirSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mediaStat } from "./media-stat";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { ARCHIVE_FILES } from "../archive-storage/archive-paths";
@@ -112,7 +111,7 @@ export class ThumbnailService implements OnModuleDestroy {
       const { buffer } = await this.getCover(sessionId);
       const target = this.storedCoverPath(sessionId);
 
-      mkdirSync(dirname(target), { recursive: true });
+      await mkdir(dirname(target), { recursive: true });
       await writeFile(target, buffer);
 
       await this.prisma.streamSession.update({
@@ -125,21 +124,6 @@ export class ThumbnailService implements OnModuleDestroy {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
-  }
-
-  /** Path of the cover stored in a session's archive folder, if it is there. */
-  private archivedCoverPath(archiveDir: string | null): string | null {
-    if (!archiveDir) {
-      return null;
-    }
-
-    try {
-      const candidate = join(archiveDir, ARCHIVE_FILES.cover);
-      return existsSync(candidate) ? candidate : null;
-    } catch {
-      // Unreachable mount — fall through to rendering from Telegram.
-      return null;
     }
   }
 
@@ -177,32 +161,18 @@ export class ThumbnailService implements OnModuleDestroy {
     // Already rendered once, either here on the server disk or next to the
     // video in the archive folder. Both are a file read instead of an ffmpeg
     // seek over a network.
-    for (const candidate of [session.thumbnailPath, this.archivedCoverPath(session.archiveDir)]) {
+    for (const candidate of [session.thumbnailPath, session.archiveDir ? join(session.archiveDir, ARCHIVE_FILES.cover) : null]) {
       if (!candidate) continue;
 
       try {
-        if (existsSync(candidate)) {
-          return await readFile(candidate);
+        const buffer = await readFile(candidate);
+        this.cache.set(sessionId, buffer);
+        while (this.cache.size > COVER_CACHE_MAX_ENTRIES) {
+          this.cache.delete(this.cache.keys().next().value!);
         }
+        return buffer;
       } catch {
         // Unreadable or an unreachable mount — fall through and render.
-      }
-    }
-
-    // The archive tier already carries a rendered cover next to the video.
-    // Reading those few kilobytes beats seeking through an mp4 that now lives
-    // on a network mount — the archive list asks for fifteen of these at once.
-    const archivedCover = this.archivedCoverPath(session.archiveDir);
-
-    if (archivedCover) {
-      try {
-        return await readFile(archivedCover);
-      } catch (error) {
-        this.logger.debug(
-          `Stored cover ${archivedCover} unreadable, rendering instead: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
       }
     }
 
@@ -212,7 +182,7 @@ export class ThumbnailService implements OnModuleDestroy {
 
     if (session.playbackPath) {
       const absolutePath = resolve(session.playbackPath);
-      if (existsSync(absolutePath)) {
+      if (await mediaStat(absolutePath, true)) {
         input = absolutePath;
       }
     }
@@ -223,7 +193,7 @@ export class ThumbnailService implements OnModuleDestroy {
       const first = session.segments[0];
 
       for (const candidate of [first?.localPath, first?.archivePath]) {
-        if (candidate && existsSync(candidate)) {
+        if (candidate && await mediaStat(candidate, true)) {
           input = candidate;
           // The seek must stay inside the chunk, not the whole broadcast.
           durationSec = Math.min(durationSec || 600, 600);

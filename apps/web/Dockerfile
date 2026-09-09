@@ -10,11 +10,12 @@ RUN npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-COPY --from=build /app/package*.json ./
-RUN npm install --omit=dev
-COPY --from=build /app/.next ./.next
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
 EXPOSE 3000
-CMD ["npm", "run", "start"]
-
+CMD ["node", "server.js"]
