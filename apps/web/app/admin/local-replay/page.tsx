@@ -35,6 +35,8 @@ type Bundle = {
   version: number;
   kind: string;
   mediaTimeline?: import("../../lib/media-timeline").MediaTimeline | null;
+  gifAssets?: Record<string, string>;
+  missingGifAssets?: Array<{ url: string; reason: string }>;
   meta: {
     id: string;
     title: string | null;
@@ -130,7 +132,8 @@ export default function LocalReplayPage() {
 
   const staticChatData = useMemo(() => {
     if (!bundle) return undefined;
-    return { messages: bundle.messages, emotes: bundle.emotes, mediaTimeline: bundle.mediaTimeline };
+    return { messages: bundle.messages, emotes: bundle.emotes, mediaTimeline: bundle.mediaTimeline,
+      gifAssets: bundle.gifAssets, missingGifAssets: bundle.missingGifAssets };
   }, [bundle]);
 
   const ready = Boolean(videoUrl && bundle);

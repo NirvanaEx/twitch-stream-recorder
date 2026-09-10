@@ -2,6 +2,7 @@
 
 import { memo, useMemo, useState } from "react";
 import { renderTokens, type EmoteEntry, type InlineEmote } from "../lib/chat-render";
+import { resolveArchivedGif } from "../lib/chat-gifs";
 
 /**
  * A message body: text with emotes substituted in. Shared by the replay list
@@ -13,6 +14,8 @@ export const ChatText = memo(function ChatText({
   twitchEmotes,
   inlineEmotes,
   twitchGifs,
+  gifUrls,
+  gifAssets,
   emotePx,
   /** Lowercased logins to mark as "this is about you". */
   selfNames,
@@ -24,6 +27,8 @@ export const ChatText = memo(function ChatText({
   twitchEmotes?: string | null;
   inlineEmotes?: InlineEmote[] | null;
   twitchGifs?: string | null;
+  gifUrls?: Record<string, string>;
+  gifAssets?: Record<string, string>;
   emotePx: number;
   selfNames?: Set<string>;
   /**
@@ -85,7 +90,8 @@ export const ChatText = memo(function ChatText({
             {token.value}
           </a>
         ) : token.type === "gif" ? (
-          <ChatGif key={`gif-${token.id}-${token.url}-${index}`} url={token.url} label={token.name} />
+          <ChatGif key={`gif-${token.id}-${token.url}-${gifUrls?.[token.url]}-${index}`}
+            url={token.url} label={token.name} reference={gifUrls?.[token.url]} assets={gifAssets} />
         ) : token.type === "emote" ? (
           <img
             key={`${token.name}-${index}`}
@@ -117,16 +123,20 @@ export const ChatText = memo(function ChatText({
   );
 });
 
-function ChatGif({ url, label }: { url: string; label: string }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <span>{label}</span>;
+function ChatGif({ url, label, reference, assets }: {
+  url: string; label: string; reference?: string; assets?: Record<string, string>;
+}) {
+  const archived = useMemo(() => resolveArchivedGif(reference, assets), [reference, assets]);
+  const [failures, setFailures] = useState(0);
+  if (failures >= (archived ? 2 : 1)) return <span>{label}</span>;
+  const source = archived && failures === 0 ? archived : url;
   return (
-    <a className="chat-gif" href={url} target="_blank" rel="noopener noreferrer"
+    <a className="chat-gif" href={source} target="_blank" rel="noopener noreferrer"
       onClick={(event) => event.stopPropagation()}
       onAuxClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}>
-      <img src={url} alt={label} title={label} loading="lazy" decoding="async"
-        referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+      <img src={source} alt={label} title={label} loading="lazy" decoding="async"
+        referrerPolicy="no-referrer" onError={() => setFailures((count) => count + 1)} />
     </a>
   );
 }

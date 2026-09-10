@@ -102,10 +102,34 @@ Twitch GIF attachments are captured in `ChatMessage.gifsJson` as the original
 IRC `gifs` tag and exposed in chat, user history, realtime messages and bundles.
 The web player replaces the indicated code-point ranges with lazy-loaded GIF
 images, while keeping the original full GIPHY URL and query parameters intact.
-Clicking a GIF opens it in a new tab. Invalid metadata or a failed image leaves
-the original text readable. Imported bundles can load only HTTPS GIPHY assets;
-GIFs require internet access even during local replay (their bytes are not
-embedded in the bundle). Older messages without GIF metadata remain text.
+The recorder queues a persistent image copy immediately after saving the chat
+message. `DATA_DIR/chat-gifs/index` stores original URL -> file records and
+retry state; `DATA_DIR/chat-gifs/files` stores raster images by SHA-256 of their
+bytes. Identical images share one file, even across different source URLs.
+Copies are not expired or deleted when GIPHY removes an original. Back up this
+whole directory together with the database; a DB dump alone contains links,
+not image bytes. This directory is inside the existing persistent data mount
+and survives application rebuilds. It has no automatic pruning.
+
+Downloads run in the background (two at a time), allow only GIPHY media HTTPS
+hosts including each redirect, check raster signatures, and stop after 20 s
+or 25 MiB. They pause when the data disk has less than 1 GiB free. Failed jobs
+remain on disk and retry with backoff up to once a day. Startup also backfills
+stored `gifsJson` URLs; captions from recordings made before URL capture cannot
+recover a deleted image. The original IRC tag is never rewritten.
+
+Online replay and user history use our copy first, the original GIPHY URL if
+it is missing, and the original caption if both fail. Exports wait for queued
+downloads and embed images once per content hash in `gifAssets`; each message's
+`gifUrls` maps its original URL to an `asset:<hash>` reference. The same bundle
+builder supplies downloads, Telegram and archive storage. Embedded GIFs work
+without GIPHY access. Missing images are listed in `missingGifAssets` and the
+local player displays a notice, rather than claiming the file is complete.
+Previously downloaded/exported bundles are immutable; export again to include
+images captured later. A JSON bundle exceeding 128 MiB of GIF bytes fails
+explicitly instead of silently dropping copies; the server's complete GIF
+directory can still be backed up. Imported media references accept only our
+narrow asset route or embedded GIF/WebP/PNG/JPEG, never SVG or arbitrary hosts.
 
 Existing archives, non-Twitch captures, opt-in live-segment recordings, and
 captures whose map cannot be verified retain the legacy offset calculation.

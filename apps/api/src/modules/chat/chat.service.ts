@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { GifMirrorService } from "./gif-mirror.service";
+import { mirroredGifUrls } from "./chat-gifs.utils";
 
 type ActiveCapture = {
   channelId: string;
@@ -39,6 +41,7 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly gifMirror: GifMirrorService,
   ) {}
 
   async startCapture(input: {
@@ -418,6 +421,9 @@ export class ChatService {
         },
       });
 
+      // Queue file capture after the message is durable; network work never
+      // delays IRC processing. Startup backfill recovers a crash in this gap.
+      this.gifMirror.enqueue(parsed.tags["gifs"]);
       this.realtimeGateway.server?.emit("chat:message", {
         sessionId: capture.sessionId,
         message: {
@@ -427,6 +433,7 @@ export class ChatService {
           authorColor: saved.authorColor,
           textRaw: saved.textRaw,
           gifs: parsed.tags["gifs"] || undefined,
+          gifUrls: mirroredGifUrls(parsed.tags["gifs"]),
           relativeTimeSec: saved.relativeTimeSec,
           messageTimestamp: saved.messageTimestamp.toISOString(),
         },

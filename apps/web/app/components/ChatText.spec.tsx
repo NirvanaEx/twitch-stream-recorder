@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderTokens, type EmoteEntry, type Token } from "../lib/chat-render";
 import { ChatText } from "./ChatText";
-import { parseTwitchGifRanges } from "../lib/chat-gifs";
+import { parseTwitchGifRanges, resolveArchivedGif } from "../lib/chat-gifs";
 
 const empty = new Map<string, EmoteEntry>();
 const links = (text: string) => renderTokens(text, empty).filter((token) => token.type === "link");
@@ -178,4 +178,33 @@ test("rendered links use native new-tab navigation without triggering message ac
     await act(async () => root.unmount());
     host.remove();
   }
+});
+
+test("a server GIF copy is preferred, then the original URL, then its caption without a retry loop", async () => {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const label = "[GIF by DAZN USA]";
+  const reference = `public/chat-gifs/${"a".repeat(64)}`;
+  try {
+    await act(async () => root.render(<ChatText text={label} emoteMap={empty} emotePx={28}
+      twitchGifs={`0-${label.length - 1}|id|${gifUrl}`} gifUrls={{ [gifUrl]: reference }} />));
+    assert.equal(host.querySelector("img")?.getAttribute("src"), `/api/${reference}`);
+    await act(async () => { host.querySelector("img")!.dispatchEvent(new dom.window.Event("error")); });
+    assert.equal(host.querySelector("img")?.getAttribute("src"), gifUrl);
+    await act(async () => { host.querySelector("img")!.dispatchEvent(new dom.window.Event("error")); });
+    assert.equal(host.querySelector("img"), null);
+    assert.equal(host.textContent, label);
+  } finally { await act(async () => root.unmount()); }
+});
+
+test("an imported archive cannot replace GIF media with executable data or arbitrary routes", () => {
+  const key = "a".repeat(64);
+  for (const value of ["data:text/html;base64,AAAA", "data:image/svg+xml;base64,AAAA", "javascript:alert(1)", "https://example.com/a.gif"]) {
+    assert.equal(resolveArchivedGif(`asset:${key}`, { [key]: value }), null);
+    assert.equal(resolveArchivedGif(value), null);
+  }
+  for (const path of ["public/chat-gifs/../../auth", `public/chat-gifs/${key}?other=1`, `//evil.com/${key}`]) {
+    assert.equal(resolveArchivedGif(path), null);
+  }
+  assert.equal(resolveArchivedGif(`asset:${key}`, { [key]: "data:image/gif;base64,AAAA" }), "data:image/gif;base64,AAAA");
 });

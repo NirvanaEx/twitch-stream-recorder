@@ -24,6 +24,7 @@ type Props = {
   /** Chat time already reached by the player, on the whole-stream timeline. */
   thresholdSec: number;
   emoteMap: Map<string, EmoteEntry>;
+  gifAssets?: Record<string, string>;
   emotePx: number;
   readableColors: boolean;
   copy: ChatCopy;
@@ -62,6 +63,7 @@ export function ChatUserCard({
   messages,
   thresholdSec,
   emoteMap,
+  gifAssets,
   emotePx,
   readableColors,
   copy,
@@ -350,6 +352,8 @@ export function ChatUserCard({
                     twitchEmotes={message.emotes}
                     inlineEmotes={message.inlineEmotes}
                     twitchGifs={message.gifs}
+                    gifUrls={message.gifUrls}
+                    gifAssets={gifAssets}
                     emotePx={Math.min(emotePx, 24)}
                     onMentionClick={onMentionClick}
                     mentionTitle={copy.userCardTitle}

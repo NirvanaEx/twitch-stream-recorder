@@ -32,7 +32,7 @@ test("CLEARCHAT carries the banned login in trailing, not in params", () => {
 });
 
 test("ROOMSTATE confirms a successful chat join", () => {
-  const service = new ChatService({} as never, {} as never);
+  const service = new ChatService({} as never, {} as never, {} as never);
   const capture = {
     channelLogin: "channel",
     joined: false,
@@ -52,6 +52,7 @@ test("GIF metadata survives IRC capture, realtime delivery, replay serialization
   const tag = `0-${label.length - 1}|example|${url}`;
   let saved: any;
   let emitted: any;
+  let queued: unknown;
   const prisma = {
     chatMessage: {
       create: async ({ data }: any) => saved = { id: "message", ...data },
@@ -65,17 +66,26 @@ test("GIF metadata survives IRC capture, realtime delivery, replay serialization
   };
   const service = new ChatService(prisma as never, {
     server: { emit: (_event: string, payload: unknown) => { emitted = payload; } },
-  } as never);
+  } as never, { enqueue: (value: unknown) => { queued = value; } } as never);
   const parsed = parseIrcLine(`@id=provider-id;tmi-sent-ts=2000;emotes=;gifs=${tag} :viewer!user@host PRIVMSG #channel :${label}`)!;
   await (service as any).persistMessage({ sessionId: "session", startedAt: 1000 }, parsed);
   assert.equal(saved.textRaw, label);
   assert.equal(saved.gifsJson, JSON.stringify(tag));
   assert.equal(emitted.message.gifs, tag);
+  assert.equal(queued, tag);
+  assert.match(emitted.message.gifUrls[url], /^public\/chat-gifs\/[a-f0-9]{64}$/);
   assert.equal(buildReplayMessage(saved, 1000).gifs, tag);
-  const bundles = new ArchiveBundleService(prisma as never, { buildBundleSnapshot: () => null } as never);
+  const assetId = "a".repeat(64);
+  const bundles = new ArchiveBundleService(prisma as never, { buildBundleSnapshot: () => null } as never,
+    { buildBundleAssets: async (tags: unknown[]) => {
+      assert.deepEqual(tags, [tag]);
+      return { sources: { [url]: `asset:${assetId}` }, assets: { [assetId]: "data:image/gif;base64,AAAA" }, missing: [] };
+    } } as never);
   const bundle = await bundles.build("session");
   assert.equal(bundle.messages[0].gifs, tag);
   assert.equal(bundle.messages[0].textRaw, label);
+  assert.equal(bundle.messages[0].gifUrls?.[url], `asset:${assetId}`);
+  assert.equal(bundle.gifAssets?.[assetId], "data:image/gif;base64,AAAA");
 });
 
 test("old and malformed stored GIF metadata keep the original message readable", () => {
