@@ -1,3 +1,5 @@
+import { buildApiUrl } from "./api";
+
 export type TwitchGifRange = {
   /** Zero-based code-point positions, with an inclusive end, like Twitch emotes. */
   start: number;
@@ -29,4 +31,17 @@ export function parseTwitchGifRanges(tag: unknown): TwitchGifRange[] {
     ranges.push({ start, end, id: match[3], url });
   }
   return ranges;
+}
+
+/** Bundles are untrusted. Only our narrow asset route or embedded raster
+ * images can override the original GIPHY URL; never arbitrary HTML/SVG/hosts. */
+export function resolveArchivedGif(reference: unknown, assets?: Record<string, string>): string | null {
+  if (typeof reference !== "string") return null;
+  if (/^public\/chat-gifs\/[a-f0-9]{64}$/.test(reference)) return buildApiUrl(reference);
+  if (/^asset:[a-f0-9]{64}$/.test(reference)) {
+    const value = assets?.[reference.slice(6)];
+    if (typeof value === "string" && value.length <= 35 * 1024 * 1024 &&
+        /^data:image\/(?:gif|webp|png|jpeg);base64,[A-Za-z0-9+/]/.test(value)) return value;
+  }
+  return null;
 }

@@ -37,6 +37,7 @@ export type ChatMessage = {
   emotes?: string | null;
   /** Raw Twitch IRC GIF tag: inclusive code-point positions, id, full URL. */
   gifs?: string | null;
+  gifUrls?: Record<string, string>;
   /**
    * Kick's own emotes and where they sit in `textRaw`. Kick sends them inline
    * as `[emote:39292:catJAM]`; capture unwraps the token to the bare name, so
@@ -89,6 +90,9 @@ export type ChatResponse = {
   messages: ChatMessage[];
   emotes: EmotePayload | null;
   mediaTimeline?: MediaTimeline | null;
+  /** Bundle-only: content hash -> embedded raster image, deduplicated. */
+  gifAssets?: Record<string, string>;
+  missingGifAssets?: Array<{ url: string; reason: string }>;
 };
 
 export type InlineEmote = {

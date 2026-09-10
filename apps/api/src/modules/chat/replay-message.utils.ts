@@ -9,6 +9,7 @@ import {
   type PredictionBet,
 } from "./chat-roles.utils";
 import { parseStoredJsonString } from "./stored-chat.utils";
+import { mirroredGifUrls } from "./chat-gifs.utils";
 
 /**
  * One chat row as the replay reads it.
@@ -36,6 +37,8 @@ export type ReplayMessage = {
   emotes?: string;
   /** Original Twitch GIF positions and URLs; absent on older recordings. */
   gifs?: string;
+  /** Original URL -> our persistent copy (or asset reference in a bundle). */
+  gifUrls?: Record<string, string>;
   inlineEmotes?: InlineEmote[];
   predictionBet?: PredictionBet;
   relativeTimeSec: number;
@@ -81,6 +84,7 @@ export function buildReplayMessage(
     roles: roles.length > 0 ? roles : undefined,
     emotes: parseStoredJsonString(message.emotesJson) ?? undefined,
     gifs: parseStoredJsonString(message.gifsJson) ?? undefined,
+    gifUrls: mirroredGifUrls(parseStoredJsonString(message.gifsJson)),
     inlineEmotes: inlineEmotes.length > 0 ? inlineEmotes : undefined,
     predictionBet:
       extractPredictionBet(message.badgesJson, message.badgeInfoJson) ?? undefined,

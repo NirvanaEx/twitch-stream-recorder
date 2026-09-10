@@ -96,6 +96,29 @@ test("post-stream chat plays, pauses, reaches its end, and resets on seeking", a
   } finally { await ui.close(); }
 });
 
+test("embedded GIF bytes survive JSON export/import and are used in replay and user history", async () => {
+  const label = "[GIF by DAZN USA]";
+  const url = "https://media.giphy.com/media/deleted/giphy.gif?cid=original";
+  const key = "b".repeat(64);
+  const embedded = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const data: ChatResponse = { emotes: null, gifAssets: { [key]: embedded }, messages: [{
+    id: "gif", authorLogin: "alice", textRaw: label, relativeTimeSec: 10,
+    gifs: `0-${label.length - 1}|id|${url}`, gifUrls: { [url]: `asset:${key}` },
+  }] };
+  const ui = await mount(true, 60, JSON.parse(JSON.stringify(data)));
+  try {
+    assert.equal(ui.host.querySelector(".chat-gif img")?.getAttribute("src"), embedded);
+    await act(async () => { (ui.host.querySelector(".chat-author") as HTMLButtonElement).click(); });
+    assert.equal(document.querySelector(".chat-user-card__row .chat-gif img")?.getAttribute("src"), embedded);
+  } finally { await ui.close(); }
+});
+
+test("an incomplete imported GIF archive visibly explains the dependency on original images", async () => {
+  const ui = await mount(true, 60, { ...chat, missingGifAssets: [{ url: "https://media.giphy.com/deleted.gif", reason: "HTTP 404" }] });
+  try { assert.match(ui.host.textContent!, /нет копий некоторых GIF/); }
+  finally { await ui.close(); }
+});
+
 test("an intermediate Telegram part cannot enter post-stream chat", async () => {
   const ui = await mount(false);
   try {

@@ -7,14 +7,17 @@ import { EmoteAssetsController } from "./emote-assets.controller";
 import { EmoteMirrorService } from "./emote-mirror.service";
 import { LiveEmotesService } from "./live-emotes.service";
 import { SevenTvService } from "./seventv.service";
+import { GifMirrorService } from "./gif-mirror.service";
+import { GifAssetsController } from "./gif-assets.controller";
 
 @Module({
   imports: [PrismaModule, RealtimeModule],
-  controllers: [EmoteAssetsController],
+  controllers: [EmoteAssetsController, GifAssetsController],
   providers: [
     ChatService,
     SevenTvService,
     EmoteMirrorService,
+    GifMirrorService,
     LiveEmotesService,
     ArchiveBundleService,
   ],

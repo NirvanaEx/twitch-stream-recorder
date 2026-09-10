@@ -505,6 +505,14 @@ export function ChatReplay({
         </button>
       </div>
 
+      {data?.missingGifAssets?.length ? (
+        <div className="chat-empty" role="status">
+          {locale === "ru"
+            ? "В этом файле нет копий некоторых GIF. Они откроются, только если оригиналы ещё доступны."
+            : "Some GIF images are missing from this file. They can load only while the originals remain available."}
+        </div>
+      ) : null}
+
       {settingsOpen ? (
         <ChatSettingsPanel
           prefs={prefs}
@@ -590,6 +598,7 @@ export function ChatReplay({
                 renderTime={entry.renderTime}
                 deleted={entry.deleted}
                 emoteMap={emoteMap}
+                gifAssets={data?.gifAssets}
                 emotePx={prefs.emotePx}
                 readableColors={prefs.readableColors}
                 highlightRoles={highlightRoles}
@@ -622,6 +631,7 @@ export function ChatReplay({
             messages={allMessages}
             thresholdSec={userThreshold}
             emoteMap={emoteMap}
+            gifAssets={data?.gifAssets}
             emotePx={prefs.emotePx}
             readableColors={prefs.readableColors}
             copy={copy}
@@ -644,6 +654,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   renderTime,
   deleted,
   emoteMap,
+  gifAssets,
   emotePx,
   readableColors,
   highlightRoles,
@@ -662,6 +673,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   /** Already struck through at the player's current position. */
   deleted: boolean;
   emoteMap: Map<string, EmoteEntry>;
+  gifAssets?: Record<string, string>;
   emotePx: number;
   readableColors: boolean;
   highlightRoles: Set<ChatRole>;
@@ -754,6 +766,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
           twitchEmotes={message.emotes}
           inlineEmotes={message.inlineEmotes}
           twitchGifs={message.gifs}
+          gifUrls={message.gifUrls}
+          gifAssets={gifAssets}
           emotePx={emotePx}
           selfNames={selfNames}
           onMentionClick={onMentionClick}
