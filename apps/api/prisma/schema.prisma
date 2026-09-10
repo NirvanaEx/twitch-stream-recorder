@@ -72,6 +72,9 @@ model StreamSession {
   chatPath                String?
   stoppedByUser           Boolean              @default(false)
   savedChatOffsetSec      Int?
+  // Source HLS wall clocks matched to packets in the finished media. Original
+  // chat times stay intact; this map relates the two independent timelines.
+  mediaTimelineJson       String?
   // The session was captured in audio-only mode: playbackPath points to an
   // .m4a, there is no video, and the Telegram copy is a single audio message.
   audioOnly               Boolean              @default(false)
@@ -214,6 +217,8 @@ model ChatMessage {
   badgeInfoJson     String?
   textRaw           String
   emotesJson        String?
+  // Original Twitch IRC gifs tag, including the full asset URL and positions.
+  gifsJson          String?
   messageTimestamp  DateTime
   relativeTimeSec   Int
   isDeleted         Boolean   @default(false)

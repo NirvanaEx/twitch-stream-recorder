@@ -24,6 +24,7 @@ import {
 } from "../chat/chat-roles.utils";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { buildReplayMessage } from "../chat/replay-message.utils";
+import { readReplayPage } from "../chat/replay-page";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { StreamEventsService } from "../stream-events/stream-events.service";
@@ -32,12 +33,14 @@ import {
   buildMediaCacheHeaders,
   matchesMediaEtag,
   computeSessionChatOffsetSec,
+  sessionMediaStartedAt,
   parseMediaRange,
   pipeFileToResponse,
   resolvePlaybackParts,
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
+import { parseMediaTimeline } from "../recording/media-timeline";
 import { ThumbnailService } from "../recording/thumbnail.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
 import {
@@ -635,15 +638,7 @@ export class PublicStreamsController {
           : `/api/public/streams/${session.id}/thumbnail`,
         startedAt: session.startedAt?.toISOString() ?? null,
         endedAt: session.endedAt?.toISOString() ?? null,
-        // Real-world moment of the video's first frame (capture end minus the
-        // probed length); positions on the timeline map to wall-clock time by
-        // simple addition.
-        mediaStartedAt:
-          session.captureEndedAt && session.durationSec
-            ? new Date(
-                session.captureEndedAt.getTime() - session.durationSec * 1000,
-              ).toISOString()
-            : session.createdAt.toISOString(),
+        mediaStartedAt: sessionMediaStartedAt(session).toISOString(),
         durationSec: session.durationSec,
         fileSizeBytes: playback.fileSizeBytes,
         // Public clients hit the public video endpoint — never the admin one.
@@ -675,32 +670,31 @@ export class PublicStreamsController {
    */
   @Get(":id/chat")
   @Header("Cache-Control", "private, max-age=3600")
-  async getChat(@Param("id") id: string) {
+  async getChat(@Param("id") id: string, @Query("page") page?: string, @Query("cursor") cursor?: string) {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
-      select: { id: true, videoStatus: true, playbackPath: true, segmented: true },
+      select: { id: true, videoStatus: true, playbackPath: true, segmented: true, mediaTimelineJson: true },
     });
 
     if (!session || session.videoStatus !== "ready" || !hasPlayableSource(session)) {
       throw new NotFoundException("Запись не найдена.");
     }
 
-    const [messages, snapshot] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where: { streamSessionId: id },
-        orderBy: { relativeTimeSec: "asc" },
-        take: 50000,
-      }),
-      this.prisma.emoteSnapshot.findUnique({
+    const [replay, snapshot] = await Promise.all([
+      readReplayPage(this.prisma, id, page === "1", cursor),
+      page === "1" && cursor ? null : this.prisma.emoteSnapshot.findUnique({
         where: { streamSessionId: id },
       }),
     ]);
 
+    const { messages, nextCursor } = replay;
     const anchorMs = resolveCaptureAnchorMs(messages);
 
     return {
       messages: messages.map((message) => buildReplayMessage(message, anchorMs)),
       emotes: parseStoredJson(snapshot?.payloadJson),
+      mediaTimeline: parseMediaTimeline(session.mediaTimelineJson),
+      nextCursor,
     };
   }
 
@@ -793,6 +787,7 @@ export class PublicStreamsController {
         // Raw Twitch IRC "emotes" tag ("id:start-end,.../..."), code-point
         // indexed — the userscript renders these from the Twitch CDN.
         emotes: message.emotesJson ? parseStoredJsonString(message.emotesJson) : null,
+        gifs: parseStoredJsonString(message.gifsJson) ?? undefined,
         badges: parseStoredJsonString(message.badgesJson),
         roles: extractChatRoles(message.badgesJson),
         relativeTimeSec: message.relativeTimeSec,

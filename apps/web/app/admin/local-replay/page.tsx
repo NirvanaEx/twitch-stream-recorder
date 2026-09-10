@@ -34,6 +34,7 @@ type ChatMessage = {
 type Bundle = {
   version: number;
   kind: string;
+  mediaTimeline?: import("../../lib/media-timeline").MediaTimeline | null;
   meta: {
     id: string;
     title: string | null;
@@ -129,7 +130,7 @@ export default function LocalReplayPage() {
 
   const staticChatData = useMemo(() => {
     if (!bundle) return undefined;
-    return { messages: bundle.messages, emotes: bundle.emotes };
+    return { messages: bundle.messages, emotes: bundle.emotes, mediaTimeline: bundle.mediaTimeline };
   }, [bundle]);
 
   const ready = Boolean(videoUrl && bundle);

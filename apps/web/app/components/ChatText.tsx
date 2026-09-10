@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import { renderTokens, type EmoteEntry, type InlineEmote } from "../lib/chat-render";
 
 /**
@@ -12,6 +12,7 @@ export const ChatText = memo(function ChatText({
   emoteMap,
   twitchEmotes,
   inlineEmotes,
+  twitchGifs,
   emotePx,
   /** Lowercased logins to mark as "this is about you". */
   selfNames,
@@ -22,6 +23,7 @@ export const ChatText = memo(function ChatText({
   emoteMap: Map<string, EmoteEntry>;
   twitchEmotes?: string | null;
   inlineEmotes?: InlineEmote[] | null;
+  twitchGifs?: string | null;
   emotePx: number;
   selfNames?: Set<string>;
   /**
@@ -32,8 +34,8 @@ export const ChatText = memo(function ChatText({
   mentionTitle?: string;
 }) {
   const tokens = useMemo(
-    () => renderTokens(text, emoteMap, twitchEmotes, inlineEmotes),
-    [text, emoteMap, twitchEmotes, inlineEmotes],
+    () => renderTokens(text, emoteMap, twitchEmotes, inlineEmotes, twitchGifs),
+    [text, emoteMap, twitchEmotes, inlineEmotes, twitchGifs],
   );
 
   return (
@@ -45,16 +47,12 @@ export const ChatText = memo(function ChatText({
             className={`chat-mention${
               selfNames?.has(token.name.toLowerCase()) ? " is-self" : ""
             }`}
-            // A span and not a button: the user card renders its messages
-            // inside the seek button, and a button within a button is
-            // invalid markup React refuses to hydrate.
             role={onMentionClick ? "button" : undefined}
             tabIndex={onMentionClick ? 0 : undefined}
             title={onMentionClick ? mentionTitle : undefined}
             onClick={
               onMentionClick
                 ? (event) => {
-                    // Otherwise the click also reaches the seek button below.
                     event.stopPropagation();
                     onMentionClick(token.name);
                   }
@@ -73,6 +71,21 @@ export const ChatText = memo(function ChatText({
           >
             @{token.name}
           </span>
+        ) : token.type === "link" ? (
+          <a
+            key={`link-${index}`}
+            className="chat-link"
+            href={token.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            onAuxClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            {token.value}
+          </a>
+        ) : token.type === "gif" ? (
+          <ChatGif key={`gif-${token.id}-${token.url}-${index}`} url={token.url} label={token.name} />
         ) : token.type === "emote" ? (
           <img
             key={`${token.name}-${index}`}
@@ -103,3 +116,17 @@ export const ChatText = memo(function ChatText({
     </>
   );
 });
+
+function ChatGif({ url, label }: { url: string; label: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span>{label}</span>;
+  return (
+    <a className="chat-gif" href={url} target="_blank" rel="noopener noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      onAuxClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}>
+      <img src={url} alt={label} title={label} loading="lazy" decoding="async"
+        referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+    </a>
+  );
+}

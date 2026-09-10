@@ -7,6 +7,11 @@ import type { ChatRole } from "./chat-prefs";
  */
 export const CHAT_COPY = {
   ru: {
+    afterStream: "После эфира",
+    playTail: "Продолжить чат",
+    pauseTail: "Пауза",
+    showTail: "К концу чата",
+    tailComplete: "Конец сохранённого чата",
     title: "Чат",
     messages: "сообщ.",
     offset: "Сдвиг",
@@ -104,6 +109,11 @@ export const CHAT_COPY = {
     eventAlreadyOpen: "Шла до начала записи",
   },
   en: {
+    afterStream: "After the stream",
+    playTail: "Continue chat",
+    pauseTail: "Pause",
+    showTail: "Jump to chat end",
+    tailComplete: "End of saved chat",
     title: "Chat",
     messages: "messages",
     offset: "Offset",

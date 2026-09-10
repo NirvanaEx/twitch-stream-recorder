@@ -37,6 +37,8 @@ import { ChatText } from "./ChatText";
 import { ChatUserCard } from "./ChatUserCard";
 import { SettingsIcon } from "./icons";
 import { SkeletonText } from "./Skeleton";
+import { advanceChatTail, chatTimeAtMedia, mediaTimeAtChat, validatedMediaTimeline } from "../lib/media-timeline";
+import { loadReplayChat } from "../lib/replay-loader";
 import { StreamEventCard } from "./StreamEventCard";
 import { StreamMetaStrip } from "./StreamMetaStrip";
 
@@ -74,6 +76,8 @@ type ChatReplayProps = {
    * stream.
    */
   baseOffsetSec?: number;
+  /** Only the end of the final part may enter post-stream chat playback. */
+  isLastPart?: boolean;
 };
 
 const MAX_VISIBLE = 200;
@@ -90,6 +94,7 @@ export function ChatReplay({
   isLive,
   defaultOffsetSec = 0,
   baseOffsetSec = 0,
+  isLastPart = true,
 }: ChatReplayProps) {
   const { locale } = useLanguage();
   const { spoilerFree } = useSpoiler();
@@ -106,6 +111,18 @@ export function ChatReplay({
   const [search, setSearch] = useState("");
   const [activeUser, setActiveUser] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [videoEnded, setVideoEnded] = useState(false);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [tailTime, setTailTime] = useState<number | null>(null);
+  const [tailPlaying, setTailPlaying] = useState(false);
+  const mediaTimeline = useMemo(() => validatedMediaTimeline(data?.mediaTimeline), [data?.mediaTimeline]);
+  const playbackTime = tailTime ?? currentTime;
+  const chatThreshold = chatTimeAtMedia(playbackTime + baseOffsetSec - offset, mediaTimeline);
+  const lastMessage = data?.messages.at(-1);
+  const tailEnd = lastMessage
+    ? mediaTimeAtChat(lastMessage.relativeTimeSec, mediaTimeline) + offset - baseOffsetSec
+    : 0;
+  const hasTail = isLastPart && !isLive && videoEnded && videoDuration > 0 && tailEnd > videoDuration + 0.001;
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
   const listRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -140,9 +157,9 @@ export function ChatReplay({
       setLoadError(false);
       setData(null);
       try {
-        // The one request in the app worth caching: a finished broadcast's
-        // chat is the largest thing we download and it never changes.
-        const response = await apiGet<ChatResponse>(endpoint!, { cacheable: true });
+        // Load every page, including broadcasts beyond the old 50k cutoff.
+        // Finished pages are cacheable; a seek then has the complete timeline.
+        const response = await loadReplayChat(endpoint!, () => cancelled);
         if (!cancelled) {
           setData(response);
         }
@@ -198,20 +215,55 @@ export function ChatReplay({
   useEffect(() => {
     if (!videoElement) return undefined;
 
+    const resetTail = () => { setTailTime(null); setTailPlaying(false); setVideoEnded(false); };
+    const durationChanged = () => setVideoDuration(Number.isFinite(videoElement.duration) ? videoElement.duration : 0);
+    const ended = () => {
+      durationChanged(); setCurrentTime(videoElement.currentTime); setVideoEnded(true);
+    };
+    resetTail();
+    durationChanged();
+    if (videoElement.ended) ended();
+
     const handler = () => {
-      const next = Math.floor(videoElement.currentTime);
+      const next = videoElement.ended ? videoElement.currentTime : Math.floor(videoElement.currentTime);
       setCurrentTime((previous) => (previous === next ? previous : next));
     };
 
     videoElement.addEventListener("timeupdate", handler);
     videoElement.addEventListener("seeked", handler);
+    videoElement.addEventListener("seeking", resetTail);
+    videoElement.addEventListener("playing", resetTail);
+    videoElement.addEventListener("emptied", resetTail);
+    videoElement.addEventListener("ended", ended);
+    videoElement.addEventListener("durationchange", durationChanged);
     handler();
 
     return () => {
       videoElement.removeEventListener("timeupdate", handler);
       videoElement.removeEventListener("seeked", handler);
+      videoElement.removeEventListener("seeking", resetTail);
+      videoElement.removeEventListener("playing", resetTail);
+      videoElement.removeEventListener("emptied", resetTail);
+      videoElement.removeEventListener("ended", ended);
+      videoElement.removeEventListener("durationchange", durationChanged);
     };
-  }, [videoElement]);
+  }, [videoElement, baseOffsetSec, endpoint]);
+
+  useEffect(() => {
+    if (!tailPlaying || !hasTail) return;
+    let previous = performance.now();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = (now - previous) / 1000;
+      previous = now;
+      setTailTime((time) => advanceChatTail(time ?? videoDuration, elapsed, tailEnd, videoElement?.playbackRate ?? 1));
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [tailPlaying, hasTail, videoDuration, tailEnd, videoElement]);
+
+  useEffect(() => {
+    if (tailTime !== null && tailTime >= tailEnd) setTailPlaying(false);
+  }, [tailTime, tailEnd]);
 
   const emoteMap = useMemo(() => {
     // One source or the other, never a blend: mixing them would silently
@@ -269,7 +321,7 @@ export function ChatReplay({
     // ever flips once.
     const toEntry = (message: ChatMessage, chatTime: number) => ({
       message,
-      renderTime: message.relativeTimeSec - baseOffsetSec + offset,
+      renderTime: mediaTimeAtChat(message.relativeTimeSec, mediaTimeline) - baseOffsetSec + offset,
       deleted: isVisiblyDeleted(message, chatTime),
     });
 
@@ -283,7 +335,7 @@ export function ChatReplay({
     // VOD: find how many messages have reached their render time. We want the
     // count of messages with relativeTimeSec <= currentTime + baseOffsetSec
     // - offset (the inverse of renderTime <= currentTime).
-    const threshold = currentTime + baseOffsetSec - offset;
+    const threshold = chatThreshold;
     let lo = 0;
     let hi = timeline.length;
     while (lo < hi) {
@@ -298,7 +350,7 @@ export function ChatReplay({
       entries.push(toEntry(timeline[i], threshold));
     }
     return entries;
-  }, [timeline, currentTime, offset, baseOffsetSec, isLive, videoElement]);
+  }, [timeline, chatThreshold, mediaTimeline, offset, baseOffsetSec, isLive, videoElement]);
 
   const pinToLatest = useCallback(() => {
     const list = listRef.current;
@@ -344,8 +396,8 @@ export function ChatReplay({
   };
 
   const toRenderTime = useCallback(
-    (relativeTimeSec: number) => relativeTimeSec - baseOffsetSec + offset,
-    [baseOffsetSec, offset],
+    (relativeTimeSec: number) => mediaTimeAtChat(relativeTimeSec, mediaTimeline) - baseOffsetSec + offset,
+    [baseOffsetSec, offset, mediaTimeline],
   );
 
   const canSeek = useCallback(
@@ -395,7 +447,7 @@ export function ChatReplay({
   );
   const userThreshold = isLive || !videoElement
     ? Number.POSITIVE_INFINITY
-    : currentTime + baseOffsetSec - offset;
+    : chatThreshold;
 
   const liveEmotesNote =
     liveEmotesState === "loading"
@@ -468,6 +520,23 @@ export function ChatReplay({
           liveEmotesUrl={liveEmotesUrl}
           liveEmotesNote={liveEmotesNote}
         />
+      ) : null}
+
+      {hasTail ? (
+        <div className="chat-tail" role="group" aria-label={copy.afterStream}>
+          <span>{copy.afterStream}</span>
+          {(tailTime ?? videoDuration) < tailEnd ? (
+            <>
+              <button type="button" className="button secondary" onClick={() => {
+                setTailTime((time) => time ?? videoDuration);
+                setTailPlaying((playing) => !playing);
+              }}>{tailPlaying ? copy.pauseTail : copy.playTail}</button>
+              <button type="button" className="button secondary" onClick={() => {
+                setTailPlaying(false); setTailTime(tailEnd);
+              }}>{copy.showTail}</button>
+            </>
+          ) : <span>{copy.tailComplete}</span>}
+        </div>
       ) : null}
 
       <StreamMetaStrip
@@ -684,6 +753,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           emoteMap={emoteMap}
           twitchEmotes={message.emotes}
           inlineEmotes={message.inlineEmotes}
+          twitchGifs={message.gifs}
           emotePx={emotePx}
           selfNames={selfNames}
           onMentionClick={onMentionClick}

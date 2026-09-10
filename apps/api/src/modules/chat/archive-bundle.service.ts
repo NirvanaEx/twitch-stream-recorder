@@ -6,11 +6,7 @@ import { EmoteMirrorService } from "./emote-mirror.service";
 import { buildReplayMessage } from "./replay-message.utils";
 import type { EmoteSnapshotPayload } from "./seventv.service";
 import { parseStoredJson } from "./stored-chat.utils";
-
-// The replay draws from chat, not from a transcript: a session with more
-// messages than this is already far past what the player can render, and the
-// bundle has to stay a file a browser can open.
-const MAX_BUNDLE_MESSAGES = 100000;
+import { parseMediaTimeline } from "../recording/media-timeline";
 
 /**
  * The `.tsr.json` archive bundle: a session's chat with every emote it uses
@@ -43,8 +39,7 @@ export class ArchiveBundleService {
     const [messages, snapshot] = await Promise.all([
       this.prisma.chatMessage.findMany({
         where: { streamSessionId: sessionId },
-        orderBy: { relativeTimeSec: "asc" },
-        take: MAX_BUNDLE_MESSAGES,
+        orderBy: [{ relativeTimeSec: "asc" }, { id: "asc" }],
       }),
       this.prisma.emoteSnapshot.findUnique({
         where: { streamSessionId: sessionId },
@@ -56,6 +51,7 @@ export class ArchiveBundleService {
     return {
       version: 1,
       kind: "tsr-archive-bundle",
+      mediaTimeline: parseMediaTimeline(session.mediaTimelineJson),
       meta: {
         id: session.id,
         title: session.title,

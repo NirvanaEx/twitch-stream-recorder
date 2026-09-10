@@ -23,6 +23,7 @@ import { EmoteMirrorService } from "../chat/emote-mirror.service";
 import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
 import {
   computeSessionChatOffsetSec,
+  sessionMediaStartedAt,
   resolvePlaybackParts,
   resolveSessionPlaybackState,
   type MediaTier,
@@ -39,6 +40,7 @@ import { resolveStreamlinkCommand } from "../twitch/streamlink.utils";
 import { buildTelegramMessageUrl, TelegramService } from "../telegram/telegram.service";
 import { TwitchEventsService } from "../stream-events/twitch-events.service";
 import { ThumbnailService } from "./thumbnail.service";
+import { timedCaptureCommand, timingJournalPath, verifyMediaTimeline } from "./media-timeline";
 
 type ActiveRecording = {
   channelId: string;
@@ -606,9 +608,18 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     const useChunks = this.chunkMinutes() > 0 && !channel.audioOnly;
     const liveChunks = useChunks && this.liveSegmentsEnabled();
 
+    // Chat has its own exact anchor. Enable the measured clock for complete
+    // Twitch recordings. The opt-in live-part pipeline retains legacy timing
+    // until its independently offloaded parts can also be verified.
+    const captureAnchor = new Date();
+    const timedCommand = channel.platform === "twitch" && !liveChunks
+      ? await timedCaptureCommand({ outputPath, destination: useChunks ? "-" : tsPath,
+          anchorMs: captureAnchor.getTime(), url: channelUrl, quality })
+      : null;
+
     const streamlinkProcess = spawn(
-      streamlinkCommand.command,
-      [
+      timedCommand?.command ?? streamlinkCommand.command,
+      timedCommand?.args ?? [
         ...streamlinkCommand.args,
         "--force",
         "--hls-live-restart",
@@ -633,9 +644,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       );
     });
 
-    // One anchor for chat and for the metadata series: they are replayed on
-    // the same timeline, so they must be measured from the same instant.
-    const captureAnchor = new Date();
+    if (!timedCommand && channel.platform === "twitch" && !liveChunks) {
+      this.logger.warn(`[${session.id}] Measured chat timing is unavailable; using legacy timing.`);
+    }
 
     const chunks = useChunks
       ? this.startChunkedCapture(
@@ -700,10 +711,8 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
         captureAnchor,
       });
     } else {
-      // The anchor is "now" (when streamlink actually started writing video),
-      // NOT session.startedAt — Twitch reports the original go-live time, which
-      // can be hours before we joined the stream. We need chat relativeTime to
-      // align with the recorded video timeline.
+      // The verified map later relates this independent chat clock to video,
+      // including HLS rewind and missing fragments.
       void this.chatService.startCapture({
         channelId: channel.id,
         sessionId: session.id,
@@ -949,6 +958,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
     for (const mediaPath of [session.playbackPath, session.recordingPath]) {
       if (mediaPath) fileCandidates.add(resolve(mediaPath).replace(/\.(mp4|m4a)$/i, ".ts"));
+      if (mediaPath) fileCandidates.add(timingJournalPath(resolve(mediaPath)));
     }
     // Chunks of a segmented capture: those still on the server disk. The ones
     // that already moved sit inside archiveDir, which goes as a whole below.
@@ -1267,6 +1277,10 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : await this.probeDurationSec(activeRecording.outputPath)
           : null;
 
+      const mediaTimelineJson = finalStatus === "completed" && fileSizeBytes > 0 && !capture
+        ? await this.buildVerifiedTimeline(activeRecording.outputPath, logPrefix)
+        : null;
+
       // An automatic capture that came back empty-handed is not a failure worth
       // keeping: it is the recorder having tried a broadcast that had already
       // ended, which Twitch keeps reporting as live for up to a minute or two
@@ -1304,6 +1318,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
               : {}),
             ...(durationSec ? { durationSec } : {}),
             ...(captureEndedAt ? { captureEndedAt } : {}),
+            ...(mediaTimelineJson ? { mediaTimelineJson } : {}),
           },
         });
       }
@@ -2018,6 +2033,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
             : await this.extractAudioTrack(outputPath, logPrefix);
 
         const durationSec = await this.probeDurationSec(outputPath);
+        const mediaTimelineJson = await this.buildVerifiedTimeline(outputPath, logPrefix);
 
         await this.prisma.streamSession.update({
           where: { id: session.id },
@@ -2035,6 +2051,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
               ? { audioPath: audio.path, audioSizeBytes: String(audio.sizeBytes) }
               : {}),
             ...(durationSec ? { durationSec } : {}),
+            ...(mediaTimelineJson ? { mediaTimelineJson } : {}),
           },
         });
 
@@ -2254,6 +2271,22 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       }
       return null;
     }
+  }
+
+  /** Match source clock anchors while the completed media is still local. */
+  private async buildVerifiedTimeline(outputPath: string, logPrefix: string): Promise<string | null> {
+    if (!existsSync(timingJournalPath(outputPath))) return null;
+    try {
+      const timeline = await verifyMediaTimeline(outputPath);
+      if (timeline) {
+        this.logger.log(`${logPrefix} Verified media clock: ${timeline.points.length} anchors.`);
+        return JSON.stringify(timeline);
+      }
+    } catch (error) {
+      this.logger.warn(`${logPrefix} Media clock verification failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.logger.warn(`${logPrefix} Media clock could not be verified; keeping legacy chat timing and the source journal.`);
+    return null;
   }
 
   /** Read the real media duration (seconds) of a finished file via ffprobe. */
@@ -2658,13 +2691,9 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // broadcast ends, and unlike the old stored .jpg it lives nowhere.
       thumbnailUrl:
         !session.audioOnly && videoReady ? `/api/archives/${session.id}/thumbnail` : null,
-      // Real-world moment of the video's first frame. captureEndedAt minus
-      // the probed length is exact (immune to the --hls-live-restart rewind);
-      // createdAt is the honest approximation for live and legacy sessions.
-      mediaStartedAt:
-        session.captureEndedAt && session.durationSec
-          ? new Date(session.captureEndedAt.getTime() - session.durationSec * 1000)
-          : session.createdAt,
+      // Measured from source media where available; legacy estimates remain
+      // compatible with existing archives and manually calibrated offsets.
+      mediaStartedAt: sessionMediaStartedAt(session),
       // Probed length WITHOUT the stream-span fallback of durationSec above:
       // mediaStartedAt + recordingDurationSec is the recorded wall-clock
       // window, and a fallback here would silently stretch it to the whole

@@ -410,6 +410,7 @@ export class ChatService {
             : null,
           textRaw: text,
           emotesJson: parsed.tags["emotes"] ? JSON.stringify(parsed.tags["emotes"]) : null,
+          gifsJson: parsed.tags["gifs"] ? JSON.stringify(parsed.tags["gifs"]) : null,
           messageTimestamp,
           relativeTimeSec,
           // Twitch marks the author's first-ever message in this channel.
@@ -425,6 +426,7 @@ export class ChatService {
           authorDisplayName: saved.authorDisplayName,
           authorColor: saved.authorColor,
           textRaw: saved.textRaw,
+          gifs: parsed.tags["gifs"] || undefined,
           relativeTimeSec: saved.relativeTimeSec,
           messageTimestamp: saved.messageTimestamp.toISOString(),
         },

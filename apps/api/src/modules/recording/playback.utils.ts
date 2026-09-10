@@ -3,6 +3,7 @@ import { mediaStat } from "./media-stat";
 import { type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
+import { measuredMediaStart, parseMediaTimeline } from "./media-timeline";
 
 /**
  * Where a piece of a recording is read from, in the order playback prefers:
@@ -76,6 +77,7 @@ type SessionChatTimingFields = {
   createdAt: Date;
   captureEndedAt: Date | null;
   durationSec: number | null;
+  mediaTimelineJson?: string | null;
 };
 
 /**
@@ -85,6 +87,8 @@ type SessionChatTimingFields = {
  */
 export function computeSessionChatOffsetSec(session: SessionChatTimingFields) {
   if (session.savedChatOffsetSec !== null) return session.savedChatOffsetSec;
+  // The player uses the measured, possibly discontinuous map directly.
+  if (parseMediaTimeline(session.mediaTimelineJson)) return 0;
   if (!session.captureEndedAt || !session.durationSec || session.durationSec <= 0) return 0;
 
   const mediaStartMs = session.captureEndedAt.getTime() - session.durationSec * 1000;
@@ -93,6 +97,14 @@ export function computeSessionChatOffsetSec(session: SessionChatTimingFields) {
   // Reject obviously unrelated/broken timestamps rather than shifting the
   // whole replay by hours. Manual saved offsets are intentionally not clamped.
   return Math.abs(offset) <= 60 * 60 ? offset : 0;
+}
+
+export function sessionMediaStartedAt(session: SessionChatTimingFields): Date {
+  const timeline = parseMediaTimeline(session.mediaTimelineJson);
+  if (timeline) return measuredMediaStart(timeline);
+  return session.captureEndedAt && session.durationSec
+    ? new Date(session.captureEndedAt.getTime() - session.durationSec * 1000)
+    : session.createdAt;
 }
 
 export async function resolveSessionPlaybackState(session: SessionPlaybackFields) {

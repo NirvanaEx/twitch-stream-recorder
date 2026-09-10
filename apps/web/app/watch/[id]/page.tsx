@@ -504,6 +504,7 @@ export default function PublicWatchPage({
               isLive={false}
               defaultOffsetSec={data?.chatOffsetSec ?? 0}
               baseOffsetSec={activePart?.startOffsetSec ?? 0}
+              isLastPart={parts.length === 0 || currentPart >= parts.length}
             />
           </aside>
         ) : null}

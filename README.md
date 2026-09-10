@@ -65,6 +65,68 @@ Three changes, in the order they matter:
 grid, the tables, the chat column — now draws a skeleton at the real geometry
 instead of the word "Загрузка", so a wait reads as a wait rather than a hang.
 
+## Chat and media clocks
+
+New complete Twitch captures save HLS program timestamps in a small journal
+beside the recording. Every 30 seconds, and after a source discontinuity, the
+recorder fingerprints a short sequence of AAC packets. Once the MP4/M4A is
+finished, those fingerprints are matched against its actual audio packets.
+This locates the source clock in the file even after a TS join or timestamp
+rebasing. Process exit time and download latency do not define this clock.
+
+The verified mapping is stored in `StreamSession.mediaTimelineJson`, returned
+with public/admin chat, and included in both the downloadable chat bundle and
+archive metadata. Chat messages keep their original timestamps. Playback uses
+the map with one second of media equal to one second of chat; missing video
+causes a jump to the next available frame, where the intervening messages
+become visible. Manual offsets remain optional corrections on top of the map.
+
+After the final video part, **Continue chat** plays any remaining saved chat
+on its own clock. It can be paused or advanced to the end; seeking/playing
+the video resumes normal synchronization. This does not extend chat collection
+indefinitely: capture still stops during recording finalization.
+
+Online replay loads immutable cursor pages of 10,000 messages until the chat
+is complete. The former 50,000-message cutoff silently hid the end of busy
+broadcasts. Bundles also retain the full conversation, including those beyond
+the former 100,000-message export limit. Rendering remains capped at 200
+visible rows, independently of how much history the recording contains.
+
+Message bodies recognize web links in replay, user history, and imported local
+archives. HTTP(S) and bare domains open in a new tab; bare domains use HTTPS.
+Links preserve the original text and coexist with platform emotes and mentions.
+The shared renderer uses linkify-it with the TLD list, emits React anchors only
+for HTTP(S), and keeps link clicks separate from chat actions.
+
+Twitch GIF attachments are captured in `ChatMessage.gifsJson` as the original
+IRC `gifs` tag and exposed in chat, user history, realtime messages and bundles.
+The web player replaces the indicated code-point ranges with lazy-loaded GIF
+images, while keeping the original full GIPHY URL and query parameters intact.
+Clicking a GIF opens it in a new tab. Invalid metadata or a failed image leaves
+the original text readable. Imported bundles can load only HTTPS GIPHY assets;
+GIFs require internet access even during local replay (their bytes are not
+embedded in the bundle). Older messages without GIF metadata remain text.
+
+Existing archives, non-Twitch captures, opt-in live-segment recordings, and
+captures whose map cannot be verified retain the legacy offset calculation.
+Missing/ambiguous packet matches at a discontinuity or an interrupted journal
+are not treated as a verified clock. Timing diagnostics must never stop video
+capture. The adapter is tested with Streamlink 8.5.0, pinned in the API image.
+
+Checks (no running application or database required):
+
+```sh
+npm test -w @tsr/api
+npm test -w @tsr/web
+python3 -m unittest discover -s apps/api/scripts -p test_capture_timing.py -v
+```
+
+The Python integration tests require Streamlink 8.5.0 and ffmpeg/ffprobe. They
+exercise TS and fragmented MP4 capture, remuxing, and joining a recording with
+twelve seconds of missing source media. Deploying later requires generating
+the Prisma client and adding the nullable timeline and `gifsJson` columns through the existing
+schema-sync deployment step; preparing/testing these changes does not run it.
+
 ## Spoiler-free mode
 
 The eye toggle sits on both home pages — the public one and the panel's

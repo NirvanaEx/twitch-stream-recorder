@@ -16,7 +16,7 @@ WORKDIR /app
 # writing them through the mount stages every byte in its VFS cache, on the
 # same disk the archive is meant to drain (see ArchiveStorageService).
 RUN apk add --no-cache ffmpeg python3 py3-pip rclone \
-  && pip3 install --break-system-packages --no-cache-dir streamlink
+  && pip3 install --break-system-packages --no-cache-dir streamlink==8.5.0
 
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules

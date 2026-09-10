@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { computeSessionChatOffsetSec } from "../recording/playback.utils";
+import { parseMediaTimeline } from "../recording/media-timeline";
 import { ThumbnailService } from "../recording/thumbnail.service";
 import {
   ARCHIVE_FILES,
@@ -619,6 +620,7 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
       fileSizeBytes: session.fileSizeBytes,
       audioOnly: session.audioOnly,
       chatOffsetSec: computeSessionChatOffsetSec(session),
+      mediaTimeline: parseMediaTimeline(session.mediaTimelineJson),
       telegram: {
         uploadedAt: session.telegramUploadedAt?.toISOString() ?? null,
         chatMessageId: session.telegramChatMessageId,
