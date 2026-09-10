@@ -349,6 +349,7 @@ export function ChatUserCard({
                     emoteMap={emoteMap}
                     twitchEmotes={message.emotes}
                     inlineEmotes={message.inlineEmotes}
+                    twitchGifs={message.gifs}
                     emotePx={Math.min(emotePx, 24)}
                     onMentionClick={onMentionClick}
                     mentionTitle={copy.userCardTitle}

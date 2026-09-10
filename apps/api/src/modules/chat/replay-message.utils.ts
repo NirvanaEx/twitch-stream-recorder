@@ -34,6 +34,8 @@ export type ReplayMessage = {
   badges?: string;
   roles?: ChatRole[];
   emotes?: string;
+  /** Original Twitch GIF positions and URLs; absent on older recordings. */
+  gifs?: string;
   inlineEmotes?: InlineEmote[];
   predictionBet?: PredictionBet;
   relativeTimeSec: number;
@@ -78,6 +80,7 @@ export function buildReplayMessage(
     badges: parseStoredJsonString(message.badgesJson) ?? undefined,
     roles: roles.length > 0 ? roles : undefined,
     emotes: parseStoredJsonString(message.emotesJson) ?? undefined,
+    gifs: parseStoredJsonString(message.gifsJson) ?? undefined,
     inlineEmotes: inlineEmotes.length > 0 ? inlineEmotes : undefined,
     predictionBet:
       extractPredictionBet(message.badgesJson, message.badgeInfoJson) ?? undefined,

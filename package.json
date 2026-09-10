@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @tsr/api && npm run build -w @tsr/web && npm run build -w @tsr/worker",
-    "test": "npm test -w @tsr/api",
+    "test": "npm test -w @tsr/api && npm test -w @tsr/web",
     "dev": "npm run dev:prepare && concurrently --kill-others-on-fail -n api,web,worker -c cyan,magenta,yellow \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
     "dev:reset": "npm run dev:reset:prepare && concurrently --kill-others-on-fail -n api,web,worker -c cyan,magenta,yellow \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
     "dev:prepare": "npm run dev:infra && npm run dev:cleanup && npm run dev:ports && npm run prisma:generate && npm run db:push",

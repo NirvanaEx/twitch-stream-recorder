@@ -21,6 +21,7 @@ import {
 import { ArchiveBundleService } from "../chat/archive-bundle.service";
 import { LiveEmotesService } from "../chat/live-emotes.service";
 import { buildReplayMessage } from "../chat/replay-message.utils";
+import { readReplayPage } from "../chat/replay-page";
 import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.utils";
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { PrismaService } from "../prisma/prisma.service";
@@ -31,6 +32,7 @@ import {
   pipeFileToResponse,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
+import { parseMediaTimeline } from "../recording/media-timeline";
 import { ThumbnailService } from "../recording/thumbnail.service";
 import { StreamEventsService } from "../stream-events/stream-events.service";
 import { TelegramStreamService } from "../telegram/telegram-stream.service";
@@ -96,23 +98,23 @@ export class ArchivesController {
   }
 
   @Get(":id/chat")
-  async getArchiveChat(@Param("id") id: string) {
-    const [messages, snapshot] = await Promise.all([
-      this.prisma.chatMessage.findMany({
-        where: { streamSessionId: id },
-        orderBy: { relativeTimeSec: "asc" },
-        take: 50000,
-      }),
-      this.prisma.emoteSnapshot.findUnique({
+  async getArchiveChat(@Param("id") id: string, @Query("page") page?: string, @Query("cursor") cursor?: string) {
+    const [replay, snapshot, session] = await Promise.all([
+      readReplayPage(this.prisma, id, page === "1", cursor),
+      page === "1" && cursor ? null : this.prisma.emoteSnapshot.findUnique({
         where: { streamSessionId: id },
       }),
+      this.prisma.streamSession.findUnique({ where: { id }, select: { mediaTimelineJson: true } }),
     ]);
 
+    const { messages, nextCursor } = replay;
     const anchorMs = resolveCaptureAnchorMs(messages);
 
     return {
       messages: messages.map((message) => buildReplayMessage(message, anchorMs)),
       emotes: parseStoredJson(snapshot?.payloadJson),
+      mediaTimeline: parseMediaTimeline(session?.mediaTimelineJson),
+      nextCursor,
     };
   }
 

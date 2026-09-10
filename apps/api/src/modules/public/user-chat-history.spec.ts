@@ -53,3 +53,11 @@ test("bounded history reports truncation and does not reveal a future ban", asyn
   assert.equal(result.messages[0].isDeleted, false);
   assert.equal(result.messages[1].isDeleted, true);
 });
+
+test("history includes the original GIF attachment alongside the fallback text", async () => {
+  const tag = "0-16|id|https://media.giphy.com/media/id/giphy.gif?cid=keep";
+  const row = { ...message("gif", "past"), textRaw: "[GIF by Example]", gifsJson: JSON.stringify(tag) };
+  const result = await getUserChatHistory(database([row]), "current", "viewer");
+  assert.equal(result.messages[0].gifs, tag);
+  assert.equal(result.messages[0].textRaw, row.textRaw);
+});

@@ -598,6 +598,7 @@ export default function ArchiveReplayPage() {
               isLive={isLive}
               defaultOffsetSec={data!.item.chatOffsetSec ?? 0}
               baseOffsetSec={activePart?.startOffsetSec ?? 0}
+              isLastPart={parts.length === 0 || currentPart >= parts.length}
             />
           </aside>
         ) : null}

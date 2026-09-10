@@ -3,21 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx",
     "build": "next build",
     "dev": "next dev --turbopack",
     "start": "next start"
   },
   "dependencies": {
     "hls.js": "1.6.16",
+    "linkify-it": "6.1.0",
     "next": "^15.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "tlds": "1.261.0"
   },
   "devDependencies": {
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "jsdom": "^26.1.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

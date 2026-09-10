@@ -1,5 +1,9 @@
+import { LinkifyIt } from "linkify-it";
+import tlds from "tlds";
+import { parseTwitchGifRanges } from "./chat-gifs";
 import { buildApiUrl } from "./api";
 import type { ChatRole } from "./chat-prefs";
+import type { MediaTimeline } from "./media-timeline";
 
 /**
  * Shared chat types and message tokenizing. Lives outside the component so the
@@ -31,6 +35,8 @@ export type ChatMessage = {
   roles?: ChatRole[];
   /** Raw Twitch IRC emote tag, code-point indexed. */
   emotes?: string | null;
+  /** Raw Twitch IRC GIF tag: inclusive code-point positions, id, full URL. */
+  gifs?: string | null;
   /**
    * Kick's own emotes and where they sit in `textRaw`. Kick sends them inline
    * as `[emote:39292:catJAM]`; capture unwraps the token to the bare name, so
@@ -82,6 +88,7 @@ export type EmotePayload = {
 export type ChatResponse = {
   messages: ChatMessage[];
   emotes: EmotePayload | null;
+  mediaTimeline?: MediaTimeline | null;
 };
 
 export type InlineEmote = {
@@ -99,7 +106,9 @@ export type InlineEmote = {
 
 export type Token =
   | { type: "text"; value: string }
+  | { type: "link"; value: string; href: string }
   | { type: "mention"; name: string }
+  | { type: "gif"; name: string; id: string; url: string }
   | { type: "emote"; name: string; url: string; fallbackUrl?: string };
 
 export function renderTokens(
@@ -107,6 +116,7 @@ export function renderTokens(
   emoteMap: Map<string, EmoteEntry>,
   twitchEmotes?: string | null,
   inlineEmotes?: InlineEmote[] | null,
+  twitchGifs?: string | null,
 ): Token[] {
   // Kick first: the message carries the exact emote ids, which beats guessing
   // by name against a 7TV set that may not even contain them.
@@ -114,7 +124,10 @@ export function renderTokens(
     return renderInlineEmoteTokens(text, emoteMap, inlineEmotes);
   }
 
-  const ranges = parseTwitchEmoteRanges(twitchEmotes);
+  const ranges = [
+    ...parseTwitchGifRanges(twitchGifs).map((gif) => ({ ...gif, type: "gif" as const })),
+    ...parseTwitchEmoteRanges(twitchEmotes).map((emote) => ({ ...emote, type: "emote" as const })),
+  ].sort((a, b) => a.start - b.start);
   if (ranges.length === 0) {
     return renderPlainTokens(text, emoteMap);
   }
@@ -127,7 +140,9 @@ export function renderTokens(
     if (range.start < cursor || range.end >= codePoints.length) continue;
     tokens.push(...renderPlainTokens(codePoints.slice(cursor, range.start).join(""), emoteMap));
     const name = codePoints.slice(range.start, range.end + 1).join("");
-    tokens.push({
+    if (range.type === "gif") {
+      tokens.push({ type: "gif", name, id: range.id, url: range.url });
+    } else tokens.push({
       type: "emote",
       name,
       url: `https://static-cdn.jtvnw.net/emoticons/v2/${range.id}/default/dark/2.0`,
@@ -216,6 +231,7 @@ function renderInlineEmoteTokens(
 // A leading "@" plus the characters both platforms allow in a login. The tail
 // (punctuation like "," or "!") is kept as ordinary text.
 const MENTION_PATTERN = /^@([\p{L}\p{N}_.-]{1,32})([\s\S]*)$/u;
+const chatLinks = new LinkifyIt({ fuzzyLink: true, fuzzyEmail: false }).tlds(tlds);
 
 function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Token[] {
   if (!text) return [];
@@ -230,12 +246,29 @@ function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Tok
     else tokens.push({ type: "text", value });
   };
 
+  const pushLinkedText = (value: string) => {
+    let cursor = 0;
+    for (const match of chatLinks.match(value) ?? []) {
+      // Only web links. Schemaless addresses use HTTPS, including in local replay.
+      if (!["", "//", "http:", "https:"].includes(match.schema)) continue;
+      const href = match.schema === "" ? `https://${match.raw}`
+        : match.schema === "//" ? `https:${match.url}` : match.url;
+      let url: URL;
+      try { url = new URL(href); } catch { continue; }
+      if (!["http:", "https:"].includes(url.protocol) || !url.hostname || url.username || url.password) continue;
+      pushText(value.slice(cursor, match.index));
+      tokens.push({ type: "link", value: match.raw, href: url.href });
+      cursor = match.lastIndex;
+    }
+    pushText(value.slice(cursor));
+  };
+
   for (const part of parts) {
     if (part.startsWith("@") && part.length > 1) {
       const mention = MENTION_PATTERN.exec(part);
       if (mention) {
         tokens.push({ type: "mention", name: mention[1] });
-        pushText(mention[2]);
+        pushLinkedText(mention[2]);
         continue;
       }
     }
@@ -245,7 +278,7 @@ function renderPlainTokens(text: string, emoteMap: Map<string, EmoteEntry>): Tok
     if (emote) {
       tokens.push({ type: "emote", name: emote.name, ...resolveEmoteSrc(emote) });
     } else {
-      pushText(part);
+      pushLinkedText(part);
     }
   }
 
