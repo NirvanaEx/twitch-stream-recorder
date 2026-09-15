@@ -5,8 +5,11 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { use } from "react";
 import { apiGet, buildApiUrl } from "../../lib/api";
-import { buildMediaUrl, formatFileSize, formatPeriod } from "../../lib/media";
-import { clearResume, readResume, saveResume } from "../../lib/resume";
+import { buildMediaUrl, formatFileSize, formatPeriod, formatSeconds } from "../../lib/media";
+import { useRecordingPlayback } from "../../lib/use-recording-playback";
+import { BroadcastSummary } from "../../components/BroadcastSummary";
+import { StorageBadges, PlaybackSourceSelect } from "../../components/RecordingSources";
+import type { RecordingStorage, PlaybackChoice, SourcePart, BroadcastInfo } from "../../lib/playback-sources";
 import { readRevealed, saveRevealed, useSpoiler } from "../../lib/spoiler";
 import { useLanguage } from "../../providers";
 import { ChatReplay } from "../../components/ChatReplay";
@@ -15,7 +18,7 @@ import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
 import { CloudIcon, DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
 
 /** One piece of the recording, and the tier it is read from. */
-type PublicPlaybackPart = {
+type PublicPlaybackPart = SourcePart & {
   partIndex: number;
   partCount: number;
   streamUrl: string;
@@ -41,6 +44,9 @@ type PublicStreamDetail = {
   videoUrl: string;
   hlsUrl?: string;
   previewFrames?: { baseUrl: string; count: number; intervalSec: number };
+  broadcast?: BroadcastInfo | null;
+  storage?: RecordingStorage;
+  playbackSources?: PlaybackChoice[];
   videoSource: "local" | "drive" | "telegram";
   audioOnly: boolean;
   chatOffsetSec: number;
@@ -81,48 +87,18 @@ export default function PublicWatchPage({
 }) {
   const { id } = use(params);
   const searchParams = useSearchParams();
+  const single = searchParams.get("single") === "1";
   const { t } = useLanguage();
   const { spoilerFree } = useSpoiler();
   const [data, setData] = useState<PublicStreamDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<PlayerMode>("normal");
   const [chatVisible, setChatVisible] = useState(true);
-  const [videoElement, setVideoElement] = useState<HTMLMediaElement | null>(null);
-  // 1-based index of the Telegram part being played (split recordings only).
-  const [currentPart, setCurrentPart] = useState(1);
+  const playback = useRecordingPlayback(id, data ?? null, buildMediaUrl, single);
+  const { videoElement, setVideoElement, currentPart, setCurrentPart, parts, activePart, activeSource, videoSrc, playlist } = playback;
+  const chatSessionId = activePart?.sessionId ?? id;
+  const handleSegmentChange = useCallback((segment: number) => setCurrentPart(segment), [setCurrentPart]);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
-
-  // The pieces this recording plays back in — chunks off the archive drive,
-  // Telegram parts for whatever the drive no longer holds. Empty when it is
-  // one stored file.
-  const parts = data?.parts ?? [];
-  const activePart =
-    parts.length > 0 ? parts[Math.min(currentPart, parts.length) - 1] : null;
-  const activeSource = activePart?.source ?? data?.videoSource ?? null;
-
-  // Seamless playback: when every part has a known duration, the player shows
-  // ONE continuous timeline and switches parts internally.
-  const playlist = useMemo(
-    () =>
-      parts.length > 0 && parts.every((part) => (part.durationSec ?? 0) > 0)
-        ? parts.map((part) => ({
-            src: buildMediaUrl(part.streamUrl),
-            durationSec: part.durationSec as number,
-          }))
-        : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.parts],
-  );
-
-  // Saved "continue watching" part, captured once for the player's start segment.
-  const initialSegmentRef = useRef(0);
-  if (initialSegmentRef.current === 0) {
-    initialSegmentRef.current = Math.max(1, readResume(id)?.part ?? 1);
-  }
-
-  const handleSegmentChange = useCallback((segment: number) => {
-    setCurrentPart(segment);
-  }, []);
 
   // How far into this recording the viewer has ever got — the line the
   // spoiler-free timeline draws its fog behind. Read once, so the player owns
@@ -171,91 +147,6 @@ export default function PublicWatchPage({
     return () => videoElement.removeEventListener("loadedmetadata", onLoaded);
   }, [playlist, pendingAutoplay, videoElement, currentPart]);
 
-  // ---- "Continue watching": restore and persist the position locally ----
-
-  const resumePartAppliedRef = useRef(false);
-  const resumeSeekAppliedRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (resumePartAppliedRef.current || !data) return;
-    resumePartAppliedRef.current = true;
-
-    const saved = readResume(id);
-    if (
-      saved &&
-      parts.length > 1 &&
-      saved.part >= 1 &&
-      saved.part <= parts.length
-    ) {
-      setCurrentPart(saved.part);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, parts.length, id]);
-
-  useEffect(() => {
-    if (!videoElement || !data) return undefined;
-
-    const key = `${id}:${currentPart}`;
-    if (resumeSeekAppliedRef.current === key) return undefined;
-
-    const saved = readResume(id);
-    if (!saved || saved.part !== currentPart || saved.time < 10) {
-      resumeSeekAppliedRef.current = key;
-      return undefined;
-    }
-
-    const apply = () => {
-      resumeSeekAppliedRef.current = key;
-      const total = videoElement.duration;
-      if (Number.isFinite(total) && total > 0 && saved.time > total - 30) return;
-      videoElement.currentTime = saved.time;
-    };
-
-    if (videoElement.readyState >= 1) {
-      apply();
-      return undefined;
-    }
-
-    videoElement.addEventListener("loadedmetadata", apply, { once: true });
-    return () => videoElement.removeEventListener("loadedmetadata", apply);
-  }, [videoElement, data, currentPart, id]);
-
-  useEffect(() => {
-    if (!videoElement || !data) return undefined;
-
-    let lastSavedAt = 0;
-
-    const save = () => {
-      const time = videoElement.currentTime;
-      if (!Number.isFinite(time) || time < 10) return;
-
-      const total = videoElement.duration;
-      const isLastPart = parts.length === 0 || currentPart >= parts.length;
-
-      if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
-        clearResume(id);
-        return;
-      }
-
-      saveResume(id, currentPart, time);
-    };
-
-    const onTimeUpdate = () => {
-      const now = Date.now();
-      if (now - lastSavedAt < 5000) return;
-      lastSavedAt = now;
-      save();
-    };
-
-    videoElement.addEventListener("timeupdate", onTimeUpdate);
-    videoElement.addEventListener("pause", save);
-
-    return () => {
-      videoElement.removeEventListener("timeupdate", onTimeUpdate);
-      videoElement.removeEventListener("pause", save);
-    };
-  }, [videoElement, data, currentPart, parts.length, id]);
-
   useEffect(() => {
     setChatVisible(readStoredChatPref());
   }, []);
@@ -284,7 +175,7 @@ export default function PublicWatchPage({
     async function load() {
       try {
         const response = await apiGet<{ item: PublicStreamDetail }>(
-          `public/streams/${id}`,
+          `public/streams/${id}${single ? "?single=1" : ""}`,
         );
         if (!cancelled) {
           setData(response.item);
@@ -300,7 +191,18 @@ export default function PublicWatchPage({
     return () => {
       cancelled = true;
     };
-  }, [id, t.publicSite.notFound]);
+  }, [id, single, t.publicSite.notFound]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void apiGet<{ item: PublicStreamDetail }>(`public/streams/${id}${single ? "?single=1" : ""}`).then((response) => {
+        if (!cancelled) setData(response.item);
+      }).catch(() => undefined);
+    }, 30000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [id, single]);
 
   if (error) {
     return (
@@ -326,9 +228,6 @@ export default function PublicWatchPage({
     );
   }
 
-  const videoSrc = activePart
-    ? buildMediaUrl(activePart.streamUrl)
-    : buildMediaUrl(data.videoUrl) || buildApiUrl(`public/streams/${id}/video`);
   const posterSrc = data.thumbnailUrl ?? data.previewImageUrl ?? undefined;
   const playerTitle = data.title || data.channel.displayName;
 
@@ -353,7 +252,7 @@ export default function PublicWatchPage({
     >
       <div className={stageClass}>
         <div className="replay-stage__main">
-          <header className="replay-stage__header">
+          <header className="replay-stage__header replay-stage__header--sources">
             <Link
               href="/"
               className="auth-back"
@@ -395,7 +294,7 @@ export default function PublicWatchPage({
               {!spoilerFree && data.startedAt && data.endedAt ? (
                 <span>
                   {t.publicSite.durationLabel}:{" "}
-                  <strong>{formatPeriod(data.startedAt, data.endedAt)}</strong>
+                  <strong>{data.durationSec ? formatSeconds(data.durationSec) : formatPeriod(data.startedAt, data.endedAt)}</strong>
                 </span>
               ) : null}
               {!spoilerFree && data.fileSizeBytes ? (
@@ -424,17 +323,15 @@ export default function PublicWatchPage({
               ) : null}
               <a
                 className="icon-btn"
-                href={buildApiUrl(
-                  activePart
-                    ? `public/streams/${id}/video?part=${activePart.partIndex}&download=1`
-                    : `public/streams/${id}/video?download=1`,
-                )}
+                href={`${videoSrc}${videoSrc.includes("?") ? "&" : "?"}download=1`}
                 title={t.localReplay.downloadVideo}
                 download
               >
                 <DownloadIcon />
               </a>
             </div>
+            <StorageBadges storage={data.storage} />
+            <BroadcastSummary broadcast={data.broadcast} current={activePart?.continuationIndex} />
           </header>
 
           {!playlist && mode === "normal" && parts.length > 1 ? (
@@ -462,15 +359,23 @@ export default function PublicWatchPage({
             </div>
           ) : null}
 
+          {data.storage ? (
+            <div className="replay-source-toolbar">
+              <PlaybackSourceSelect storage={data.storage} choices={data.playbackSources} value={playback.selectedSource} onChange={(source) => { setPendingAutoplay(false); playback.changeSource(source); }} />
+            </div>
+          ) : null}
+
           <div className="replay-stage__player">
             <VideoPlayer
               src={videoSrc}
-              hlsUrl={data.hlsUrl && searchParams.get("delivery") !== "mp4" ? buildMediaUrl(data.hlsUrl) : undefined}
+              hlsUrl={!data.playbackSources?.length && data.hlsUrl && searchParams.get("delivery") !== "mp4" ? buildMediaUrl(data.hlsUrl) : undefined}
               previewFrames={data.previewFrames ? {
                 ...data.previewFrames, baseUrl: buildMediaUrl(data.previewFrames.baseUrl),
               } : undefined}
               playlist={playlist ?? undefined}
-              initialSegment={initialSegmentRef.current}
+              initialSegment={playback.initialSegment}
+              playbackKey={playback.playbackKey}
+              initialPlayback={playback.initialPlayback}
               onSegmentChange={handleSegmentChange}
               audioOnly={data.audioOnly}
               artworkUrl={data.channel.profileImageUrl}
@@ -482,7 +387,7 @@ export default function PublicWatchPage({
               onChatToggle={() => setChatVisible((value) => !value)}
               onVideoElement={setVideoElement}
               title={mode !== "normal" ? playerTitle : undefined}
-              timelineStartAt={
+              timelineStartAt={activePart?.sessionMediaStartedAt ? new Date(activePart.sessionMediaStartedAt).getTime() + ((activePart.sessionOffsetSec ?? 0) - activePart.startOffsetSec) * 1000 :
                 data.mediaStartedAt ? new Date(data.mediaStartedAt).getTime() : null
               }
               spoilerFree={spoilerFree}
@@ -495,15 +400,16 @@ export default function PublicWatchPage({
         {chatVisible ? (
           <aside className="replay-stage__chat">
             <ChatReplay
-              chatUrl={`public/streams/${id}/chat`}
-              historySessionId={id}
-              liveEmotesUrl={`public/streams/${id}/emotes/live`}
-              timelineUrl={`public/streams/${id}/timeline`}
-              eventsUrl={`public/streams/${id}/events`}
+              key={chatSessionId}
+              chatUrl={`public/streams/${chatSessionId}/chat`}
+              historySessionId={chatSessionId}
+              liveEmotesUrl={`public/streams/${chatSessionId}/emotes/live`}
+              timelineUrl={`public/streams/${chatSessionId}/timeline`}
+              eventsUrl={`public/streams/${chatSessionId}/events`}
               videoElement={videoElement}
               isLive={false}
-              defaultOffsetSec={data?.chatOffsetSec ?? 0}
-              baseOffsetSec={activePart?.startOffsetSec ?? 0}
+              defaultOffsetSec={activePart?.sessionChatOffsetSec ?? data?.chatOffsetSec ?? 0}
+              baseOffsetSec={activePart?.sessionOffsetSec ?? activePart?.startOffsetSec ?? 0}
               isLastPart={parts.length === 0 || currentPart >= parts.length}
             />
           </aside>

@@ -6,7 +6,8 @@
     "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx",
     "build": "next build",
     "dev": "next dev --turbopack",
-    "start": "next start"
+    "start": "next start",
+    "prebuild": "node scripts/build-twitch-chat.mjs"
   },
   "dependencies": {
     "hls.js": "1.6.16",
@@ -24,6 +25,7 @@
     "@types/react-dom": "^18.3.1",
     "jsdom": "^26.1.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "esbuild": "^0.25.0"
   }
 }

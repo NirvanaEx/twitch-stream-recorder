@@ -10,6 +10,8 @@ export type ResumeState = {
   part: number;
   /** Position inside that part, in seconds. */
   time: number;
+  absoluteTime?: number;
+  source?: string;
   updatedAt: number;
 };
 
@@ -29,13 +31,13 @@ export function readResume(archiveId: string): ResumeState | null {
   }
 }
 
-export function saveResume(archiveId: string, part: number, time: number) {
+export function saveResume(archiveId: string, part: number, time: number, absoluteTime?: number, source?: string) {
   if (typeof window === "undefined") return;
 
   try {
     window.localStorage.setItem(
       PREFIX + archiveId,
-      JSON.stringify({ part, time, updatedAt: Date.now() } satisfies ResumeState),
+      JSON.stringify({ part, time, absoluteTime, source, updatedAt: Date.now() } satisfies ResumeState),
     );
   } catch {
     // Storage may be unavailable (private mode); resuming is best-effort.

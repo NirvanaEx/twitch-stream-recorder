@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiSend, buildApiUrl } from "../../../lib/api";
 import {
@@ -27,7 +27,10 @@ import {
   SendIcon,
   TrashIcon,
 } from "../../../components/icons";
-import { clearResume, readResume, saveResume } from "../../../lib/resume";
+import { useRecordingPlayback } from "../../../lib/use-recording-playback";
+import { BroadcastSummary } from "../../../components/BroadcastSummary";
+import { StorageBadges, PlaybackSourceSelect } from "../../../components/RecordingSources";
+import type { RecordingStorage, PlaybackChoice, SourcePart, BroadcastInfo } from "../../../lib/playback-sources";
 import { readRevealed, saveRevealed, useSpoiler } from "../../../lib/spoiler";
 
 type TelegramPart = {
@@ -40,7 +43,7 @@ type TelegramPart = {
 };
 
 /** One piece of the recording, and the tier it is read from. */
-type PlaybackPart = TelegramPart & {
+type PlaybackPart = TelegramPart & SourcePart & {
   source: "local" | "drive" | "telegram";
 };
 
@@ -58,6 +61,10 @@ type ArchiveDetailResponse = {
     endedAt: string | null;
     fileSizeBytes: string | null;
     videoReady: boolean;
+    broadcast?: BroadcastInfo | null;
+  storage?: RecordingStorage;
+    playbackSources?: PlaybackChoice[];
+    videoUrl?: string | null;
     videoSource: "local" | "drive" | "telegram" | null;
     audioOnly: boolean;
     channelProfileImageUrl: string | null;
@@ -99,15 +106,17 @@ export default function ArchiveReplayPage() {
   const { spoilerFree } = useSpoiler();
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const single = useSearchParams().get("single") === "1";
 
   const [data, setData] = useState<ArchiveDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyDelete, setBusyDelete] = useState(false);
   const [chatVisible, setChatVisible] = useState<boolean>(true);
   const [mode, setMode] = useState<PlayerMode>("normal");
-  const [videoElement, setVideoElement] = useState<HTMLMediaElement | null>(null);
-  // 1-based index of the Telegram part being played (split recordings only).
-  const [currentPart, setCurrentPart] = useState(1);
+  const playback = useRecordingPlayback(params.id, data?.item ?? null, buildAuthenticatedMediaUrl, single);
+  const { videoElement, setVideoElement, currentPart, setCurrentPart, parts, activePart, activeSource, videoSrc, playlist } = playback;
+  const chatSessionId = activePart?.sessionId ?? params.id;
+  const handleSegmentChange = useCallback((segment: number) => setCurrentPart(segment), [setCurrentPart]);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
   // Live Telegram streaming throughput, shown as a chip next to the source.
   const [tgStats, setTgStats] = useState<TelegramStreamStats | null>(null);
@@ -140,13 +149,13 @@ export default function ArchiveReplayPage() {
 
   const load = useCallback(async () => {
     try {
-      const response = await apiGet<ArchiveDetailResponse>(`archives/${params.id}`);
+      const response = await apiGet<ArchiveDetailResponse>(`archives/${params.id}${single ? "?single=1" : ""}`);
       setData(response);
       setError(null);
     } catch {
       setError(t.errors.apiUnavailable);
     }
-  }, [params.id, t.errors.apiUnavailable]);
+  }, [params.id, single, t.errors.apiUnavailable]);
 
   useEffect(() => {
     void load();
@@ -159,44 +168,6 @@ export default function ArchiveReplayPage() {
   }, [data?.item.status, load]);
 
   useRealtimeRefresh(load);
-
-  // A recording kept in pieces — the chunks of a long broadcast, or the parts
-  // of a Telegram copy — is played piece by piece; a single stored file keeps
-  // playing as one. The API says which, and where each piece comes from.
-  const parts = useMemo(() => data?.item.parts ?? [], [data?.item.parts]);
-  const activePart =
-    parts.length > 0 ? parts[Math.min(currentPart, parts.length) - 1] : null;
-  const activeSource = activePart?.source ?? data?.item.videoSource ?? null;
-
-  // The /api/archives/:id/video endpoint is auth-protected; <video> can't
-  // attach the Authorization header, so we sign the URL with `?token=`.
-  const videoSrc = useMemo(
-    () => buildAuthenticatedMediaUrl(activePart ? activePart.streamUrl : data?.videoUrl),
-    [activePart, data?.videoUrl],
-  );
-
-  // Seamless playback: when every part has a known duration, the player shows
-  // ONE continuous timeline and switches parts internally.
-  const playlist = useMemo(
-    () =>
-      parts.length > 0 && parts.every((part) => (part.durationSec ?? 0) > 0)
-        ? parts.map((part) => ({
-            src: buildAuthenticatedMediaUrl(part.streamUrl),
-            durationSec: part.durationSec as number,
-          }))
-        : null,
-    [parts],
-  );
-
-  // Saved "continue watching" part, captured once for the player's start segment.
-  const initialSegmentRef = useRef(0);
-  if (initialSegmentRef.current === 0) {
-    initialSegmentRef.current = Math.max(1, readResume(params.id)?.part ?? 1);
-  }
-
-  const handleSegmentChange = useCallback((segment: number) => {
-    setCurrentPart(segment);
-  }, []);
 
   // Furthest point ever reached in this recording — the spoiler-free timeline
   // draws its fog behind it. Shared storage with the public watch page, so
@@ -213,9 +184,6 @@ export default function ArchiveReplayPage() {
     [params.id],
   );
 
-  useEffect(() => {
-    setCurrentPart(1);
-  }, [params.id]);
 
   // Poll live Telegram throughput while watching a Telegram-sourced archive.
   // The endpoint is cheap and returns { active: false } when nothing streams.
@@ -228,7 +196,7 @@ export default function ArchiveReplayPage() {
 
     let cancelled = false;
     const poll = () => {
-      apiGet<TelegramStreamStats>(`archives/${params.id}/stream-stats`)
+      apiGet<TelegramStreamStats>(`archives/${chatSessionId}/stream-stats`)
         .then((stats) => {
           if (!cancelled) setTgStats(stats);
         })
@@ -241,96 +209,7 @@ export default function ArchiveReplayPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSource, params.id]);
-
-  // ---- "Continue watching": restore and persist the position locally ----
-
-  const resumePartAppliedRef = useRef(false);
-  const resumeSeekAppliedRef = useRef<string | null>(null);
-
-  // Restore the saved part once the part list is known.
-  useEffect(() => {
-    if (resumePartAppliedRef.current || !data) return;
-    resumePartAppliedRef.current = true;
-
-    const saved = readResume(data.item.id);
-    if (
-      saved &&
-      parts.length > 1 &&
-      saved.part >= 1 &&
-      saved.part <= parts.length
-    ) {
-      setCurrentPart(saved.part);
-    }
-  }, [data, parts.length]);
-
-  // Restore the saved position inside the current part (once per part).
-  useEffect(() => {
-    if (!videoElement || !data || data.item.status === "recording") return undefined;
-
-    const key = `${data.item.id}:${currentPart}`;
-    if (resumeSeekAppliedRef.current === key) return undefined;
-
-    const saved = readResume(data.item.id);
-    if (!saved || saved.part !== currentPart || saved.time < 10) {
-      resumeSeekAppliedRef.current = key;
-      return undefined;
-    }
-
-    const apply = () => {
-      resumeSeekAppliedRef.current = key;
-      const total = videoElement.duration;
-      // Don't resume right at the very end of the recording.
-      if (Number.isFinite(total) && total > 0 && saved.time > total - 30) return;
-      videoElement.currentTime = saved.time;
-    };
-
-    if (videoElement.readyState >= 1) {
-      apply();
-      return undefined;
-    }
-
-    videoElement.addEventListener("loadedmetadata", apply, { once: true });
-    return () => videoElement.removeEventListener("loadedmetadata", apply);
-  }, [videoElement, data, currentPart]);
-
-  // Persist progress every few seconds and on pause; forget it once the
-  // viewer is near the end of the last part.
-  useEffect(() => {
-    if (!videoElement || !data || data.item.status === "recording") return undefined;
-
-    let lastSavedAt = 0;
-
-    const save = () => {
-      const time = videoElement.currentTime;
-      if (!Number.isFinite(time) || time < 10) return;
-
-      const total = videoElement.duration;
-      const isLastPart = parts.length === 0 || currentPart >= parts.length;
-
-      if (isLastPart && Number.isFinite(total) && total > 0 && total - time < 60) {
-        clearResume(data.item.id);
-        return;
-      }
-
-      saveResume(data.item.id, currentPart, time);
-    };
-
-    const onTimeUpdate = () => {
-      const now = Date.now();
-      if (now - lastSavedAt < 5000) return;
-      lastSavedAt = now;
-      save();
-    };
-
-    videoElement.addEventListener("timeupdate", onTimeUpdate);
-    videoElement.addEventListener("pause", save);
-
-    return () => {
-      videoElement.removeEventListener("timeupdate", onTimeUpdate);
-      videoElement.removeEventListener("pause", save);
-    };
-  }, [videoElement, data, currentPart, parts.length]);
+  }, [activeSource, chatSessionId]);
 
   // Auto-advance to the next part when the current one finishes (fallback
   // mode only — with a playlist the player handles this internally).
@@ -428,7 +307,7 @@ export default function ArchiveReplayPage() {
             the part selector were auto-placed into implicit rows BELOW the
             video — an error about the archive rendered under the player. */}
         <div className="replay-stage__main">
-          <header className="replay-stage__header">
+          <header className="replay-stage__header replay-stage__header--sources">
             <Link className="replay-back" href="/admin/archives" title={t.replay.backToArchives}>
               ←
             </Link>
@@ -447,13 +326,7 @@ export default function ArchiveReplayPage() {
             <div className="action-row">
               <a
                 className="icon-btn"
-                href={withAuthToken(
-                  buildApiUrl(
-                    activePart
-                      ? `archives/${params.id}/video?part=${activePart.partIndex}&download=1`
-                      : `archives/${params.id}/video?download=1`,
-                  ),
-                )}
+                href={`${videoSrc}${videoSrc.includes("?") ? "&" : "?"}download=1`}
                 title={t.localReplay.downloadVideo}
                 download
               >
@@ -461,13 +334,13 @@ export default function ArchiveReplayPage() {
               </a>
               <a
                 className="icon-btn"
-                href={withAuthToken(buildApiUrl(`archives/${params.id}/bundle`))}
+                href={withAuthToken(buildApiUrl(`archives/${chatSessionId}/bundle`))}
                 title={t.localReplay.downloadBundle}
                 download
               >
                 <ChatDownloadIcon />
               </a>
-              <button
+              {!data?.item.broadcast ? <button
                 type="button"
                 className="icon-btn danger"
                 disabled={busyDelete || isLive}
@@ -475,18 +348,28 @@ export default function ArchiveReplayPage() {
                 onClick={() => void handleDelete()}
               >
                 <TrashIcon />
-              </button>
+              </button> : null}
             </div>
+            <StorageBadges storage={data?.item.storage} />
+            <BroadcastSummary broadcast={data?.item.broadcast} admin current={activePart?.continuationIndex} />
           </header>
 
           {mode === "normal" && error ? <div className="notice error">{error}</div> : null}
+
+          {data?.videoReady && videoSrc && data.item.storage ? (
+            <div className="replay-source-toolbar">
+              <PlaybackSourceSelect storage={data.item.storage} choices={data.item.playbackSources} value={playback.selectedSource} onChange={(source) => { setPendingAutoplay(false); playback.changeSource(source); }} />
+            </div>
+          ) : null}
 
           <div className="replay-stage__player">
             {data?.videoReady && videoSrc ? (
               <VideoPlayer
                 src={videoSrc}
                 playlist={playlist ?? undefined}
-                initialSegment={initialSegmentRef.current}
+                initialSegment={playback.initialSegment}
+              playbackKey={playback.playbackKey}
+              initialPlayback={playback.initialPlayback}
                 onSegmentChange={handleSegmentChange}
                 audioOnly={data.item.audioOnly}
                 artworkUrl={data.item.channelProfileImageUrl}
@@ -500,7 +383,7 @@ export default function ArchiveReplayPage() {
                 autoPlay={false}
                 title={mode !== "normal" ? playerTitle : undefined}
                 emptyText={t.replay.videoPending}
-                timelineStartAt={mediaStartMs}
+                timelineStartAt={activePart?.sessionMediaStartedAt ? new Date(activePart.sessionMediaStartedAt).getTime() + ((activePart.sessionOffsetSec ?? 0) - activePart.startOffsetSec) * 1000 : mediaStartMs}
                 spoilerFree={spoilerFree}
                 initialRevealedSec={initialRevealedRef.current}
                 onRevealedChange={handleRevealed}
@@ -590,14 +473,15 @@ export default function ArchiveReplayPage() {
         {hasChat ? (
           <aside className="replay-stage__chat">
             <ChatReplay
-              archiveId={data!.item.id}
-              liveEmotesUrl={`archives/${data!.item.id}/emotes/live`}
-              timelineUrl={`archives/${data!.item.id}/timeline`}
-              eventsUrl={`archives/${data!.item.id}/events`}
+              key={chatSessionId}
+              archiveId={chatSessionId}
+              liveEmotesUrl={`archives/${chatSessionId}/emotes/live`}
+              timelineUrl={`archives/${chatSessionId}/timeline`}
+              eventsUrl={`archives/${chatSessionId}/events`}
               videoElement={videoElement}
               isLive={isLive}
-              defaultOffsetSec={data!.item.chatOffsetSec ?? 0}
-              baseOffsetSec={activePart?.startOffsetSec ?? 0}
+              defaultOffsetSec={activePart?.sessionChatOffsetSec ?? data!.item.chatOffsetSec ?? 0}
+              baseOffsetSec={activePart?.sessionOffsetSec ?? activePart?.startOffsetSec ?? 0}
               isLastPart={parts.length === 0 || currentPart >= parts.length}
             />
           </aside>
