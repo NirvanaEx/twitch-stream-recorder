@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { partMediaTime } from "./media-clock";
 import { clearResume, readResume, saveResume } from "./resume";
 import { locatePlaybackTime, type PlaybackChoice, type PlaybackStart, type RecordingPlayback } from "./playback-sources";
 
@@ -51,8 +52,8 @@ export function useRecordingPlayback(id: string, data: RecordingPlayback | null,
     const index = parts.findIndex((part) => mediaUrl(part.streamUrl) === layoutRef.current!.url);
     if (index >= 0) {
       const settings = { play: !videoElement.paused, rate: videoElement.playbackRate, volume: videoElement.volume, muted: videoElement.muted };
-      startRef.current = { part: index + 1, playback: { time: videoElement.currentTime, ...settings } };
-      switchingRef.current = { absolute: parts[index].startOffsetSec + videoElement.currentTime, ...settings };
+      startRef.current = { part: index + 1, playback: { time: partMediaTime(videoElement, parts[index].startOffsetSec), ...settings } };
+      switchingRef.current = { absolute: parts[index].startOffsetSec + partMediaTime(videoElement, parts[index].startOffsetSec), ...settings };
       setCurrentPart(index + 1); setRevision((value) => value + 1);
     }
   }
@@ -65,7 +66,7 @@ export function useRecordingPlayback(id: string, data: RecordingPlayback | null,
     if (!next || source === selectedSource) return;
     const previous = startRef.current?.playback;
     const transition = switchingRef.current ?? {
-      absolute: (activePart?.startOffsetSec ?? 0) + (videoElement?.currentTime ?? previous?.time ?? 0),
+      absolute: (activePart?.startOffsetSec ?? 0) + (videoElement ? partMediaTime(videoElement, activePart?.startOffsetSec ?? 0) : previous?.time ?? 0),
       play: videoElement ? !videoElement.paused : previous?.play ?? false,
       rate: videoElement?.playbackRate ?? 1, volume: videoElement?.volume ?? 1, muted: videoElement?.muted ?? false,
     };
@@ -86,7 +87,7 @@ export function useRecordingPlayback(id: string, data: RecordingPlayback | null,
   useEffect(() => {
     if (!videoElement || !videoSrc) return;
     const loaded = () => {
-      if (videoElement.currentSrc === new URL(videoSrc, window.location.href).href) switchingRef.current = null;
+      if (videoElement.dataset.continuousTimeline === "1" || videoElement.currentSrc === new URL(videoSrc, window.location.href).href) switchingRef.current = null;
     };
     videoElement.addEventListener("loadedmetadata", loaded);
     if (videoElement.readyState >= 1) loaded();
@@ -97,10 +98,10 @@ export function useRecordingPlayback(id: string, data: RecordingPlayback | null,
     if (!videoElement || !data) return;
     let lastSaved = 0;
     const save = () => {
-      const time = videoElement.currentTime;
+      const time = partMediaTime(videoElement, activePart?.startOffsetSec ?? 0);
       const absoluteTime = (activePart?.startOffsetSec ?? 0) + time;
       if (switchingRef.current || videoElement.readyState < 1 || !Number.isFinite(time) || absoluteTime < 10) return;
-      if (currentPart >= parts.length && Number.isFinite(videoElement.duration) && videoElement.duration - time < 60) {
+      if (currentPart >= parts.length && Number.isFinite(videoElement.duration) && videoElement.duration - videoElement.currentTime < 60) {
         clearResume(resumeId);
       } else saveResume(resumeId, currentPart, time, absoluteTime, selectedSource);
     };

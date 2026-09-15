@@ -3,16 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx",
+    "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx app/lib/media-clock.spec.ts app/lib/media-recovery.spec.ts app/lib/twitch-native-chat.spec.ts app/twitch-chat-widget/timeline.spec.ts",
     "build": "next build",
     "dev": "next dev --turbopack",
     "start": "next start",
-    "prebuild": "node scripts/build-twitch-chat.mjs"
+    "prebuild": "node scripts/build-twitch-chat.mjs",
+    "test:widget": "node scripts/build-twitch-chat.mjs && node scripts/test-widget.cjs"
   },
   "dependencies": {
     "hls.js": "1.6.16",
     "linkify-it": "6.1.0",
-    "next": "^15.0.4",
+    "mp4box": "2.3.0",
+    "next": "15.5.25",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1",
@@ -23,9 +25,9 @@
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.25.0",
     "jsdom": "^26.1.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "esbuild": "^0.25.0"
+    "typescript": "^5.7.2"
   }
 }

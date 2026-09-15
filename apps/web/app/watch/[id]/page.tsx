@@ -409,6 +409,7 @@ export default function PublicWatchPage({
               videoElement={videoElement}
               isLive={false}
               defaultOffsetSec={activePart?.sessionChatOffsetSec ?? data?.chatOffsetSec ?? 0}
+              mediaPartStartSec={activePart?.startOffsetSec ?? 0}
               baseOffsetSec={activePart?.sessionOffsetSec ?? activePart?.startOffsetSec ?? 0}
               isLastPart={parts.length === 0 || currentPart >= parts.length}
             />

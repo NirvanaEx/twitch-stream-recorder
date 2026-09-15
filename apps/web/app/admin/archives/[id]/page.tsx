@@ -481,6 +481,7 @@ export default function ArchiveReplayPage() {
               videoElement={videoElement}
               isLive={isLive}
               defaultOffsetSec={activePart?.sessionChatOffsetSec ?? data!.item.chatOffsetSec ?? 0}
+              mediaPartStartSec={activePart?.startOffsetSec ?? 0}
               baseOffsetSec={activePart?.sessionOffsetSec ?? activePart?.startOffsetSec ?? 0}
               isLastPart={parts.length === 0 || currentPart >= parts.length}
             />

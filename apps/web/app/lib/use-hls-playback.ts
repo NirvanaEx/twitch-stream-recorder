@@ -5,11 +5,11 @@ import type Hls from "hls.js";
 
 /** Only prepared recordings load the HLS chunk. MP4 remains the recovery source. */
 export function useHlsPlayback(
-  ref: RefObject<HTMLMediaElement | null>, src: string, hlsUrl?: string,
+  ref: RefObject<HTMLMediaElement | null>, src: string, hlsUrl?: string, externallyManaged = false,
 ) {
   const [failedUrl, setFailedUrl] = useState<string>();
   const resume = useRef<{ time: number; play: boolean } | null>(null);
-  const active = Boolean(hlsUrl && failedUrl !== hlsUrl);
+  const active = Boolean(!externallyManaged && hlsUrl && failedUrl !== hlsUrl);
 
   useEffect(() => {
     const video = ref.current;
@@ -58,7 +58,7 @@ export function useHlsPlayback(
 
   useEffect(() => {
     const video = ref.current;
-    if (!video || active) return;
+    if (!video || active || externallyManaged) return;
     video.dataset.delivery = "mp4";
     const restore = () => {
       const position = resume.current;
@@ -72,7 +72,7 @@ export function useHlsPlayback(
     if (video.getAttribute("src") !== src) video.src = src;
     if (video.readyState >= 1) restore();
     return () => video.removeEventListener("loadedmetadata", restore);
-  }, [ref, src, active]);
+  }, [ref, src, active, externallyManaged]);
 
-  return { mediaSrc: active ? undefined : src, handlesErrors: active };
+  return { mediaSrc: active || externallyManaged ? undefined : src, handlesErrors: active || externallyManaged };
 }
