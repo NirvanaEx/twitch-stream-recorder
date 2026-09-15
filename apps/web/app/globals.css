@@ -4473,3 +4473,38 @@ textarea {
 .chat-user-card__seek { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .chat-user-card__seek:disabled { cursor: default; opacity: .65; }
 .chat-user-card__more { display: block; margin: 8px auto; }
+
+/* Recording copies remain visible independently from the selected source. */
+.recording-storage { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.storage-copy { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px; line-height: 1.4; color: var(--text-faint); }
+.storage-copy__status { opacity: .9; }
+.storage-copy--saved { color: #57c99d; border-color: #57c99d40; background: #57c99d09; }
+.storage-copy--saving, .storage-copy--partial { color: #e2b963; border-color: #e2b96340; }
+.storage-copy--error, .storage-copy--unavailable { color: #e88f94; border-color: #e88f9440; }
+.playback-source { display: flex; align-items: center; gap: 6px; min-width: 0; color: #eee; font-size: 11px; }
+.playback-source select { color: #eee; background: #24252b; border: 1px solid #ffffff35; border-radius: 6px; padding: 5px 6px; max-width: 160px; font: inherit; cursor: pointer; }
+.playback-source select:focus-visible { outline: 2px solid #9782ff; outline-offset: 2px; }
+.playback-source option:disabled { color: #999; }
+@media (max-width: 700px) { .playback-source > span { display: none; } .playback-source select { max-width: 110px; padding: 4px; } }
+
+.replay-source-toolbar { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; padding: 8px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.replay-source-toolbar .playback-source { flex-wrap: wrap; font-size: 13px; gap: 8px; }
+.replay-source-toolbar .playback-source > span { display: inline; }
+.replay-source-toolbar .playback-source select { max-width: 100%; min-height: 36px; padding: 6px 10px; }
+.replay-stage--theater .replay-source-toolbar,
+.replay-stage.has-chat .replay-source-toolbar { display: none; }
+.replay-stage--theater .replay-stage__player { flex: 1; height: auto; }
+
+.replay-stage__header--sources { flex-wrap: wrap; gap: 8px 12px; }
+.replay-stage__header--sources > .recording-storage { flex-basis: 100%; margin-top: 0; }
+.replay-stage__header--sources > .watch-channel-row { flex: 1; min-width: 0; }
+.replay-stage__header--sources > .watch-channel-row > div { min-width: 0; }
+.replay-stage__header--sources .page-title { font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay-stage__header--sources > .replay-meta { flex-basis: 100%; }
+
+.broadcast-summary { flex-basis: 100%; color: var(--text-dim); font-size: 12px; }
+.broadcast-summary summary { cursor: pointer; color: var(--text); padding: 4px 0; }
+.broadcast-summary ol { padding-left: 24px; margin: 6px 0; }
+.broadcast-summary li { margin: 5px 0; }
+.broadcast-summary p { margin: 5px 0; }
+.broadcast-card-note { color: var(--text-dim); font-size: 11px; margin-top: 6px; }

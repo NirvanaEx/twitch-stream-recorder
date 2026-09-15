@@ -11,6 +11,7 @@ import {
 import { TimelinePreview, type PreviewFrames } from "./TimelinePreview";
 import { useHlsPlayback } from "../lib/use-hls-playback";
 import { trackPlaybackMetrics } from "../lib/playback-metrics";
+import { attachMediaRecovery } from "../lib/media-recovery";
 import { waveformHeights } from "../lib/waveform";
 import { SpoilerToggle } from "./SpoilerToggle";
 import {
@@ -30,15 +31,20 @@ import {
   VolumeMutedIcon,
 } from "./icons";
 
+import type { PlaybackStart } from "../lib/playback-sources";
+
 export type PlayerMode = "normal" | "theater" | "fullscreen";
 
 export type PlaylistSegment = {
   src: string;
+  startOffsetSec?: number;
   durationSec: number;
 };
 
 type VideoPlayerProps = {
   src: string;
+  playbackKey?: string;
+  initialPlayback?: PlaybackStart;
   hlsUrl?: string;
   previewFrames?: PreviewFrames | null;
   autoPlay?: boolean;
@@ -105,13 +111,6 @@ type CenterHint = "play" | "pause" | "back" | "forward";
 const MAX_VOLUME_BOOST = 3;
 // Where the 100% tick sits on the extended slider track.
 const VOLUME_TICK_PCT = 100 / MAX_VOLUME_BOOST;
-// Transient network errors (a dropped Telegram-backed range, a proxy timeout)
-// shouldn't dump the viewer onto a manual "retry" button. Silently reload and
-// resume from the same spot a few times first; only fall back to the manual
-// overlay once those are exhausted.
-const MAX_AUTO_RETRIES = 4;
-const AUTO_RETRY_DELAY_MS = 1500;
-
 /**
  * YouTube-style video player. Handles its own controls + global keyboard
  * shortcuts (space / k, j / l, arrows, m, f, t, c, 0-9, < / >, Home / End).
@@ -122,6 +121,8 @@ const AUTO_RETRY_DELAY_MS = 1500;
  */
 export function VideoPlayer({
   src,
+  playbackKey,
+  initialPlayback,
   hlsUrl,
   previewFrames,
   autoPlay = false,
@@ -154,10 +155,7 @@ export function VideoPlayer({
   const centerHintSequenceRef = useRef(0);
   const tapTimerRef = useRef<number | null>(null);
   const surfacePointerRef = useRef<{ id: number; x: number; y: number; at: number; moved: boolean } | null>(null);
-  const autoRetryRef = useRef<{ count: number; timer: number | null }>({
-    count: 0,
-    timer: null,
-  });
+  const recoveryRef = useRef<ReturnType<typeof attachMediaRecovery> | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -226,20 +224,22 @@ export function VideoPlayer({
     [playlist],
   );
   const playlistKey = segments?.map((item) => item.src).join("|") ?? null;
-  const [segmentIndex, setSegmentIndex] = useState(0);
+  const [segmentState, setSegmentState] = useState({ key: playbackKey, index: Math.max(0, (initialSegment ?? 1) - 1) });
+  const segmentIndex = segmentState.key === playbackKey ? segmentState.index : Math.max(0, (initialSegment ?? 1) - 1);
+  const setSegmentIndex = useCallback((index: number) => setSegmentState({ key: playbackKey, index }), [playbackKey]);
 
   const segmentOffsets = useMemo(() => {
     let acc = 0;
     return (segments ?? []).map((item) => {
-      const offset = acc;
-      acc += item.durationSec;
+      const offset = item.startOffsetSec ?? acc;
+      acc = offset + item.durationSec;
       return offset;
     });
   }, [segments]);
 
   const totalDuration = useMemo(
-    () => (segments ?? []).reduce((acc, item) => acc + item.durationSec, 0),
-    [segments],
+    () => Math.max(0, ...(segments ?? []).map((item, index) => segmentOffsets[index] + item.durationSec)),
+    [segments, segmentOffsets],
   );
 
   const effectiveSrc = segments
@@ -271,11 +271,41 @@ export function VideoPlayer({
   // Seek/play to apply after the next segment's <video> src swap.
   const pendingSeekRef = useRef<{ time: number; play: boolean } | null>(null);
 
+  // A source switch changes URLs and potentially the partition, while keeping
+  // the media element, fullscreen container, volume boost and chat intact.
+  const appliedStartRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!playbackKey || !initialPlayback || appliedStartRef.current === playbackKey) return;
+    pendingSeekRef.current = null;
+    const v = videoRef.current;
+    if (!v) return;
+    const expected = new URL(effectiveSrc, window.location.href).href;
+    const apply = () => {
+      if (v.currentSrc && v.currentSrc !== expected) return;
+      appliedStartRef.current = playbackKey;
+      const end = Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.05 : Infinity;
+      v.currentTime = Math.max(0, Math.min(initialPlayback.time, end));
+      v.playbackRate = initialPlayback.rate;
+      if (initialPlayback.volume !== undefined) v.volume = initialPlayback.volume;
+      if (initialPlayback.muted !== undefined) v.muted = initialPlayback.muted;
+      if (initialPlayback.play) void v.play().catch(() => undefined);
+      else v.pause();
+    };
+    v.addEventListener("loadedmetadata", apply, { once: true });
+    if (v.readyState >= 1 && v.currentSrc === expected) apply();
+    return () => v.removeEventListener("loadedmetadata", apply);
+  }, [playbackKey, initialPlayback, effectiveSrc]);
+
+  const previousPlaylistRef = useRef<{ key?: string; urls: string[] } | null>(null);
   useEffect(() => {
     if (!playlistKey) return;
-    const upper = Math.max(0, (virtualRef.current.segments?.length ?? 1) - 1);
-    setSegmentIndex(Math.min(Math.max((initialSegment ?? 1) - 1, 0), upper));
-    // The initial segment matters only when the playlist itself changes.
+    const previous = previousPlaylistRef.current;
+    const urls = segments!.map((item) => item.src);
+    const oldUrl = previous?.urls[segmentIndex];
+    const preserved = previous?.key === playbackKey && oldUrl ? urls.indexOf(oldUrl) : -1;
+    setSegmentIndex(preserved >= 0 ? preserved : Math.min(Math.max((initialSegment ?? 1) - 1, 0), urls.length - 1));
+    previousPlaylistRef.current = { key: playbackKey, urls };
+    // Appended continuation segments must not rewind an ongoing replay.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playlistKey]);
 
@@ -338,59 +368,25 @@ export function VideoPlayer({
     const onPlaying = () => {
       setWaiting(false);
       setMediaError(null);
-      // Playback recovered — forget earlier transient failures.
-      autoRetryRef.current.count = 0;
-      if (autoRetryRef.current.timer) {
-        window.clearTimeout(autoRetryRef.current.timer);
-        autoRetryRef.current.timer = null;
-      }
     };
     const onVolume = () => {
       setVolume(v.volume);
       setMuted(v.muted);
     };
     const onRate = () => setPlaybackRate(v.playbackRate);
-    const onError = () => {
-      if (handlesErrors) return;
-      const code = v.error?.code;
-      // NETWORK is a playing stream that broke; SRC_NOT_SUPPORTED is the same
-      // server hiccup at load time — a 502 during the deploy window, a 500
-      // while the Telegram connection reconnects, or a 503 from the stream
-      // slot gate. The file itself is fine in all of those, so both codes
-      // deserve silent retries instead of the manual overlay.
-      const isTransient =
-        code === MediaError.MEDIA_ERR_NETWORK ||
-        code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
-
-      // Auto-recover without bothering the user: reload and resume from the
-      // same spot, with a growing delay; reset happens on the next "playing".
-      if (isTransient && autoRetryRef.current.count < MAX_AUTO_RETRIES) {
-        autoRetryRef.current.count += 1;
-        const attempt = autoRetryRef.current.count;
-        const resumeAt = v.currentTime;
-        setMediaError(null);
-        setWaiting(true);
-        if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
-        autoRetryRef.current.timer = window.setTimeout(() => {
-          autoRetryRef.current.timer = null;
-          v.load();
-          const onLoaded = () => {
-            v.removeEventListener("loadedmetadata", onLoaded);
-            if (Number.isFinite(resumeAt) && resumeAt > 0) v.currentTime = resumeAt;
-            void v.play().catch(() => undefined);
-          };
-          v.addEventListener("loadedmetadata", onLoaded);
-        }, AUTO_RETRY_DELAY_MS * attempt);
-        return;
-      }
-
-      setWaiting(false);
-      setMediaError(describeMediaError(v.error, audioOnly));
-    };
+    const recovery = handlesErrors ? null : attachMediaRecovery(v, {
+      watchdog: !isLive,
+      onRecovering: () => { setMediaError(null); setWaiting(true); },
+      onFailure: (error) => {
+        setWaiting(false);
+        setMediaError(error ? describeMediaError(error, audioOnly)
+          : `${audioOnly ? "Аудио" : "Видео"} не получает данные. Повторите воспроизведение.`);
+      },
+    });
+    recoveryRef.current = recovery;
 
     setMediaError(null);
 
-    v.addEventListener("error", onError);
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("timeupdate", onTime);
@@ -411,7 +407,8 @@ export function VideoPlayer({
 
     return () => {
       v.removeEventListener("ended", onEnded);
-      v.removeEventListener("error", onError);
+      recovery?.dispose();
+      if (recoveryRef.current === recovery) recoveryRef.current = null;
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("timeupdate", onTime);
@@ -425,7 +422,7 @@ export function VideoPlayer({
       v.removeEventListener("volumechange", onVolume);
       v.removeEventListener("ratechange", onRate);
     };
-  }, [effectiveSrc, audioOnly, handlesErrors]);
+  }, [effectiveSrc, audioOnly, handlesErrors, isLive]);
 
   // Restore stored volume / muted / boost / compressor across visits.
   useEffect(() => {
@@ -577,18 +574,7 @@ export function VideoPlayer({
   const retryPlayback = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    const resumeAt = v.currentTime;
-    setMediaError(null);
-    setWaiting(true);
-    v.load();
-    const onLoaded = () => {
-      v.removeEventListener("loadedmetadata", onLoaded);
-      if (Number.isFinite(resumeAt) && resumeAt > 0) {
-        v.currentTime = resumeAt;
-      }
-      void v.play().catch(() => undefined);
-    };
-    v.addEventListener("loadedmetadata", onLoaded);
+    recoveryRef.current?.retry();
   }, []);
 
   const flashCenterHint = useCallback((kind: CenterHint) => {
@@ -604,10 +590,12 @@ export function VideoPlayer({
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused || v.ended) {
+    if (!(recoveryRef.current?.wantsPlay ?? !v.paused) || v.ended) {
+      recoveryRef.current?.playRequested();
       void v.play().catch(() => undefined);
       flashCenterHint("play");
     } else {
+      recoveryRef.current?.pauseRequested();
       v.pause();
       flashCenterHint("pause");
     }
@@ -775,7 +763,7 @@ export function VideoPlayer({
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
     if (centerIconTimerRef.current) window.clearTimeout(centerIconTimerRef.current);
     if (tapTimerRef.current) window.clearTimeout(tapTimerRef.current);
-    if (autoRetryRef.current.timer) window.clearTimeout(autoRetryRef.current.timer);
+
     // Free the audio rendering thread; a remount builds a fresh graph.
     void audioGraphRef.current?.ctx.close().catch(() => undefined);
     audioGraphRef.current = null;

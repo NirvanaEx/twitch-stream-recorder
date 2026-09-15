@@ -69,6 +69,9 @@ type ChatReplayProps = {
   videoElement: HTMLMediaElement | null;
   isLive: boolean;
   defaultOffsetSec?: number;
+  /** The Twitch host owns the VOD offset; keep both settings panels in sync. */
+  externalOffsetSec?: number;
+  onExternalOffsetChange?: (value: number) => void;
   /**
    * Start of the currently playing video on the whole-stream timeline, in
    * seconds. Used when a recording is split into Telegram parts: the video's
@@ -93,6 +96,8 @@ export function ChatReplay({
   videoElement,
   isLive,
   defaultOffsetSec = 0,
+  externalOffsetSec,
+  onExternalOffsetChange,
   baseOffsetSec = 0,
   isLastPart = true,
 }: ChatReplayProps) {
@@ -106,7 +111,13 @@ export function ChatReplay({
   const [loadError, setLoadError] = useState(false);
   // Remembered per recording — an offset tuned for one stream is wrong for
   // the next, so a single shared value would keep breaking alignment.
-  const [offset, setOffset] = useChatOffset(archiveId ?? chatUrl ?? null, defaultOffsetSec);
+  const [savedOffset, setSavedOffset] = useChatOffset(archiveId ?? chatUrl ?? null, defaultOffsetSec);
+  const offset = externalOffsetSec ?? savedOffset;
+  const setOffset = useCallback((next: number | ((current: number) => number)) => {
+    const value = typeof next === "function" ? next(offset) : next;
+    if (externalOffsetSec !== undefined && onExternalOffsetChange) onExternalOffsetChange(value);
+    else setSavedOffset(value);
+  }, [offset, externalOffsetSec, onExternalOffsetChange, setSavedOffset]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [activeUser, setActiveUser] = useState<string | null>(null);

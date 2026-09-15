@@ -77,7 +77,7 @@ export function ChatUserCard({
 }: Props) {
   // Outside the chat column so dragging is not clipped. Native fullscreen
   // has its own top layer: body portals are invisible behind that layer.
-  const [portalTarget, setPortalTarget] = useState<Element | null>(null);
+  const [portalTarget, setPortalTarget] = useState<Element | DocumentFragment | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [search, setSearch] = useState("");
   const [history, setHistory] = useState<HistoryResponse | null>(null);
@@ -104,11 +104,16 @@ export function ChatUserCard({
   const dragOffset = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    const updateTarget = () => setPortalTarget(document.fullscreenElement ?? document.body);
+    const updateTarget = () => {
+      const root = anchorEl?.getRootNode();
+      // Embedded chat owns its styles inside a shadow root. A body portal on
+      // Twitch would escape those styles and inherit Twitch's unrelated CSS.
+      setPortalTarget(root?.nodeType === 11 && "host" in root ? root as ShadowRoot : document.fullscreenElement ?? document.body);
+    };
     updateTarget();
     document.addEventListener("fullscreenchange", updateTarget);
     return () => document.removeEventListener("fullscreenchange", updateTarget);
-  }, []);
+  }, [anchorEl]);
 
   // Reopen where it was left, unless that spot no longer fits (window resized
   // or a smaller screen) — then fall back to sitting over the chat column.

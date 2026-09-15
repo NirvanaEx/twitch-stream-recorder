@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { StorageBadges } from "./RecordingSources";
+import type { RecordingStorage, BroadcastInfo } from "../lib/playback-sources";
+
 import { useState } from "react";
 import { buildApiUrl } from "../lib/api";
 import { formatFileSize, formatPeriod, formatSeconds, withAuthToken } from "../lib/media";
@@ -18,6 +21,8 @@ export type TelegramPart = {
 };
 
 export type ArchiveItem = {
+  broadcast?: BroadcastInfo | null;
+  storage?: RecordingStorage;
   id: string;
   channelLogin: string;
   channelDisplayName: string;
@@ -59,7 +64,7 @@ export function ArchiveCard({
   onDelete: (id: string) => void;
   onDetails: (archive: ArchiveItem) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { spoilerFree } = useSpoiler();
   const isAudio = archive.audioOnly;
   const duration = archive.durationSec
@@ -221,8 +226,9 @@ export function ArchiveCard({
           {!isAudio && archive.audioAvailable ? <span title={t.archives.hasAudioTrack}>🎧</span> : null}
         </span>
 
+        <StorageBadges storage={archive.storage} />
         <div className="archive-card-foot">
-          {renderTelegram()}
+          {archive.broadcast ? <Link href={`/admin/archives/${archive.id}#continuations`}>{archive.broadcast.memberCount} · {locale === "ru" ? "продолжения" : "recordings"}</Link> : renderTelegram()}
 
           <div className="action-row">
             {archive.videoReady && archive.videoUrl ? (
@@ -230,14 +236,14 @@ export function ArchiveCard({
                 <IconLink href={`/admin/archives/${archive.id}`} title={t.common.watch}>
                   <PlayIcon />
                 </IconLink>
-                <a
+                {!archive.broadcast ? <a
                   className="icon-btn"
                   href={withAuthToken(buildApiUrl(`archives/${archive.id}/video?download=1`))}
                   title={t.localReplay.downloadVideo}
                   download
                 >
                   <DownloadIcon />
-                </a>
+                </a> : null}
               </>
             ) : (
               <span style={{ color: "var(--text-faint)", fontSize: 11 }}>
@@ -247,7 +253,7 @@ export function ArchiveCard({
               </span>
             )}
 
-            {archive.status === "completed" &&
+            {!archive.broadcast && archive.status === "completed" &&
             archive.videoReady &&
             (archive.telegramStatus === "none" || archive.telegramStatus === "error") ? (
               <IconButton
@@ -260,7 +266,7 @@ export function ArchiveCard({
               </IconButton>
             ) : null}
 
-            <IconButton
+            {!archive.broadcast ? <IconButton
               title={t.common.delete}
               className="danger"
               loading={busy}
@@ -268,7 +274,7 @@ export function ArchiveCard({
               onClick={() => onDelete(archive.id)}
             >
               <TrashIcon />
-            </IconButton>
+            </IconButton> : null}
           </div>
         </div>
       </div>

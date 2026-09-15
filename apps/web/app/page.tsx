@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { StorageBadges } from "./components/RecordingSources";
+import type { RecordingStorage, BroadcastInfo } from "./lib/playback-sources";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pagination } from "./components/Pagination";
 import { apiGet } from "./lib/api";
@@ -13,6 +16,8 @@ import { useSpoiler } from "./lib/spoiler";
 import { useLanguage } from "./providers";
 
 type PublicStreamCard = {
+  broadcast?: BroadcastInfo | null;
+  storage?: RecordingStorage;
   id: string;
   title: string | null;
   channel: {
@@ -77,7 +82,7 @@ function StreamCardCover({ item }: { item: PublicStreamCard }) {
 }
 
 export default function PublicHomePage() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { isAuthenticated, user } = useAuth();
   const { spoilerFree } = useSpoiler();
   const [search, setSearch] = useState("");
@@ -221,6 +226,8 @@ export default function PublicHomePage() {
                     {item.title || item.channel.displayName}
                   </h3>
                   <div className="stream-card-meta">{formatDate(item.startedAt)}</div>
+                  <StorageBadges storage={item.storage} />
+                  {item.broadcast ? <div className="broadcast-card-note">{item.broadcast.memberCount} · {locale === "ru" ? "единая запись эфира" : "Combined broadcast"}</div> : null}
                 </div>
               </Link>
             ))}
