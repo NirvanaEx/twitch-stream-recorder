@@ -1,4 +1,5 @@
 "use client";
+import { partMediaTime, partMediaDuration, partMediaTarget } from "../lib/media-clock";
 
 import {
   memo,
@@ -79,6 +80,7 @@ type ChatReplayProps = {
    * stream.
    */
   baseOffsetSec?: number;
+  mediaPartStartSec?: number;
   /** Only the end of the final part may enter post-stream chat playback. */
   isLastPart?: boolean;
 };
@@ -99,6 +101,7 @@ export function ChatReplay({
   externalOffsetSec,
   onExternalOffsetChange,
   baseOffsetSec = 0,
+  mediaPartStartSec = 0,
   isLastPart = true,
 }: ChatReplayProps) {
   const { locale } = useLanguage();
@@ -227,19 +230,20 @@ export function ChatReplay({
     if (!videoElement) return undefined;
 
     const resetTail = () => { setTailTime(null); setTailPlaying(false); setVideoEnded(false); };
-    const durationChanged = () => setVideoDuration(Number.isFinite(videoElement.duration) ? videoElement.duration : 0);
+    const durationChanged = () => setVideoDuration(partMediaDuration(videoElement, mediaPartStartSec) ?? 0);
     const ended = () => {
-      durationChanged(); setCurrentTime(videoElement.currentTime); setVideoEnded(true);
+      durationChanged(); setCurrentTime(partMediaTime(videoElement, mediaPartStartSec)); setVideoEnded(true);
     };
     resetTail();
     durationChanged();
     if (videoElement.ended) ended();
 
     const handler = () => {
-      const next = videoElement.ended ? videoElement.currentTime : Math.floor(videoElement.currentTime);
+      const next = videoElement.ended ? partMediaTime(videoElement, mediaPartStartSec) : Math.floor(partMediaTime(videoElement, mediaPartStartSec));
       setCurrentTime((previous) => (previous === next ? previous : next));
     };
 
+    handler();
     videoElement.addEventListener("timeupdate", handler);
     videoElement.addEventListener("seeked", handler);
     videoElement.addEventListener("seeking", resetTail);
@@ -258,7 +262,7 @@ export function ChatReplay({
       videoElement.removeEventListener("ended", ended);
       videoElement.removeEventListener("durationchange", durationChanged);
     };
-  }, [videoElement, baseOffsetSec, endpoint]);
+  }, [videoElement, baseOffsetSec, mediaPartStartSec, endpoint]);
 
   useEffect(() => {
     if (!tailPlaying || !hasTail) return;
@@ -414,21 +418,21 @@ export function ChatReplay({
   const canSeek = useCallback(
     (relativeTimeSec: number) => {
       if (!videoElement || isLive) return false;
-      const target = toRenderTime(relativeTimeSec);
+      const target = partMediaTarget(videoElement, toRenderTime(relativeTimeSec), mediaPartStartSec);
       // A split archive only holds one part at a time; anything outside it
       // would silently jump to the wrong moment.
       const duration = Number.isFinite(videoElement.duration) ? videoElement.duration : null;
       return target >= 0 && (duration === null || target <= duration);
     },
-    [videoElement, isLive, toRenderTime],
+    [videoElement, isLive, toRenderTime, mediaPartStartSec],
   );
 
   const seekTo = useCallback(
     (relativeTimeSec: number) => {
       if (!videoElement || !canSeek(relativeTimeSec)) return;
-      videoElement.currentTime = Math.max(0, toRenderTime(relativeTimeSec));
+      videoElement.currentTime = Math.max(0, partMediaTarget(videoElement, toRenderTime(relativeTimeSec), mediaPartStartSec));
     },
-    [videoElement, canSeek, toRenderTime],
+    [videoElement, canSeek, toRenderTime, mediaPartStartSec],
   );
 
   // The user card needs the unfiltered history: hiding bots or searching must

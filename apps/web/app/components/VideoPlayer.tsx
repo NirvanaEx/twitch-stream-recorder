@@ -9,6 +9,7 @@ import {
   spoilerTimeToPct,
 } from "../lib/spoiler-timeline";
 import { TimelinePreview, type PreviewFrames } from "./TimelinePreview";
+import { useSeamlessPlayback } from "../lib/use-seamless-playback";
 import { useHlsPlayback } from "../lib/use-hls-playback";
 import { trackPlaybackMetrics } from "../lib/playback-metrics";
 import { attachMediaRecovery } from "../lib/media-recovery";
@@ -242,12 +243,14 @@ export function VideoPlayer({
     [segments, segmentOffsets],
   );
 
+  const continuous = useSeamlessPlayback(videoRef, !audioOnly ? segments : null, playbackKey, initialSegment ?? 1, initialPlayback);
+
   const effectiveSrc = segments
-    ? segments[Math.min(segmentIndex, segments.length - 1)].src
+    ? segments[continuous ? 0 : Math.min(segmentIndex, segments.length - 1)].src
     : src;
 
   const { mediaSrc, handlesErrors } = useHlsPlayback(
-    videoRef, effectiveSrc, !audioOnly && (!segments || segments.length === 1) ? hlsUrl : undefined,
+    videoRef, effectiveSrc, !audioOnly && (!segments || segments.length === 1) ? hlsUrl : undefined, continuous,
   );
   useEffect(() => {
     const video = videoRef.current;
@@ -257,12 +260,14 @@ export function VideoPlayer({
   // Media event handlers and seek callbacks must not capture stale state.
   const virtualRef = useRef({
     segments,
+    continuous,
     offsets: segmentOffsets,
     total: totalDuration,
     index: segmentIndex,
   });
   virtualRef.current = {
     segments,
+    continuous,
     offsets: segmentOffsets,
     total: totalDuration,
     index: segmentIndex,
@@ -275,7 +280,18 @@ export function VideoPlayer({
   // the media element, fullscreen container, volume boost and chat intact.
   const appliedStartRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (!playbackKey || !initialPlayback || appliedStartRef.current === playbackKey) return;
+    const media = videoRef.current;
+    if (!continuous && media?.dataset.seamlessFallback && segments) {
+      const fallback = JSON.parse(media.dataset.seamlessFallback) as { time: number; play: boolean };
+      delete media.dataset.seamlessFallback;
+      const found = segments.findIndex((part, i) => fallback.time < segmentOffsets[i] + part.durationSec);
+      const index = found < 0 ? segments.length - 1 : found;
+      pendingSeekRef.current = { time: Math.max(0, fallback.time - segmentOffsets[index]), play: fallback.play };
+      setSegmentIndex(index);
+      appliedStartRef.current = playbackKey;
+      return;
+    }
+    if (continuous || !playbackKey || !initialPlayback || appliedStartRef.current === playbackKey) return;
     pendingSeekRef.current = null;
     const v = videoRef.current;
     if (!v) return;
@@ -294,11 +310,11 @@ export function VideoPlayer({
     v.addEventListener("loadedmetadata", apply, { once: true });
     if (v.readyState >= 1 && v.currentSrc === expected) apply();
     return () => v.removeEventListener("loadedmetadata", apply);
-  }, [playbackKey, initialPlayback, effectiveSrc]);
+  }, [playbackKey, initialPlayback, effectiveSrc, continuous]);
 
   const previousPlaylistRef = useRef<{ key?: string; urls: string[] } | null>(null);
   useEffect(() => {
-    if (!playlistKey) return;
+    if (!playlistKey || continuous) return;
     const previous = previousPlaylistRef.current;
     const urls = segments!.map((item) => item.src);
     const oldUrl = previous?.urls[segmentIndex];
@@ -318,7 +334,7 @@ export function VideoPlayer({
     if (!v) return undefined;
 
     const pending = pendingSeekRef.current;
-    if (!pending) return undefined;
+    if (!pending || continuous) return undefined;
 
     const apply = () => {
       pendingSeekRef.current = null;
@@ -333,7 +349,7 @@ export function VideoPlayer({
 
     v.addEventListener("loadedmetadata", apply, { once: true });
     return () => v.removeEventListener("loadedmetadata", apply);
-  }, [effectiveSrc, segmentIndex]);
+  }, [effectiveSrc, segmentIndex, continuous]);
 
   // Wire video → state.
   useEffect(() => {
@@ -342,12 +358,20 @@ export function VideoPlayer({
 
     const globalBase = () => {
       const vr = virtualRef.current;
-      return vr.segments ? vr.offsets[vr.index] ?? 0 : 0;
+      return vr.segments && !vr.continuous ? vr.offsets[vr.index] ?? 0 : 0;
     };
 
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
-    const onTime = () => setCurrentTime(globalBase() + v.currentTime);
+    const onTime = () => {
+      setCurrentTime(globalBase() + v.currentTime);
+      const vr = virtualRef.current;
+      if (vr.continuous && vr.segments) {
+        let index = vr.offsets.length - 1;
+        for (let i = 0; i < vr.offsets.length; i++) if (v.currentTime < vr.offsets[i] + vr.segments[i].durationSec - 0.001) { index = i; break; }
+        if (index !== vr.index) setSegmentIndex(index);
+      }
+    };
     const onDuration = () => {
       const vr = virtualRef.current;
       setDuration(vr.segments ? vr.total : Number.isFinite(v.duration) ? v.duration : 0);
@@ -360,7 +384,7 @@ export function VideoPlayer({
     const onEnded = () => {
       // Virtual playlist: roll into the next segment without user input.
       const vr = virtualRef.current;
-      if (!vr.segments || vr.index >= vr.segments.length - 1) return;
+      if (vr.continuous || !vr.segments || vr.index >= vr.segments.length - 1) return;
       pendingSeekRef.current = { time: 0, play: true };
       setSegmentIndex(vr.index + 1);
     };
@@ -609,7 +633,7 @@ export function VideoPlayer({
 
     const vr = virtualRef.current;
 
-    if (!vr.segments) {
+    if (!vr.segments || vr.continuous) {
       const cap = Number.isFinite(v.duration) ? v.duration : Infinity;
       v.currentTime = Math.max(0, Math.min(cap, time));
       return;
@@ -640,7 +664,7 @@ export function VideoPlayer({
       const v = videoRef.current;
       if (!v) return;
       const vr = virtualRef.current;
-      const globalNow = vr.segments ? (vr.offsets[vr.index] ?? 0) + v.currentTime : v.currentTime;
+      const globalNow = vr.segments && !vr.continuous ? (vr.offsets[vr.index] ?? 0) + v.currentTime : v.currentTime;
       seekTo(globalNow + delta);
     },
     [seekTo],
