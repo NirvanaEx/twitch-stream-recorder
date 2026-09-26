@@ -29,6 +29,42 @@ export function archiveRoot(): string | null {
 }
 
 /**
+ * Resolve an archived audio file through the optional read-only audio mount.
+ *
+ * Large video jobs can continuously evict small audio ranges from the main
+ * rclone VFS cache. A second mount with its own small cache keeps userscript
+ * playback responsive without retaining recordings in DATA_DIR. The stored
+ * database path remains canonical and we fall back to it whenever the audio
+ * mount is disabled, unavailable or has not seen the file yet.
+ */
+export function resolveAudioReadPath(storedPath: string): string {
+  const absolute = resolve(storedPath);
+  const primaryRoot = archiveRoot();
+  const configuredReadRoot = process.env.ARCHIVE_AUDIO_READ_DIR?.trim();
+
+  if (!primaryRoot || !configuredReadRoot) {
+    return absolute;
+  }
+
+  const rel = relative(primaryRoot, absolute);
+
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    return absolute;
+  }
+
+  const candidate = resolve(configuredReadRoot, rel);
+
+  try {
+    return existsSync(candidate) ? candidate : absolute;
+  } catch {
+    // A dropped FUSE mount throws ENOTCONN. Playback must keep using the
+    // canonical archive path rather than turn a temporary mount issue into a
+    // 404 or a Telegram fallback.
+    return absolute;
+  }
+}
+
+/**
  * Is the archive tier usable right now? A network mount can vanish between two
  * ticks, so this is deliberately a live check and never cached: every caller
  * asks again, and a "no" simply means the recording stays on the server disk

@@ -1351,13 +1351,13 @@ export function buildTwitchAudioPayload(origin: string): string {
   }
 
   // ---- Прогрессивная загрузка по частям (Range) --------------------------
-  // Файл качается кусками по 8 МБ и НЕ подряд: сначала голова (там благодаря
-  // faststart лежит mp4-индекс), затем куски вокруг места, которое сейчас
-  // смотрят, потом всё остальное. В blob дыры заполняются нулями — индекс
-  // настоящий, поэтому перемотка в любую уже скачанную область работает
-  // сразу, не дожидаясь конца загрузки. Куда качать в первую очередь,
-  // загрузчику сообщает syncNow (поле targetByte).
-  var PROGRESSIVE_CHUNK_BYTES = 8 * 1024 * 1024;
+  // Файл качается кусками по 4 МБ и только по требованию: сначала голова (там
+  // благодаря faststart лежит mp4-индекс), затем окно вокруг текущего места.
+  // Раньше после старта загрузчик последовательно выкачивал всю дорожку — для
+  // многочасовой записи это сотни мегабайт, которые конкурировали с Telegram
+  // и не ускоряли воспроизведение. Теперь следующий кусок запрашивает syncNow
+  // только при старте или перемотке в ещё не загруженную область.
+  var PROGRESSIVE_CHUNK_BYTES = 4 * 1024 * 1024;
   // Сколько байт до/после текущей позиции должно быть скачано, чтобы играть.
   var PLAYBACK_BACK_MARGIN_BYTES = 512 * 1024;
   var PLAYBACK_LOOKAHEAD_BYTES = 2 * 1024 * 1024;
@@ -1413,6 +1413,7 @@ export function buildTwitchAudioPayload(origin: string): string {
       targetByte: 0,
       retries: 0,
       lastErrorSwapAt: 0,
+      inFlight: false,
     };
     progressiveState = state;
     setStatus('Загружаю аудио...');
@@ -1423,8 +1424,8 @@ export function buildTwitchAudioPayload(origin: string): string {
     return Math.floor(byte / PROGRESSIVE_CHUNK_BYTES);
   }
 
-  // Порядок закачки: голова файла (mp4-индекс), затем от текущей позиции
-  // зрителя до конца, затем оставшиеся дыры с начала.
+  // Порядок закачки: голова файла (mp4-индекс), затем только небольшое окно
+  // вокруг текущей позиции зрителя. Остальные дыры ждут реальной перемотки.
   function nextChunkIndex(state) {
     if (!(0 in state.chunks)) return 0;
     if (state.totalChunks > 1 && !(1 in state.chunks)) return 1;
@@ -1432,13 +1433,20 @@ export function buildTwitchAudioPayload(origin: string): string {
       state.totalChunks - 1,
       Math.max(0, chunkIndexAt(state.targetByte)),
     );
-    for (var i = priority; i < state.totalChunks; i++) {
+    var from = Math.max(
+      0,
+      chunkIndexAt(Math.max(0, state.targetByte - PLAYBACK_BACK_MARGIN_BYTES)),
+    );
+    var to = Math.min(
+      state.totalChunks - 1,
+      chunkIndexAt(state.targetByte + PLAYBACK_LOOKAHEAD_BYTES),
+    );
+    // Current chunk first, then the small margins on either side.
+    if (!(priority in state.chunks)) return priority;
+    for (var i = from; i <= to; i++) {
       if (!(i in state.chunks)) return i;
     }
-    for (var j = 0; j < priority; j++) {
-      if (!(j in state.chunks)) return j;
-    }
-    return -1;
+    return state.haveCount >= state.totalChunks ? -1 : -2;
   }
 
   // Есть ли данные вокруг текущей позиции: в скачанном (inBlob=false) или в
@@ -1532,22 +1540,26 @@ export function buildTwitchAudioPayload(origin: string): string {
 
   function fetchNextChunk(state) {
     if (progressiveState !== state || currentTrackId !== state.track.id) return;
+    if (state.inFlight) return;
     // Пока total неизвестен (до первого ответа), качаем нулевой кусок.
     var index = state.total ? nextChunkIndex(state) : 0;
     if (index === -1) {
       finishProgressive(state);
       return;
     }
+    if (index < 0) return;
     var start = index * PROGRESSIVE_CHUNK_BYTES;
     var end = state.total
       ? Math.min(state.total, start + PROGRESSIVE_CHUNK_BYTES) - 1
       : start + PROGRESSIVE_CHUNK_BYTES - 1;
+    state.inFlight = true;
     GM_xmlhttpRequest({
       method: 'GET',
       url: SERVER + state.track.audioUrl,
       responseType: 'arraybuffer',
       headers: { Range: 'bytes=' + start + '-' + end },
       onload: function (res) {
+        state.inFlight = false;
         if (progressiveState !== state || currentTrackId !== state.track.id) return;
         if ((res.status !== 206 && res.status !== 200) || !res.response) {
           retryChunk(state);
@@ -1594,15 +1606,19 @@ export function buildTwitchAudioPayload(origin: string): string {
 
         maybeSwapProgressive(state);
 
-        var pct = Math.min(99, Math.round((state.haveCount / state.totalChunks) * 100));
-        setStatus(
-          'Загружаю аудио ' + pct + '%' +
-          (state.blobHave ? ' — можно слушать и перематывать' : '...'),
-        );
-
-        fetchNextChunk(state);
+        // Догружаем только то, без чего текущая позиция ещё не играет. После
+        // готовности окна останавливаем сеть; новая перемотка разбудит нас из
+        // syncNow. Полный файл попадёт в IndexedDB только если пользователь со
+        // временем действительно посетил все его куски.
+        if (!state.blobHave || !progressiveWindowReady(state, false)) {
+          setStatus('Загружаю нужный участок аудио...');
+          fetchNextChunk(state);
+        } else {
+          setStatus('Аудио готово — следующие участки загрузятся при перемотке');
+        }
       },
       onerror: function () {
+        state.inFlight = false;
         if (progressiveState !== state || currentTrackId !== state.track.id) return;
         retryChunk(state);
       },
@@ -1786,6 +1802,11 @@ export function buildTwitchAudioPayload(origin: string): string {
           0,
           Math.min(st.total - 1, Math.floor((target / trackDurationSec) * st.total)),
         );
+      }
+      if (!progressiveWindowReady(st, false)) {
+        // fetchNextChunk is idempotent while a request is in flight. Calling
+        // it here makes a seek preempt the old sequential order immediately.
+        fetchNextChunk(st);
       }
       if (!st.blobHave) {
         if (mode === 'record' && v.muted) v.muted = false;

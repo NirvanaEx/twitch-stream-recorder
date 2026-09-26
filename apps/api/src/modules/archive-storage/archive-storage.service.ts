@@ -425,7 +425,11 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
         // repointing them is the whole of "the archive is now primary".
         await this.prisma.streamSession.update({
           where: { id: session.id },
-          data: { playbackPath: archived, recordingPath: archived },
+          data: {
+            playbackPath: archived,
+            recordingPath: archived,
+            ...(session.audioOnly ? { audioPath: archived } : {}),
+          },
         });
       }
 
