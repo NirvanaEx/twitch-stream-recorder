@@ -1,0 +1,8 @@
+{
+  "videoCalendarDays": 2,
+  "timeZone": "Asia/Tashkent",
+  "audioDays": 30,
+  "deleteUnbackedVideo": true,
+  "deleteUnbackedAudio": true,
+  "intervalSeconds": 60
+}
