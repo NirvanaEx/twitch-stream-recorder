@@ -28,15 +28,18 @@ const chat: ChatResponse = {
     points: [{ mediaSec: 0, wallClockMs: 80000 }, { mediaSec: 60, wallClockMs: 160000 }] },
 };
 
-async function mount(isLastPart = true, duration = 60, data: ChatResponse = chat) {
+async function mount(isLastPart = true, duration = 60, data: ChatResponse = chat,
+  clock?: { start: number; base: number; time: number; continuous: boolean }) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const video = document.createElement("video");
   Object.defineProperty(video, "duration", { value: duration, configurable: true });
-  video.currentTime = 30;
+  video.currentTime = clock?.time ?? 30;
+  if (clock?.continuous) video.dataset.continuousTimeline = "1";
   const root = createRoot(host);
   await act(async () => root.render(<AppProviders><ChatReplay staticData={data}
-    videoElement={video} isLive={false} isLastPart={isLastPart} /></AppProviders>));
+    videoElement={video} isLive={false} isLastPart={isLastPart}
+    mediaPartStartSec={clock?.start ?? 0} baseOffsetSec={clock?.base ?? 0} /></AppProviders>));
   const event = async (name: string) => act(async () => { video.dispatchEvent(new dom.window.Event(name)); });
   const click = async (text: string) => {
     const button = [...host.querySelectorAll("button")].find((item) => item.textContent === text);
@@ -56,6 +59,30 @@ test("actual replay uses measured source time and reveals gap messages at the ne
     assert.match(ui.host.textContent!, /During the missing video/);
     assert.doesNotMatch(ui.host.textContent!, /After the final frame/);
   } finally { await ui.close(); }
+});
+
+test("continuous archive timestamps stay on the full timeline after a part change", async () => {
+  const data: ChatResponse = { emotes: null, messages: [
+    {id:'earlier',authorLogin:'alice',textRaw:'Previous part',relativeTimeSec:3550},
+    {id:'now',authorLogin:'bob',textRaw:'Current part',relativeTimeSec:3608},
+    {id:'future',authorLogin:'carol',textRaw:'Not yet',relativeTimeSec:3660},
+  ]};
+  const ui = await mount(false,10077,data,{start:3602,base:3602,time:3650,continuous:true});
+  try {
+    assert.deepEqual([...ui.host.querySelectorAll('.chat-time')].map(e=>e.textContent),['59:10','1:00:08']);
+    assert.doesNotMatch(ui.host.textContent!,/Not yet/);
+    await act(async()=>{(ui.host.querySelector('.chat-author') as HTMLButtonElement).click();});
+    assert.match(document.querySelector('.chat-user-card')!.textContent!,/59:10/);
+    await act(async()=>{(document.querySelector('.chat-user-card__seek') as HTMLButtonElement).click();});
+    assert.equal(ui.video.currentTime,3550,'timestamp navigation must still seek on the full video timeline');
+  } finally { await ui.close(); }
+});
+
+test("single-file replay keeps part-local timestamps", async () => {
+  const data: ChatResponse = {emotes:null,messages:[{id:'m',authorLogin:'alice',textRaw:'Local part',relativeTimeSec:3608}]};
+  const ui = await mount(false,300,data,{start:3602,base:3602,time:48,continuous:false});
+  try { assert.equal(ui.host.querySelector('.chat-time')?.textContent,'0:06'); }
+  finally { await ui.close(); }
 });
 
 test("an imported GIF renders in replay and in the author's history card", async () => {

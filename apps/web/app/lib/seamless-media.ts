@@ -1,4 +1,6 @@
-import { createFile, type MP4BoxBuffer, type Movie } from "mp4box";
+import { createFile, type Movie } from "mp4box";
+import { bufferedBoundaryTarget } from "./media-gap";
+import { createMediaRangeReader, fetchMediaRange, mediaBufferAhead } from "./media-range";
 
 export type MediaPart = { src: string; durationSec: number; startOffsetSec?: number };
 export function mediaParts(parts: MediaPart[]) {
@@ -10,8 +12,6 @@ export function partAt(parts: ReturnType<typeof mediaParts>, time: number) {
   return index < 0 ? Math.max(0, parts.length - 1) : index;
 }
 
-const RANGE_BYTES = 1024 * 1024;
-const AHEAD = 45;
 const BEHIND = 20;
 const cancelled = () => new DOMException("Cancelled", "AbortError");
 function sleep(ms: number, signal: AbortSignal) {
@@ -60,28 +60,20 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
     for (let i = 0; i < video.buffered.length; i++) if (video.currentTime >= video.buffered.start(i) - 0.15 && video.currentTime <= video.buffered.end(i)) return video.buffered.end(i) - video.currentTime;
     return 0;
   };
-  async function readRange(src: string, offset: number, signal: AbortSignal) {
-    const res = await fetch(src, { headers: { Range: `bytes=${offset}-${offset + RANGE_BYTES - 1}` }, signal });
-    if (res.status !== 206) { await res.body?.cancel(); throw new Error(`Range playback returned ${res.status}`); }
-    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get("Content-Range") ?? "");
-    if (!match || Number(match[1]) !== offset) { await res.body?.cancel(); throw new Error("Invalid media range"); }
-    const data = await res.arrayBuffer() as MP4BoxBuffer;
-    data.fileStart = offset;
-    return { data, total: Number(match[3]) };
-  }
   async function loadPart(index: number, localTime: number, signal: AbortSignal) {
     const part = parts[index];
     const parser = createFile();
     let info: Movie | undefined;
     let parseError: unknown;
     let offset = 0, total = Infinity;
+    let reader: ReturnType<typeof createMediaRangeReader> | undefined;
     const pending: { id: number; bytes: ArrayBuffer; sample: number }[] = [];
     parser.onReady = value => { info = value; };
     parser.onError = error => { parseError = new Error(String(error)); };
     parser.onSegment = (id, _user, bytes, sample) => { pending.push({ id, bytes, sample }); };
     try {
       while (!info) {
-        const range = await readRange(part.src, offset, signal);
+        const range = await fetchMediaRange(part.src, offset, 1024 * 1024, signal);
         total = range.total;
         offset = parser.appendBuffer(range.data);
         if (parseError) throw parseError;
@@ -113,6 +105,7 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
         track.state.lastSegmentSampleNumber = track.trak.nextSample;
       }
       parser.start();
+      reader = createMediaRangeReader(part.src, total, signal);
       let parsedUntil = part.start;
       async function drain() {
         while (pending.length) {
@@ -127,12 +120,12 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
       await drain();
       while (offset < total) {
         if (signal.aborted) throw cancelled();
-        while (ahead() > AHEAD || parsedUntil > video.currentTime + AHEAD + 5) await sleep(250, signal);
+        while (ahead() > mediaBufferAhead(video.playbackRate) || parsedUntil > video.currentTime + mediaBufferAhead(video.playbackRate) + 5) await sleep(250, signal);
         if (video.currentTime > BEHIND + 10 && video.currentTime - lastTrim > 10) {
           lastTrim = video.currentTime;
           await operation(() => buffer!.remove(0, video.currentTime - BEHIND));
         }
-        const range = await readRange(part.src, offset, signal);
+        const range = await reader.read(offset);
         total = range.total;
         const next = parser.appendBuffer(range.data);
         if (parseError) throw parseError;
@@ -140,7 +133,7 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
         await drain();
       }
       parser.flush(); await drain();
-    } finally { parser.stop(); }
+    } finally { reader?.dispose(); parser.stop(); }
   }
   function start(time: number, clear = false) {
     controller?.abort();
@@ -152,7 +145,7 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
       let index = partAt(parts, time);
       for (; index < parts.length; index++) {
         if (current.signal.aborted) throw cancelled();
-        while (initialized && parts[index].start > video.currentTime + AHEAD) await sleep(250, current.signal);
+        while (initialized && parts[index].start > video.currentTime + mediaBufferAhead(video.playbackRate)) await sleep(250, current.signal);
         await loadPart(index, Math.max(0, time - parts[index].start), current.signal);
       }
       if (!disposed && !current.signal.aborted && source.readyState === "open") source.endOfStream();
@@ -171,18 +164,27 @@ export function attachSeamlessMedia(video: HTMLMediaElement, input: MediaPart[],
   // A broadcaster reconnect may leave an explicit hole between recordings.
   // Skip only a known missing interval, never an ordinary buffering wait.
   const skipGap = () => {
+    if (disposed || video.paused || video.seeking || video.readyState >= 3) return;
     for (let i = 1; i < parts.length; i++) {
       if (parts[i].start - parts[i - 1].end > 0.05 && video.currentTime >= parts[i - 1].end - 0.05 && video.currentTime < parts[i].start) {
-        video.currentTime = parts[i].start; break;
+        video.currentTime = parts[i].start; return;
       }
     }
+    const ranges = Array.from({ length: video.buffered.length }, (_, i) =>
+      [video.buffered.start(i), video.buffered.end(i)] as const);
+    const target = bufferedBoundaryTarget(parts, ranges, video.currentTime);
+    if (target !== null) video.currentTime = target;
   };
   source.addEventListener("sourceopen", open, { once: true });
   video.addEventListener("seeking", seeking);
   video.addEventListener("waiting", skipGap);
+  // 'waiting' can fire before the next part finishes downloading. Re-check
+  // after it arrives without reloading the media element or losing position.
+  const gapTimer = window.setInterval(skipGap, 250);
   return {
     dispose() {
       disposed = true; controller?.abort();
+      window.clearInterval(gapTimer);
       source.removeEventListener("sourceopen", open); video.removeEventListener("seeking", seeking);
       video.removeEventListener("waiting", skipGap);
       delete video.dataset.continuousTimeline;

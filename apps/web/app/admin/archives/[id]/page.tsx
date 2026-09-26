@@ -19,6 +19,7 @@ import {
   type TelegramStreamStats,
 } from "../../../components/TelegramSpeedChip";
 import { VideoPlayer, type PlayerMode } from "../../../components/VideoPlayer";
+import type { PreviewFrames } from "../../../components/TimelinePreview";
 import {
   ChatDownloadIcon,
   CloudIcon,
@@ -146,6 +147,20 @@ export default function ArchiveReplayPage() {
       document.body.style.overflow = previous;
     };
   }, [mode]);
+
+  const previewKey = `${params.id}:${single}`;
+  const [preview, setPreview] = useState<{ key: string; frames?: PreviewFrames }>({ key: "" });
+  useEffect(() => {
+    let cancelled = false;
+    // The public metadata already advertises the prepared timeline images.
+    // Keep preview loading independent so an unavailable image cannot block playback.
+    void apiGet<{ item: { previewFrames?: PreviewFrames } }>(
+      `public/streams/${params.id}${single ? "?single=1" : ""}`,
+    ).then(({ item }) => {
+      if (!cancelled) setPreview({ key: previewKey, frames: item.previewFrames });
+    }).catch(() => { if (!cancelled) setPreview({ key: previewKey }); });
+    return () => { cancelled = true; };
+  }, [params.id, single, previewKey]);
 
   const load = useCallback(async () => {
     try {
@@ -366,6 +381,9 @@ export default function ArchiveReplayPage() {
             {data?.videoReady && videoSrc ? (
               <VideoPlayer
                 src={videoSrc}
+                previewFrames={preview.key === previewKey && preview.frames ? {
+                  ...preview.frames, baseUrl: buildApiUrl(preview.frames.baseUrl),
+                } : undefined}
                 playlist={playlist ?? undefined}
                 initialSegment={playback.initialSegment}
               playbackKey={playback.playbackKey}

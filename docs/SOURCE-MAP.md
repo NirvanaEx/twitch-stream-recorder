@@ -7,7 +7,7 @@ GitHub: `NirvanaEx/twitch-stream-recorder`, ветка `main`.
 | Компонент | Путь в репозитории | Источник работающей версии |
 | --- | --- | --- |
 | Независимый HTTP API | `apps/api`, `ops/deploy-api.py` | `twitch-stream-recorder-isolation`, выпуск `20260926T155841Z-4c93c62e` |
-| Интерфейс и предзагрузка превью | `apps/web`, `apps/api/scripts/*timeline*`, `scripts/test-preview-preload.cjs` | `twitch-stream-recorder-preview-preload-20260919` |
+| Интерфейс, загрузка видео, чат и превью | `apps/web`, `apps/api/scripts/*timeline*`, `scripts/test-preview-preload.cjs` | `twitch-stream-recorder-playback-flow-20260926`, образ `twitch-stream-recorder-web:playback-flow-20260926`; [проверка релиза](playback-fixes-20260926.md) |
 | Фоновая синхронизация аудио и чата | `services/twitch-sync` | отдельный репозиторий `/root/projects/twitch-sync`, коммит `6317875` |
 | Хранение видео и аудио | `services/twitch-retention` | отдельный репозиторий `/root/projects/twitch-retention`, коммит `530a4d9` |
 | Аудиодорожка для завершённых сегментных записей | `ops/segmented-audio.*`, `ops/twitch-segmented-audio.*` | существующий таймер `twitch-segmented-audio.timer` |
