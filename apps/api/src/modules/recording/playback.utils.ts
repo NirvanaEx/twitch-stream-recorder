@@ -5,11 +5,7 @@ import { resolve } from "node:path";
 import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
 import { measuredMediaStart, parseMediaTimeline } from "./media-timeline";
 
-/**
- * Where a piece of a recording is read from, in the order playback prefers:
- * the server's own disk (nothing is faster), then the archive drive, then the
- * Telegram copy — the only one left once the drive copy has expired.
- */
+/** Storage tier of the selected recording file. Drive is the default. */
 export type MediaTier = "local" | "drive" | "telegram";
 
 /**
@@ -177,11 +173,7 @@ export type PlaybackPart = {
  * from. Empty when the recording is one file that is still there — that file
  * IS the whole thing, and the player must not chop it into parts.
  *
- * The tier of a piece follows the same order the video endpoint resolves it
- * in: the chunk on the server disk while the broadcast runs, its copy on the
- * archive drive after the move, and the Telegram message only for chunks
- * neither holds — one whose drive copy expired, or a recording from before
- * the drive existed.
+ * Mixed captures prefer the archive Drive, then the local disk, then Telegram.
  */
 export function resolvePlaybackParts(session: {
   hasSingleFile: boolean;
@@ -200,10 +192,10 @@ export function resolvePlaybackParts(session: {
     const parts: PlaybackPart[] = [];
 
     for (const segment of segments) {
-      const source: MediaTier | null = segment.localPath
-        ? "local"
-        : segment.archivePath
-          ? "drive"
+      const source: MediaTier | null = segment.archivePath
+        ? "drive"
+        : segment.localPath
+          ? "local"
           : segment.telegramStatus === "uploaded"
             ? "telegram"
             : null;

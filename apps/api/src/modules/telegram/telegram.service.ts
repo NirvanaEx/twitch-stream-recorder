@@ -1,3 +1,4 @@
+import { ownsBackgroundJobs, requireRecorder } from "../../runtime/role";
 import {
   BadRequestException,
   Injectable,
@@ -78,6 +79,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     // A hard stop can leave multi-gigabyte Telegram parts behind. No uploader
     // survives an API restart, and every retry recreates deterministic parts
     // from the original recording, so stale temp files are always disposable.
@@ -107,6 +109,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   /** Ask the service to re-scan for pending work soon (e.g. right after a recording finished). */
   kick() {
+    requireRecorder();
     void this.tick();
   }
 
@@ -257,6 +260,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async tick() {
+    requireRecorder();
     if (this.ticking) {
       return;
     }
@@ -330,7 +334,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             telegramError: "The chunk is missing from both local and archive storage.",
           },
         });
-        continue;
+        return; // Retry on the next pass; do not spin on the same missing chunk.
       }
 
       await this.yieldToPlayback();
@@ -494,7 +498,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // queue of finished recordings would otherwise pile up in full before
       // the first byte is released.
       await this.cleanupLocalCopies(settings);
+      await this.uploadWaitingSegments();
     }
+  }
+
+  /** Drain newly closed live parts between uploads of older recordings. */
+  private async uploadWaitingSegments() {
+    const settings = await this.getSettings();
+    if (!settings.telegramEnabled || !settings.telegramChatId) return;
+    await this.processSegments(settings);
+    await this.finishSegmentedSessions(settings);
   }
 
   /**
@@ -801,6 +814,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         // Dropping the part is what lets the split carry on: with no room for
         // a second copy of the recording, the splitter waits for exactly this.
         await splitter.release(part);
+        // A many-hour archive must not monopolize Telegram while live parts
+        // continue arriving. The splitter is paused here and its part freed.
+        await this.uploadWaitingSegments();
       }
     } finally {
       await splitter.dispose();
@@ -1048,7 +1064,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     chatId: string,
     onProgress?: (fraction: number) => void,
   ) {
-    const audioPath = resolve(session.audioPath!);
+    // Audio-only playback follows ArchiveStorage even for legacy rows whose
+    // audioPath still points at the former local file.
+    const source = session.audioOnly ? session.playbackPath ?? session.audioPath : session.audioPath;
+    if (!source) return null;
+    const audioPath = resolve(source);
 
     if (!existsSync(audioPath) || statSync(audioPath).size === 0) {
       return null;

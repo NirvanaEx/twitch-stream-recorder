@@ -1,3 +1,4 @@
+import { parsePlaybackSource } from "../recording/playback-sources";
 import {
   Controller,
   Delete,
@@ -188,8 +189,8 @@ export class ArchivesController {
   }
 
   @Get(":id")
-  getArchive(@Param("id") id: string) {
-    return this.recordingService.getArchiveById(id);
+  getArchive(@Param("id") id: string, @Query("single") single?: string) {
+    return this.recordingService.getArchiveById(id, single === "1");
   }
 
   @RequirePermissions("manage_archives")
@@ -206,15 +207,18 @@ export class ArchivesController {
 
   @Get(":id/video")
   async streamArchiveVideo(@Param("id") id: string, @Req() req: any, @Res() res: any) {
-    let local: { absolutePath: string; stat: Stats } | null = null;
+    const source = parsePlaybackSource(req.query?.source);
+    let local: { absolutePath: string; stat: Stats; source?: string } | null = null;
     const requestedPart = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
 
-    try {
-      local = await this.recordingService.getPlayableFile(id, requestedPart);
-    } catch {
-      // The local file is gone — fall back to the Telegram copy below.
-      local = null;
+    if (source !== "telegram") {
+      try {
+        local = await this.recordingService.getPlayableFile(id, requestedPart, source);
+      } catch (error) {
+        if (source) throw error;
+      }
     }
+    res.setHeader("X-Playback-Source", local?.source ?? "telegram");
 
     if (!local) {
       const session = await this.prisma.streamSession.findUnique({

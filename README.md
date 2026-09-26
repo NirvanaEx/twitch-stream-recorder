@@ -1,15 +1,38 @@
 # Twitch Stream Recorder
 
+**Production architecture updated 2026-09-26:** the HTTP API is now independent
+of capture. The historical `twitch-recorder-api` container remains the permanent
+recorder/media worker; versioned `tsr-http-api-*` containers handle the site's
+API without starting background jobs. API restart during an active broadcast
+was verified with unchanged capture PIDs/session and continued video/chat.
+
+Read [deployment and rollback instructions](docs/OPERATIONS.md) and [AGENTS.md](AGENTS.md)
+before changing production. The older deployment instructions below describe
+the historical monolith; do not use blanket Compose deployment on this VPS.
+Deploy the API using `python3 ops/deploy-api.py` from this source tree.
+
+The current source checkout is `/root/projects/twitch-stream-recorder-current`.
+See [the source map](docs/SOURCE-MAP.md) for the latest web, preview, sync,
+retention and standalone-audio components, and their independent deployment paths.
+A push to GitHub saves code; it does not deploy or restart the recorder.
+
 Monorepo for a self-hosted Twitch stream recorder with realtime admin panel, browser replay, and synchronized chat playback.
 
 ## Services
 
 - `apps/api`: NestJS API and WebSocket gateway
 - `apps/web`: Next.js admin panel and replay UI
-- `apps/worker`: background jobs, capture orchestration, retention tasks
+- `apps/worker`: legacy optional worker scaffold; the permanent recorder currently owns capture jobs
+- `services/twitch-sync`: independently deployed audio and recorded-chat synchronization
+- `services/twitch-retention`: independently scheduled archive retention
 - `infra/nginx`: reverse proxy and static HLS delivery
 
 ## How a recording is put together
+
+On the current VPS, `RECORDING_LIVE_SEGMENTS=1` uses five-minute MP4 parts
+and independent Drive/Telegram queues. The description below concerns the
+alternative whole-broadcast mode. Current retention is documented in
+`services/twitch-retention/README.md`: video today/yesterday, audio 30 days.
 
 One broadcast is one file. The capture is written in MPEG-TS pieces while the
 stream runs and joined back into a single `.mp4` the moment it ends — the

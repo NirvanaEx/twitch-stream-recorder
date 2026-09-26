@@ -1,3 +1,4 @@
+import { requireRecorder } from "../../runtime/role";
 import {
   Injectable,
   Logger,
@@ -11,6 +12,7 @@ import { Api, TelegramClient } from "telegram";
 import { returnBigInt } from "telegram/Helpers";
 import { StringSession } from "telegram/sessions";
 import { PrismaService } from "../prisma/prisma.service";
+import { ManagedTelegramClient } from "./managed-telegram-client";
 
 export type TelegramCredentials = {
   apiId: number;
@@ -32,10 +34,13 @@ export class TelegramClientService implements OnModuleDestroy {
   private client: TelegramClient | null = null;
   private clientCredentialsKey: string | null = null;
   private clientPromise: Promise<TelegramClient> | null = null;
+  private shuttingDown = false;
 
   constructor(private readonly prisma: PrismaService) {}
 
   async onModuleDestroy() {
+    this.shuttingDown = true;
+    await this.clientPromise?.catch(() => undefined);
     await this.disconnect();
   }
 
@@ -67,6 +72,14 @@ export class TelegramClientService implements OnModuleDestroy {
   }
 
   async getClient(): Promise<TelegramClient> {
+    requireRecorder();
+    if (this.shuttingDown) throw new ServiceUnavailableException("Telegram is stopping.");
+    // Serialize connect/recovery/credential changes before consulting the old
+    // client. Otherwise a caller can obtain a client being retired.
+    if (this.clientPromise) {
+      await this.clientPromise;
+      return this.getClient();
+    }
     const credentials = await this.getCredentials();
 
     if (!credentials) {
@@ -77,16 +90,51 @@ export class TelegramClientService implements OnModuleDestroy {
 
     const key = this.credentialsKey(credentials);
 
+    if (this.clientPromise) return this.getClient();
+    if (this.shuttingDown) throw new ServiceUnavailableException("Telegram is stopping.");
+
     if (this.client?.connected && this.clientCredentialsKey === key) {
       return this.client;
     }
 
     if (!this.clientPromise) {
-      this.clientPromise = this.createClient(credentials, key).finally(() => {
+      const existing = this.clientCredentialsKey === key ? this.client : null;
+      this.clientPromise = (existing
+        ? this.reconnectClient(existing)
+        : this.createClient(credentials, key)).finally(() => {
         this.clientPromise = null;
       });
     }
 
+    return this.clientPromise;
+  }
+
+  private async reconnectClient(client: TelegramClient) {
+    // A transient main-connection outage must not create another MTProto
+    // client while the old download senders are still reconnecting.
+    const deadline = Date.now() + 15_000;
+    while (client._sender?.isConnecting || client._sender?.isReconnecting) {
+      if (this.shuttingDown || Date.now() >= deadline) {
+        throw new ServiceUnavailableException("Telegram is still reconnecting.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!client.connected) await client.connect();
+    if (!client.connected) throw new ServiceUnavailableException("Telegram reconnect failed.");
+    return client;
+  }
+
+  /** Called after a stuck RPC; concurrent timeouts retire a client only once. */
+  async recoverClient(expected: TelegramClient) {
+    if (this.clientPromise) return this.clientPromise;
+    if (this.client !== expected) return this.getClient();
+    this.clientPromise = (async () => {
+      await this.disconnect();
+      if (this.shuttingDown) throw new ServiceUnavailableException("Telegram is stopping.");
+      const credentials = await this.getCredentials();
+      if (!credentials) throw new ServiceUnavailableException("Telegram is not configured.");
+      return this.createClient(credentials, this.credentialsKey(credentials));
+    })().finally(() => { this.clientPromise = null; });
     return this.clientPromise;
   }
 
@@ -160,14 +208,19 @@ export class TelegramClientService implements OnModuleDestroy {
       // First run or unreadable file: start a fresh session.
     }
 
-    const client = new TelegramClient(
+    const client = new ManagedTelegramClient(
       new StringSession(savedSession),
       credentials.apiId,
       credentials.apiHash,
       { connectionRetries: 5 },
     );
 
-    await client.start({ botAuthToken: credentials.botToken });
+    try {
+      await client.start({ botAuthToken: credentials.botToken });
+    } catch (error) {
+      await client.destroy().catch(() => undefined);
+      throw error;
+    }
 
     try {
       mkdirSync(dirname(sessionPath), { recursive: true });
@@ -191,14 +244,17 @@ export class TelegramClientService implements OnModuleDestroy {
   }
 
   private async disconnect() {
-    if (this.client) {
+    const client = this.client;
+    this.client = null;
+    this.clientCredentialsKey = null;
+    if (client) {
       try {
-        await this.client.disconnect();
+        // destroy also stops the old client's update loop. disconnect alone
+        // is intended for a client that will be connected again later.
+        await client.destroy();
       } catch {
         // Best-effort shutdown.
       }
-      this.client = null;
-      this.clientCredentialsKey = null;
     }
   }
 

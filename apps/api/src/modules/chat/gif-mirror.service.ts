@@ -1,3 +1,4 @@
+import { ownsBackgroundJobs, requireRecorder } from "../../runtime/role";
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
@@ -31,6 +32,7 @@ export class GifMirrorService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     try {
       this.makeDirs();
       for (const name of readdirSync(join(this.root, "index"))) {
@@ -54,6 +56,7 @@ export class GifMirrorService implements OnModuleInit, OnModuleDestroy {
   }
 
   enqueue(tag: unknown) {
+    requireRecorder();
     for (const url of gifSourceUrls(tag)) {
       try { this.recordFor(url); }
       catch (error) { this.logger.warn(`Cannot queue GIF ${gifSourceKey(url)}: ${String(error)}`); }
@@ -82,7 +85,7 @@ export class GifMirrorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private readRecord(key: string): RecordEntry | undefined {
-    if (this.records.has(key)) return this.records.get(key);
+    if (ownsBackgroundJobs() && this.records.has(key)) return this.records.get(key);
     try {
       const record = JSON.parse(readFileSync(join(this.root, "index", `${key}.json`), "utf8")) as RecordEntry;
       if (!isGifSourceUrl(record.url) || gifSourceKey(record.url) !== key ||
@@ -145,6 +148,7 @@ export class GifMirrorService implements OnModuleInit, OnModuleDestroy {
 
   /** Shared by the background worker and export; at most two downloads total. */
   async ensure(url: string): Promise<void> {
+    requireRecorder();
     if (!isGifSourceUrl(url) || this.stopped) return;
     const key = gifSourceKey(url);
     const current = this.jobs.get(key);

@@ -1,0 +1,7 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+WORKDIR /app
+COPY dist ./dist
+ENV TSR_ROLE=api
+# Schema changes are an explicit operation, never an API startup side effect.
+CMD ["node", "dist/main.js"]

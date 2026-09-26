@@ -9,6 +9,7 @@ import {
   spoilerTimeToPct,
 } from "../lib/spoiler-timeline";
 import { TimelinePreview, type PreviewFrames } from "./TimelinePreview";
+import { useTimelinePreload } from "../lib/timeline-preload";
 import { useSeamlessPlayback } from "../lib/use-seamless-playback";
 import { useHlsPlayback } from "../lib/use-hls-playback";
 import { trackPlaybackMetrics } from "../lib/playback-metrics";
@@ -158,6 +159,7 @@ export function VideoPlayer({
   const surfacePointerRef = useRef<{ id: number; x: number; y: number; at: number; moved: boolean } | null>(null);
   const recoveryRef = useRef<ReturnType<typeof attachMediaRecovery> | null>(null);
 
+  const preloadedPreviews = useTimelinePreload(previewFrames);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -1281,7 +1283,7 @@ export function VideoPlayer({
               aria-hidden
             >
               {audioOnly || scrubInFog || !scrubPreview ? null : (
-                <TimelinePreview src={previewSrc} time={previewTime} frames={previewFrames} />
+                <TimelinePreview src={previewSrc} time={previewTime} frames={previewFrames} preloaded={preloadedPreviews} />
               )}
               <span className="vp__scrub-time">
                 {/* In the fog the absolute position would be a number the

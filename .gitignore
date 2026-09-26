@@ -7,3 +7,10 @@ coverage
 data
 *.log
 
+# Build caches, local evidence and environment secrets
+*.tsbuildinfo
+__pycache__/
+*.pyc
+.env.*
+!.env.example
+/verification/
