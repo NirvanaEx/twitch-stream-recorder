@@ -1,3 +1,7 @@
+import { ownsBackgroundJobs, requireRecorder } from "../../runtime/role";
+import { listBroadcastPage, getBroadcastSessions, resolveBroadcastPlayback } from "./broadcast-playback";
+import { resolveRecordingSources, singleFileCandidates } from "./playback-sources";
+import { isUnderArchiveRoot } from "../archive-storage/archive-paths";
 import { mediaStat } from "./media-stat";
 import {
   BadRequestException,
@@ -24,9 +28,7 @@ import { SevenTvService, type EmotePlatform } from "../chat/seventv.service";
 import {
   computeSessionChatOffsetSec,
   sessionMediaStartedAt,
-  resolvePlaybackParts,
   resolveSessionPlaybackState,
-  type MediaTier,
 } from "./playback.utils";
 import {
   joinCaptureChunks,
@@ -236,6 +238,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     this.ensureDataLayout();
     await this.markStaleRecordingsAsStopped();
     await this.checkRecordingDependencies();
@@ -257,6 +260,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async syncAllChannels() {
+    requireRecorder();
     // If dependencies were missing at boot (e.g. streamlink installed after
     // the API started), re-probe periodically instead of staying disabled
     // until a manual restart.
@@ -282,6 +286,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async syncChannelState(channelId: string) {
+    requireRecorder();
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId },
     });
@@ -479,6 +484,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async startRecording(channelId: string, trigger: "automatic" | "manual" = "manual") {
+    requireRecorder();
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId },
     });
@@ -771,6 +777,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async stopRecording(channelId: string, stoppedByUser = true) {
+    requireRecorder();
     const activeRecording = this.activeRecordings.get(channelId);
 
     if (!activeRecording) {
@@ -842,36 +849,17 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       ...(kind === "all" ? {} : { audioOnly: kind === "audio" }),
     };
 
-    const [total, items] = await this.prisma.$transaction([
-      this.prisma.streamSession.count({ where }),
-      this.prisma.streamSession.findMany({
-        where,
-        include: {
-          channel: true,
-          telegramParts: {
-            orderBy: { partIndex: "asc" },
-          },
-          segments: {
-            orderBy: { index: "asc" },
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        skip: (safePage - 1) * safePageSize,
-        take: safePageSize,
-      }),
-    ]);
-
-    return {
-      items: await Promise.all(items.map((session) => this.serializeSession(session, session.channel))),
-      total,
-      page: safePage,
-      pageSize: safePageSize,
-    };
+    const { total, groups } = await listBroadcastPage(this.prisma, where, safePage, safePageSize);
+    const items = await Promise.all(groups.map(async (sessions) => {
+      const first = sessions[0];
+      const item = await this.serializeSession(first, first.channel);
+      const playback = await resolveBroadcastPlayback(sessions, (id) => `/api/archives/${id}/video`);
+      return { ...item, ...playback, fileSizeBytes: playback.broadcast?.fileSizeBytes ?? item.fileSizeBytes, endedAt: playback.broadcast?.endedAt ?? item.endedAt, durationSec: playback.broadcast?.durationSec ?? item.durationSec };
+    }));
+    return { items, total, page: safePage, pageSize: safePageSize };
   }
 
-  async getArchiveById(id: string) {
+  async getArchiveById(id: string, single = false) {
     const [session, settings] = await Promise.all([
       this.prisma.streamSession.findUnique({
         where: { id },
@@ -893,8 +881,16 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
     }
 
     const serialized = await this.serializeSession(session, session.channel);
+    const sessions = await getBroadcastSessions(this.prisma, session, single || session.status === "recording");
+    const playback = await resolveBroadcastPlayback(sessions, (id) => `/api/archives/${id}/video`, settings?.defaultChatOffsetSec ?? 0);
     const item = {
       ...serialized,
+      ...playback,
+      endedAt: playback.broadcast?.endedAt ?? serialized.endedAt,
+      fileSizeBytes: playback.broadcast?.fileSizeBytes ?? serialized.fileSizeBytes,
+      chatAvailable: sessions.some((member) => member.chatAvailable),
+      recordingDurationSec: playback.broadcast?.durationSec ?? serialized.recordingDurationSec,
+      durationSec: playback.broadcast?.durationSec ?? serialized.durationSec,
       chatOffsetSec: serialized.chatOffsetSec + (settings?.defaultChatOffsetSec ?? 0),
     };
 
@@ -930,6 +926,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deleteArchive(id: string) {
+    requireRecorder();
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
       include: { segments: true },
@@ -1042,6 +1039,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
    * recording, so this deletes the archive entirely.
    */
   async deleteAudioTrack(id: string) {
+    requireRecorder();
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
     });
@@ -1096,7 +1094,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
    * the shared MTProto connection — which is both faster and leaves the
    * connection free for the uploads of whatever is recording right now.
    */
-  async getPlayableFile(id: string, part = 1) {
+  async getPlayableFile(id: string, part = 1, source?: "drive" | "local") {
     const session = await this.prisma.streamSession.findUnique({
       where: { id },
     });
@@ -1111,25 +1109,25 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // directly. Both are tried rather than just the first one that is set:
       // a stale localPath must not send the viewer to Telegram while the
       // drive copy sits right there.
-      for (const candidate of [segment?.localPath, segment?.archivePath]) {
+      const candidates = source === "drive" ? [segment?.archivePath] : source === "local" ? [segment?.localPath] : [segment?.archivePath, segment?.localPath];
+      for (const candidate of candidates) {
         const stat = candidate ? await mediaStat(candidate) : null;
         if (candidate && stat && stat.size > 0) {
-          return { absolutePath: candidate, stat };
+          return { absolutePath: candidate, stat, source: isUnderArchiveRoot(candidate) ? "drive" : "local" };
         }
       }
 
       throw new NotFoundException(`Chunk ${part} of archive ${id} is not on disk.`);
     }
 
-    if (!session?.playbackPath) {
-      throw new NotFoundException(`Playback file for archive ${id} was not found.`);
+    if (session) {
+      for (const candidate of singleFileCandidates(session)) {
+        if (source && candidate.source !== source) continue;
+        const stat = await mediaStat(candidate.path);
+        if (stat && stat.size > 0) return { absolutePath: resolve(candidate.path), stat, source: candidate.source };
+      }
     }
-
-    const stat = await mediaStat(session.playbackPath);
-    if (!stat || stat.size <= 0) {
-      throw new NotFoundException(`Playback file for archive ${id} is missing on disk.`);
-    }
-    return { absolutePath: resolve(session.playbackPath), stat };
+    throw new NotFoundException(`Playback source ${source ?? "auto"} for archive ${id} is unavailable.`);
   }
 
   async getSessionById(id: string) {
@@ -2618,39 +2616,13 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       partIndex: part.partIndex,
       partCount: part.partCount,
       url: buildTelegramMessageUrl(part.chatId, part.messageId),
-      streamUrl: `/api/archives/${session.id}/video?part=${part.partIndex}`,
+      streamUrl: `/api/archives/${session.id}/video?source=telegram&part=${part.partIndex}`,
       startOffsetSec: part.startOffsetSec,
       durationSec: part.durationSec,
     }));
 
-    // The pieces this recording plays back in and the tier each one comes
-    // from: the chunks of a segmented capture (drive first, Telegram for the
-    // ones that expired off it), or the Telegram parts of a recording whose
-    // single file is gone. Empty while that file is still there.
-    const telegramUrlByIndex = new Map(telegramParts.map((part) => [part.partIndex, part.url]));
-    const parts = resolvePlaybackParts({
-      hasSingleFile: playback.videoReady,
-      audioOnly: session.audioOnly,
-      telegramStatus: session.telegramStatus,
-      segments: session.segments,
-      telegramParts,
-    }).map((part) => ({
-      ...part,
-      url: telegramUrlByIndex.get(part.partIndex) ?? null,
-      streamUrl: `/api/archives/${session.id}/video?part=${part.partIndex}`,
-    }));
-
-    // Audio-only sessions have no parts — their Telegram copy is one audio
-    // message, served by the same video endpoint.
-    const telegramAudioPlayable =
-      !playback.videoReady &&
-      session.audioOnly &&
-      session.telegramStatus === "uploaded" &&
-      Boolean(session.telegramAudioMessageId);
-
-    const videoReady = playback.videoReady || parts.length > 0 || telegramAudioPlayable;
-    const videoSource: MediaTier | null =
-      playback.tier ?? parts[0]?.source ?? (telegramAudioPlayable ? "telegram" : null);
+    const sources = await resolveRecordingSources(session, `/api/archives/${session.id}/video`);
+    const { videoReady, videoSource, parts } = sources;
 
     return {
       id: session.id,
@@ -2678,6 +2650,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
               Math.round((session.endedAt.getTime() - session.startedAt.getTime()) / 1000),
             )
           : null),
+      ...sources,
       videoReady,
       videoSource,
       chatAvailable: session.chatAvailable,
@@ -2700,10 +2673,7 @@ export class RecordingService implements OnModuleInit, OnModuleDestroy {
       // broadcast.
       recordingDurationSec: session.durationSec,
       audioSizeBytes: session.audioSizeBytes,
-      videoUrl:
-        playback.videoUrl ??
-        parts[0]?.streamUrl ??
-        (telegramAudioPlayable ? `/api/archives/${session.id}/video` : null),
+      videoUrl: sources.videoUrl,
       telegramStatus: session.telegramStatus,
       telegramProgress:
         session.telegramStatus === "uploading"

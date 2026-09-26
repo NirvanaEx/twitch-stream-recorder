@@ -1,3 +1,4 @@
+import { ownsBackgroundJobs, requireRecorder } from "../../runtime/role";
 import {
   BadRequestException,
   ConflictException,
@@ -31,6 +32,7 @@ export class ChannelsService implements OnModuleInit {
    * rows, and any later toggle keeps audioOnly in sync itself.
    */
   async onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     const migrated = await this.prisma.channel.updateMany({
       where: { audioOnly: true, recordVideo: true },
       data: { recordVideo: false, recordAudio: true },
@@ -100,6 +102,7 @@ export class ChannelsService implements OnModuleInit {
   }
 
   async createChannel(dto: CreateChannelDto) {
+    requireRecorder();
     const platform = this.platformsService.assertSupported(dto.platform);
     const user = await this.platformsService.resolveChannel(platform, dto.channel);
 
@@ -176,6 +179,7 @@ export class ChannelsService implements OnModuleInit {
   }
 
   async updateChannel(id: string, dto: UpdateChannelDto) {
+    requireRecorder();
     const current = await this.ensureChannelExists(id);
 
     // Video and audio are separate switches now. `audioOnly` is still accepted
@@ -234,6 +238,7 @@ export class ChannelsService implements OnModuleInit {
   }
 
   async deleteChannel(id: string) {
+    requireRecorder();
     const channel = await this.ensureChannelExists(id);
 
     const latestRecording = await this.prisma.streamSession.findFirst({

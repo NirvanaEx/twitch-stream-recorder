@@ -187,6 +187,7 @@ export class StorageService {
    * ссылается база или который пишется прямо сейчас, через этот путь нельзя.
    */
   async cleanupOrphans(paths?: string[]) {
+    requireRecorder();
     const { refs } = await this.buildReferenceMap();
     const files = this.walkDataDir(refs);
     const orphans = files.filter((file) => file.orphan);
@@ -435,3 +436,4 @@ export class StorageService {
     return { refs, sessions };
   }
 }
+import { requireRecorder } from "../../runtime/role";

@@ -1,4 +1,6 @@
-import { getPlaybackAssets, playbackAssetPath } from "../recording/playback-assets";
+import { listBroadcastPage, getBroadcastSessions, resolveBroadcastPlayback } from "../recording/broadcast-playback";
+import { parsePlaybackSource } from "../recording/playback-sources";
+import { getPlaybackAssets, getTimelineAssets, playbackAssetPath } from "../recording/playback-assets";
 import { mediaStat } from "../recording/media-stat";
 import {
   Controller,
@@ -36,7 +38,6 @@ import {
   sessionMediaStartedAt,
   parseMediaRange,
   pipeFileToResponse,
-  resolvePlaybackParts,
   resolveSessionPlaybackState,
 } from "../recording/playback.utils";
 import { RecordingService } from "../recording/recording.service";
@@ -114,48 +115,17 @@ export class PublicStreamsController {
       // the recording — so "has a playbackPath" is no longer the same question
       // as "is there something to watch".
       OR: [{ playbackPath: { not: null } }, { segmented: true }],
-      ...(search
-        ? {
-            title: {
-              contains: search,
-              mode: "insensitive" as Prisma.QueryMode,
-            },
-          }
-        : {}),
+
     };
 
-    const [total, sessions] = await this.prisma.$transaction([
-      this.prisma.streamSession.count({ where }),
-      this.prisma.streamSession.findMany({
-        where,
-        include: {
-          channel: true,
-          telegramParts: { orderBy: { partIndex: "asc" } },
-          segments: { orderBy: { index: "asc" } },
-        },
-        orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+    const { total, groups } = await listBroadcastPage(this.prisma, where, page, pageSize, search);
 
-    const items = (await Promise.all(sessions
-      .map(async (session) => {
+    const items = (await Promise.all(groups
+      .map(async (sessions) => {
+        const session = sessions[0];
         const playback = await resolveSessionPlaybackState(session);
-        // Chunks on the archive drive are a perfectly good source even when
-        // nothing of this broadcast is in Telegram.
-        const hasParts =
-          resolvePlaybackParts({
-            hasSingleFile: playback.videoReady,
-            audioOnly: session.audioOnly,
-            telegramStatus: session.telegramStatus,
-            segments: session.segments,
-            telegramParts: session.telegramParts,
-          }).length > 0;
-
-        if (!playback.videoReady && !hasParts && !isTelegramPlayable(session, playback.videoReady)) {
-          return null;
-        }
+        const sources = await resolveBroadcastPlayback(sessions, (id) => `/api/public/streams/${id}/video`);
+        if (!sources.videoReady) return null;
 
         return {
           id: session.id,
@@ -176,8 +146,11 @@ export class PublicStreamsController {
             ? null
             : `/api/public/streams/${session.id}/thumbnail`,
           startedAt: session.startedAt?.toISOString() ?? null,
-          endedAt: session.endedAt?.toISOString() ?? null,
-          fileSizeBytes: playback.fileSizeBytes,
+          endedAt: sources.broadcast?.endedAt ?? session.endedAt?.toISOString() ?? null,
+          fileSizeBytes: sources.broadcast?.fileSizeBytes ?? playback.fileSizeBytes,
+          storage: sources.storage,
+          broadcast: sources.broadcast,
+          durationSec: sources.broadcast?.durationSec ?? session.durationSec,
         };
       })))
       .filter(Boolean);
@@ -563,11 +536,17 @@ export class PublicStreamsController {
     pipeFileToResponse(createReadStream(absolutePath), res);
   }
 
+  @Get(":id/timeline/:filename")
+  async timelineAsset(@Param("id") id: string, @Param("filename") filename: string,
+    @Req() req: any, @Res() res: any) {
+    return this.playbackAsset(id, filename, req, res, true);
+  }
+
   @Get(":id/playback/:filename")
   async playbackAsset(@Param("id") id: string, @Param("filename") filename: string,
-    @Req() req: any, @Res() res: any) {
-    const asset = playbackAssetPath(id, filename);
-    if (!asset || !await getPlaybackAssets(id)) throw new NotFoundException("Media asset not found");
+    @Req() req: any, @Res() res: any, timeline = false) {
+    const asset = playbackAssetPath(id, filename, timeline);
+    if (!asset || !(timeline ? await getTimelineAssets(id) : await getPlaybackAssets(id))) throw new NotFoundException("Media asset not found");
     const stat = await mediaStat(asset.path);
     if (!stat) throw new NotFoundException("Media asset not found");
     const cache = buildMediaCacheHeaders(stat, 86400);
@@ -591,7 +570,7 @@ export class PublicStreamsController {
   }
 
   @Get(":id")
-  async get(@Param("id") id: string) {
+  async get(@Param("id") id: string, @Query("single") single?: string) {
     const [session, settings] = await Promise.all([
       this.prisma.streamSession.findUnique({
         where: { id },
@@ -609,18 +588,9 @@ export class PublicStreamsController {
     }
 
     const playback = await resolveSessionPlaybackState(session);
-    const parts = resolvePlaybackParts({
-      hasSingleFile: playback.videoReady,
-      audioOnly: session.audioOnly,
-      telegramStatus: session.telegramStatus,
-      segments: session.segments,
-      telegramParts: session.telegramParts,
-    });
-    const telegramPlayable = isTelegramPlayable(session, playback.videoReady);
-
-    if (!playback.videoReady && parts.length === 0 && !telegramPlayable) {
-      throw new NotFoundException("Видео ещё не готово.");
-    }
+    const sessions = await getBroadcastSessions(this.prisma, session, single === "1", true);
+    const sources = await resolveBroadcastPlayback(sessions, (id) => `/api/public/streams/${id}/video`, settings?.defaultChatOffsetSec ?? 0);
+    if (!sources.videoReady) throw new NotFoundException("Видео ещё не готово.");
 
     return {
       item: {
@@ -637,24 +607,17 @@ export class PublicStreamsController {
           ? null
           : `/api/public/streams/${session.id}/thumbnail`,
         startedAt: session.startedAt?.toISOString() ?? null,
-        endedAt: session.endedAt?.toISOString() ?? null,
+        endedAt: sources.broadcast?.endedAt ?? session.endedAt?.toISOString() ?? null,
         mediaStartedAt: sessionMediaStartedAt(session).toISOString(),
-        durationSec: session.durationSec,
-        fileSizeBytes: playback.fileSizeBytes,
-        // Public clients hit the public video endpoint — never the admin one.
-        videoUrl: `/api/public/streams/${session.id}/video`,
-        ...await getPlaybackAssets(id),
-        videoSource: playback.tier ?? parts[0]?.source ?? "telegram",
+        durationSec: sources.broadcast?.durationSec ?? session.durationSec,
+        fileSizeBytes: sources.broadcast?.fileSizeBytes ?? playback.fileSizeBytes,
+        ...(sources.broadcast ? {} : await getPlaybackAssets(id)),
+        ...await getTimelineAssets(id, single !== "1"),
+        ...sources,
         audioOnly: session.audioOnly,
         chatOffsetSec:
           computeSessionChatOffsetSec(session) + (settings?.defaultChatOffsetSec ?? 0),
-        // The pieces to play in order, each labelled with where it is read
-        // from: chunks off the archive drive, Telegram for whatever the drive
-        // no longer holds.
-        parts: parts.map((part) => ({
-          ...part,
-          streamUrl: `/api/public/streams/${session.id}/video?part=${part.partIndex}`,
-        })),
+
       },
     };
   }
@@ -819,17 +782,17 @@ export class PublicStreamsController {
     }
 
     const partIndex = Math.max(1, Number.parseInt(req.query?.part ?? "1", 10) || 1);
-    let local: { absolutePath: string; stat: Stats } | null = null;
+    const source = parsePlaybackSource(req.query?.source);
+    let local: { absolutePath: string; stat: Stats; source?: string } | null = null;
 
-    try {
-      // The part matters for a segmented capture: without it every chunk of
-      // the broadcast resolved to chunk one.
-      local = await this.recordingService.getPlayableFile(id, partIndex);
-    } catch {
-      // Neither the server disk nor the archive drive has it — fall back to
-      // the Telegram copy below.
-      local = null;
+    if (source !== "telegram") {
+      try {
+        local = await this.recordingService.getPlayableFile(id, partIndex, source);
+      } catch (error) {
+        if (source) throw error;
+      }
     }
+    res.setHeader("X-Playback-Source", local?.source ?? "telegram");
 
     if (!local) {
       const full = await this.prisma.streamSession.findUnique({

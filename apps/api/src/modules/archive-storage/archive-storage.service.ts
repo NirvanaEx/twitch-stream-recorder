@@ -1,3 +1,4 @@
+import { ownsBackgroundJobs, requireRecorder } from "../../runtime/role";
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { AppSettings, Channel, StreamSession } from "@prisma/client";
 import { execFile } from "node:child_process";
@@ -71,6 +72,7 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     if (!archiveRoot()) {
       this.logger.log("Archive tier disabled: ARCHIVE_DIR is not set.");
       return;
@@ -100,10 +102,12 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
 
   /** Ask for a sweep soon — used right after a recording finished uploading. */
   kick() {
+    requireRecorder();
     void this.sweep();
   }
 
   async sweep() {
+    requireRecorder();
     if (this.sweeping || !archiveRoot()) {
       return;
     }
@@ -426,7 +430,11 @@ export class ArchiveStorageService implements OnModuleInit, OnModuleDestroy {
         // repointing them is the whole of "the archive is now primary".
         await this.prisma.streamSession.update({
           where: { id: session.id },
-          data: { playbackPath: archived, recordingPath: archived },
+          data: {
+            playbackPath: archived,
+            recordingPath: archived,
+            ...(session.audioOnly ? { audioPath: archived } : {}),
+          },
         });
       }
 

@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-export type PreviewFrames = { baseUrl: string; intervalSec: number; count: number };
+import { previewPosition, spriteUrl, type PreviewFrames } from "../lib/timeline-preload";
+export type { PreviewFrames } from "../lib/timeline-preload";
 
 /** Dwell before network I/O. Prepared JPEGs bypass video decode entirely. */
-export function TimelinePreview({ src, time, frames }: {
-  src: string; time: number; frames?: PreviewFrames | null;
+export function TimelinePreview({ src, time, frames, preloaded = {} }: {
+  src: string; time: number; frames?: PreviewFrames | null; preloaded?: Record<number, string>;
 }) {
   const [target, setTarget] = useState<{ src: string; time: number } | null>(null);
   const ref = useRef<HTMLVideoElement>(null);
   const [imageFailed, setImageFailed] = useState(false);
+  const [failedSprite, setFailedSprite] = useState("");
   useEffect(() => {
     const timer = window.setTimeout(() => setTarget({ src, time }), 250);
     return () => window.clearTimeout(timer);
@@ -28,7 +29,17 @@ export function TimelinePreview({ src, time, frames }: {
     return () => video.removeEventListener("loadedmetadata", seek);
   }, [target, imageFailed]);
   if (frames && !imageFailed) {
-    const index = Math.min(frames.count - 1, Math.floor(Math.max(0, time) / frames.intervalSec));
+    const { index, sheet, column, row } = previewPosition(frames, time);
+    const sheetUrl = spriteUrl(frames.baseUrl, sheet);
+    if (frames.sprites && (failedSprite !== sheetUrl || preloaded[sheet])) {
+      const { columns, rows } = frames.sprites;
+      return <span className="vp__scrub-video" style={{ display: "block", position: "relative", overflow: "hidden" }}>
+        <img alt="" decoding="sync" src={preloaded[sheet] ?? sheetUrl}
+          data-preview-sheet={sheet} onError={() => setFailedSprite(sheetUrl)}
+          style={{ position: "absolute", width: `${columns * 100}%`, height: `${rows * 100}%`,
+            maxWidth: "none", left: `${-column * 100}%`, top: `${-row * 100}%` }} />
+      </span>;
+    }
     return <img className="vp__scrub-video" alt="" decoding="async"
       src={`${frames.baseUrl}/preview-${String(index + 1).padStart(6, "0")}.jpg`}
       onError={() => setImageFailed(true)} />;

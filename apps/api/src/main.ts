@@ -1,3 +1,5 @@
+import { runtimeRole } from "./runtime/role";
+import { recorderProxy } from "./runtime/recorder-proxy";
 import "reflect-metadata";
 import { Logger, ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
@@ -60,11 +62,15 @@ function guardTelegramTransport() {
 }
 
 async function bootstrap() {
+  const role = runtimeRole(); // Fail closed before Nest initializes any providers.
   guardTelegramTransport();
 
   const app = await NestFactory.create(AppModule, {
     cors: true,
   });
+
+  // Register before Nest body parsers: forward the original command body once.
+  if (role === "api") app.use(recorderProxy());
 
   app.enableShutdownHooks();
   app.setGlobalPrefix("api");

@@ -26,8 +26,6 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/scripts ./scripts
 
 EXPOSE 3001
-# Retry the schema sync instead of dying: when postgres is still warming up
-# after a reboot, a one-shot "db push" used to crash-loop the container and
-# the panel answered 502 the whole time. "exec" hands PID 1 to node so it
-# receives SIGTERM and shuts down recordings cleanly.
-CMD ["sh", "-c", "until npx prisma db push; do echo 'prisma db push failed, retrying in 5s...'; sleep 5; done; exec node dist/main.js"]
+# TSR_ROLE is mandatory in production. Schema migrations are a separate,
+# compatibility-checked maintenance operation, never part of API startup.
+CMD ["node", "dist/main.js"]

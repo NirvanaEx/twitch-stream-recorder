@@ -1,3 +1,4 @@
+import { ownsBackgroundJobs } from "../../runtime/role";
 import {
   Injectable,
   Logger,
@@ -27,6 +28,7 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    if (!ownsBackgroundJobs()) return;
     await this.bootstrapSuperadmin();
   }
 

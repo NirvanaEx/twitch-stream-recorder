@@ -1,0 +1,11 @@
+[Unit]
+Description=Build missing standalone audio for completed segmented Twitch recordings
+After=docker.service gdrive.service
+Requires=docker.service
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '/usr/bin/docker exec -e SEGMENTED_AUDIO_RUN=1 -i twitch-recorder-api node < /root/projects/twitch-stream-recorder/ops/segmented-audio.cjs'
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

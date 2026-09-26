@@ -5,22 +5,20 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { Readable } from "node:stream";
-import { Api } from "telegram";
+import { Api, type TelegramClient } from "telegram";
 import { returnBigInt } from "telegram/Helpers";
 import { PrismaService } from "../prisma/prisma.service";
 import { parseMediaRange } from "../recording/playback.utils";
 import { TelegramClientService } from "./telegram-client.service";
+import { abortableDelay, DownloadAbortedError, TelegramChunkScheduler } from "./telegram-chunk-scheduler";
 
 // MTProto upload.getFile requires the offset to be 4 KB aligned and the chunk
 // size to divide 1 MB; 512 KB satisfies both and is the maximum allowed.
 const CHUNK_SIZE = 512 * 1024;
 
-// How many 512 KB chunks are fetched from Telegram concurrently. All requests
-// share ONE MTProto connection, so this is NOT "more workers = more speed":
-// past a handful of in-flight requests Telegram throttles the connection and
-// throughput DROPS (raising this to 12 made playback worse). 6 is the sweet
-// spot. Tune per-deployment with TELEGRAM_STREAM_PARALLELISM (1-32) — if the
-// stream stalls, try LOWER values (3-4) before higher ones.
+// Global budget of actual 512 KB downloads, including those whose HTTP
+// consumer disconnected. Each response reads ahead up to this many blocks,
+// but multiple viewers no longer multiply the budget.
 const DEFAULT_PARALLEL_CHUNKS = 6;
 
 // In-memory LRU of downloaded chunks. Seeks usually re-read the same areas
@@ -31,13 +29,8 @@ const DEFAULT_PARALLEL_CHUNKS = 6;
 // small VPS into swap/OOM (192 MB did exactly that).
 const DEFAULT_CACHE_MB = 64;
 
-// How many HTTP responses may pull from Telegram at the same time. Every
-// stream keeps PARALLEL_CHUNKS requests in flight on the ONE shared MTProto
-// connection, so unbounded concurrency (a viewer scrubbing the timeline opens
-// a new range request per seek) floods that connection: every stream crawls,
-// the queued 512 KB chunks pile up in memory and the whole API looks frozen.
-// Excess requests briefly wait for a slot instead. Tune with
-// TELEGRAM_STREAM_MAX_CONCURRENT (1-16).
+// Bound HTTP consumers and their read-ahead memory independently of the
+// global download budget. Disconnects also cancel their queued work.
 const DEFAULT_MAX_CONCURRENT_STREAMS = 3;
 const STREAM_SLOT_WAIT_MS = 15_000;
 
@@ -55,6 +48,9 @@ const MEDIA_CACHE_TTL_MS = 5 * 60_000;
 // a few times with backoff instead, turning a hiccup into a short stall.
 const MAX_CHUNK_RETRIES = 6;
 const RETRY_BASE_DELAY_MS = 400;
+// Includes GramJS's automatic FLOOD_WAIT (up to 60 s). This is a deadline for
+// one block, not for the entire response or for a deliberately paused player.
+const CHUNK_TIMEOUT_MS = 75_000;
 
 // How often an active stream logs its throughput / refreshes the live stats.
 const SPEED_LOG_INTERVAL_MS = 2_000;
@@ -98,9 +94,9 @@ type LiveStreamStat = {
   startedAt: number;
   // Bytes pulled from Telegram and actually handed to the response...
   downloadedBytes: number;
-  // ...and bytes the read-ahead workers fetched but nobody consumed (see the
-  // byteRange() finally block). They cost exactly as much bandwidth on the
-  // shared MTProto connection, so they are counted instead of vanishing.
+  // Kept for response-schema compatibility. Downloads that outlive their
+  // consumer are attributed to the global scheduler, not to a closed HTTP
+  // response; global waste counts bytes that could not be retained in cache.
   wastedBytes: number;
   servedBytes: number;
   mbpsFromTelegram: number;
@@ -115,6 +111,8 @@ export class TelegramStreamService {
     string,
     { media: Api.TypeMessageMedia; fetchedAt: number }
   >();
+  private readonly mediaRequests = new Map<string, Promise<Api.TypeMessageMedia>>();
+  private downloadBlockedUntil = 0;
   // LRU chunk cache: key `${cacheKey}:${alignedOffset}` -> raw 512 KB chunk.
   private readonly chunkCache = new Map<string, Buffer>();
   private chunkCacheBytes = 0;
@@ -124,9 +122,8 @@ export class TelegramStreamService {
   // Every byte pulled from Telegram by any stream, discarded read-ahead
   // included — the honest load on the single MTProto connection.
   private totalBytesFromTelegram = 0;
-  // Subset of the above that nobody consumed. Tracked server-wide because a
-  // stream only learns about its own waste as it shuts down, by which point
-  // its entry is already gone from the panel.
+  // Subset downloaded without a consumer and not retained in the cache.
+  // Tracked globally because the HTTP response may already have closed.
   private totalWastedBytes = 0;
   private globalMbps = 0;
   private globalWastedMbps = 0;
@@ -137,10 +134,21 @@ export class TelegramStreamService {
   // Concurrency gate for the shared MTProto connection (see the constant).
   private activeStreams = 0;
   private readonly slotWaiters: Array<() => void> = [];
+  private readonly chunks = new TelegramChunkScheduler({
+    parallelism: () => this.getParallelChunks(),
+    timeoutMs: () => CHUNK_TIMEOUT_MS,
+    cacheGet: (key) => this.cacheGet(key),
+    cachePut: (key, value) => this.cachePut(key, value),
+    downloaded: (bytes, wasted) => {
+      this.totalBytesFromTelegram += bytes;
+      if (wasted) this.totalWastedBytes += bytes;
+    },
+    recoveryFailed: (error) => this.logger.warn(`Telegram recovery failed: ${String(error)}`),
+  });
 
-  /** True while at least one HTTP response is pulling data from Telegram. */
+  /** Includes real downloads still finishing after their HTTP response closed. */
   hasActiveStreams() {
-    return this.activeStreams > 0;
+    return this.activeStreams > 0 || this.chunks.activeDownloads > 0;
   }
 
   /**
@@ -172,6 +180,8 @@ export class TelegramStreamService {
         mbpsWasted: round2(this.globalWastedMbps),
         mbpsToClient: round2(sum(all, (stat) => stat.mbpsToClient)),
         activeStreams: all.length,
+        activeDownloads: this.chunks.activeDownloads,
+        queuedDownloads: this.chunks.queuedDownloads,
       },
     };
   }
@@ -185,6 +195,8 @@ export class TelegramStreamService {
       mbpsWasted: round2(this.globalWastedMbps),
       mbpsToClient: round2(all.reduce((acc, stat) => acc + stat.mbpsToClient, 0)),
       activeStreams: all.length,
+      activeDownloads: this.chunks.activeDownloads,
+      queuedDownloads: this.chunks.queuedDownloads,
       streams: all.map((stat) => this.toPublicStream(stat)),
     };
   }
@@ -250,7 +262,7 @@ export class TelegramStreamService {
       }
 
       // Nothing left to measure: stop the ticker and settle back to zero.
-      if (this.liveStreams.size === 0 && this.globalMbps === 0) {
+      if (this.liveStreams.size === 0 && this.chunks.activeDownloads === 0 && this.globalMbps === 0) {
         clearInterval(this.globalTimer!);
         this.globalTimer = null;
       }
@@ -369,14 +381,21 @@ export class TelegramStreamService {
     res: any,
     downloadName: string | null,
   ) {
-    const releaseSlot = await this.acquireStreamSlot();
+    const controller = new AbortController();
+    let releaseSlot: (() => void) | undefined;
+    const onClose = () => { controller.abort(); releaseSlot?.(); };
+    res.once("close", onClose);
+    if (res.destroyed || res.writableEnded) controller.abort();
 
     try {
-      await this.streamSourceWithSlot(source, req, res, downloadName, releaseSlot);
+      releaseSlot = await this.acquireStreamSlot(controller.signal);
+      await this.streamSourceWithSlot(source, req, res, downloadName, releaseSlot, controller);
     } catch (error) {
       // On a successful start the slot is released by finalize(); make sure a
       // failure before that point does not leak it (releasing twice is a no-op).
-      releaseSlot();
+      releaseSlot?.();
+      res.removeListener("close", onClose);
+      if (controller.signal.aborted) return;
       throw error;
     }
   }
@@ -387,16 +406,12 @@ export class TelegramStreamService {
     res: any,
     downloadName: string | null,
     releaseSlot: () => void,
+    controller: AbortController,
   ) {
     const totalSize = source.totalSize;
 
-    // Resolve everything that can fail BEFORE writing the response head.
-    const client = await this.telegramClientService.getClient();
-    let media = await this.resolveMedia(source);
-
-    // The client may have gone away while this request waited for a stream
-    // slot or for Telegram; its "close" event has already fired, so the
-    // listener below would never run and the slot would leak.
+    // Resolve Telegram lazily inside the bounded chunk jobs. A fully cached
+    // range (or an invalid range) must not wait for a Telegram reconnection.
     if (res.destroyed || res.writableEnded) {
       releaseSlot();
       return;
@@ -436,11 +451,7 @@ export class TelegramStreamService {
         : {}),
     });
 
-    const resolveMedia = (force: boolean) => this.resolveMedia(source, force);
     const parallelChunks = this.getParallelChunks();
-    const cacheGet = (offset: number) => this.cacheGet(`${source.cacheKey}:${offset}`);
-    const cachePut = (offset: number, buffer: Buffer) =>
-      this.cachePut(`${source.cacheKey}:${offset}`, buffer);
 
     // Throughput accounting (logged periodically + on close). `downloaded`
     // counts raw bytes pulled from Telegram; `served` counts bytes handed to
@@ -473,201 +484,59 @@ export class TelegramStreamService {
     this.liveStreams.set(stat.id, stat);
     this.startGlobalTicker();
 
-    // Bytes that reached the response, and bytes the abandoned read-ahead
-    // workers pulled anyway — both hit the wire, so both feed the global rate.
-    const countUsed = (bytes: number) => {
-      this.totalBytesFromTelegram += bytes;
-    };
-    const countWasted = (bytes: number) => {
-      stat.wastedBytes += bytes;
-      this.totalBytesFromTelegram += bytes;
-      this.totalWastedBytes += bytes;
-    };
+    const scheduler = this.chunks;
+    const service = this;
+    const signal = controller.signal;
+    type SettledChunk = { buffer: Buffer } | { error: unknown };
 
     async function* byteRange() {
       let position = start;
-      let retries = 0;
-      let lastErrorPosition = -1;
-      let refRefreshes = 0;
-
-      while (position <= end) {
-        // Serve everything we already have in the LRU cache first — typical
-        // for the mp4 index, re-watched ranges and timeline previews.
-        for (;;) {
+      let nextOffset = Math.floor(start / CHUNK_SIZE) * CHUNK_SIZE;
+      const pending = new Map<number, Promise<SettledChunk>>();
+      const fill = () => {
+        while (!signal.aborted && pending.size < parallelChunks && nextOffset <= end) {
+          const offset = nextOffset;
+          nextOffset += CHUNK_SIZE;
+          let transport: TelegramClient | undefined;
+          // Observe EVERY rejection immediately, including read-ahead that
+          // never becomes the next block after a seek or an earlier error.
+          const request = scheduler.read(
+            `${source.cacheKey}:${offset}`, signal,
+            (operationSignal, hasConsumers) => service.downloadChunk(source, offset, operationSignal,
+              (next) => { transport = next; }, hasConsumers),
+            () => transport ? service.telegramClientService.recoverClient(transport) : Promise.resolve(),
+          ).then((result): SettledChunk => {
+            downloadedBytes += result.downloadedBytes;
+            return { buffer: result.buffer };
+          }, (error): SettledChunk => ({ error }));
+          pending.set(offset, request);
+        }
+      };
+      try {
+        fill();
+        while (position <= end && !signal.aborted) {
           const aligned = Math.floor(position / CHUNK_SIZE) * CHUNK_SIZE;
-          const cached = cacheGet(aligned);
-          if (!cached) break;
-
-          let buffer = cached.subarray(position - aligned);
-          const remaining = end - position + 1;
-          if (buffer.length > remaining) {
-            buffer = buffer.subarray(0, remaining);
-          }
-          if (buffer.length === 0) return;
-
+          const result = await pending.get(aligned)!;
+          pending.delete(aligned);
+          if (signal.aborted) return;
+          if ("error" in result) throw result.error;
+          const skip = position - aligned;
+          const buffer = result.buffer.subarray(skip, skip + Math.min(
+            result.buffer.length - skip, end - position + 1,
+          ));
+          if (!buffer.length) throw new Error(`Telegram returned an empty block at ${position}.`);
+          // Retain a bounded window; the scheduler checks RAM and shared
+          // in-flight downloads on EVERY offset, not only before a cache miss.
+          fill();
           servedBytes += buffer.length;
           yield buffer;
           position += buffer.length;
-          if (position > end) return;
         }
-
-        const alignedStart = Math.floor(position / CHUNK_SIZE) * CHUNK_SIZE;
-        let skip = position - alignedStart;
-        let chunkOffset = alignedStart;
-
-        // Never start more workers than the rest of the range actually needs.
-        // Six unconditional workers turned a browser's two-byte probe of the
-        // mp4 index into ~3 MB pulled over the shared connection, and those
-        // probes happen on every open and every seek.
-        const workers = Math.max(
-          1,
-          Math.min(parallelChunks, Math.ceil((end - alignedStart + 1) / CHUNK_SIZE)),
-        );
-
-        // N interleaved iterators: worker j reads chunks j, j+N, j+2N, ...
-        // Consuming them round-robin restores sequential order while keeping
-        // N requests to Telegram in flight at any moment.
-        const iterators = Array.from({ length: workers }, (_, index) =>
-          client
-            .iterDownload({
-              file: media as Api.TypeMessageMedia,
-              offset: returnBigInt(alignedStart + index * CHUNK_SIZE),
-              requestSize: CHUNK_SIZE,
-              stride: workers * CHUNK_SIZE,
-            })
-            [Symbol.asyncIterator](),
-        );
-
-        // Offset each worker's outstanding request will come back with, so the
-        // read-ahead can still be cached if this response stops needing it.
-        const nextOffsets = iterators.map((_, index) => alignedStart + index * CHUNK_SIZE);
-        const pending: (Promise<IteratorResult<Buffer>> | null)[] = iterators.map((iterator) =>
-          iterator.next(),
-        );
-        let worker = 0;
-
-        try {
-          for (;;) {
-            const result = await pending[worker];
-
-            if (!result || result.done) {
-              return;
-            }
-
-            // Re-arm this worker so its next chunk downloads while the other
-            // workers' chunks are consumed — but only while that chunk is
-            // still inside the requested range. Re-arming unconditionally
-            // meant every response fetched one extra 512 KB per worker that
-            // it could never use.
-            const followingOffset = nextOffsets[worker] + workers * CHUNK_SIZE;
-
-            if (followingOffset <= end) {
-              pending[worker] = iterators[worker].next();
-              nextOffsets[worker] = followingOffset;
-            } else {
-              pending[worker] = null;
-            }
-
-            const raw = Buffer.isBuffer(result.value)
-              ? result.value
-              : Buffer.from(result.value);
-            downloadedBytes += raw.length;
-            countUsed(raw.length);
-            cachePut(chunkOffset, raw);
-            chunkOffset += raw.length;
-
-            let buffer = raw;
-
-            if (skip > 0) {
-              if (buffer.length <= skip) {
-                skip -= buffer.length;
-                worker = (worker + 1) % workers;
-                continue;
-              }
-              buffer = buffer.subarray(skip);
-              skip = 0;
-            }
-
-            const remaining = end - position + 1;
-            if (buffer.length > remaining) {
-              buffer = buffer.subarray(0, remaining);
-            }
-
-            servedBytes += buffer.length;
-            yield buffer;
-            position += buffer.length;
-
-            if (position > end) {
-              return;
-            }
-
-            worker = (worker + 1) % parallelChunks;
-          }
-        } catch (error) {
-          const message = String(error);
-
-          // The cached file_reference expires periodically on long streams;
-          // refresh the message and resume from the current position.
-          if (message.includes("FILE_REFERENCE")) {
-            refRefreshes += 1;
-            if (refRefreshes > 3) throw error;
-            media = await resolveMedia(true);
-            continue;
-          }
-
-          // Any other transient failure (timeout, dropped chunk, brief flood):
-          // retry the current position a few times with backoff instead of
-          // killing the whole response. Reset the counter whenever we managed
-          // to advance since the last error.
-          if (position !== lastErrorPosition) {
-            retries = 0;
-            lastErrorPosition = position;
-          }
-          retries += 1;
-          if (retries <= MAX_CHUNK_RETRIES) {
-            logger.warn(
-              `Telegram stream ${source.cacheKey}: chunk error at byte ${position} ` +
-                `(attempt ${retries}/${MAX_CHUNK_RETRIES}): ${message}`,
-            );
-            await sleep(RETRY_BASE_DELAY_MS * retries);
-            continue;
-          }
-          throw error;
-        } finally {
-          // Swallow rejections of requests still in flight and close the
-          // iterators; otherwise abandoned promises crash the process.
-          //
-          // gramjs offers no way to cancel an outstanding request, so those
-          // bytes arrive whether we want them or not — park them in the chunk
-          // cache instead of dropping them. A seek lands in exactly this area
-          // moments later, and re-downloading it was the single biggest source
-          // of pointless Telegram traffic. Only what the cache refuses (cache
-          // disabled, or already present) counts as waste.
-          for (let index = 0; index < pending.length; index += 1) {
-            const offset = nextOffsets[index];
-            void Promise.resolve(pending[index])
-              .then((settled) => {
-                if (!settled || settled.done || !settled.value) return;
-                const buffer = Buffer.isBuffer(settled.value)
-                  ? settled.value
-                  : Buffer.from(settled.value);
-                if (buffer.length === 0) return;
-                if (cachePut(offset, buffer)) {
-                  countUsed(buffer.length);
-                } else {
-                  countWasted(buffer.length);
-                }
-              })
-              .catch(() => undefined);
-          }
-          for (const iterator of iterators) {
-            try {
-              void iterator.return?.(undefined);
-            } catch {
-              // Already closed.
-            }
-          }
-        }
+      } finally {
+        controller.abort();
+        // Active RPCs finish in the shared scheduler and warm the cache;
+        // queued blocks with no remaining consumer are removed immediately.
+        pending.clear();
       }
     }
 
@@ -722,6 +591,7 @@ export class TelegramStreamService {
       finalized = true;
       clearInterval(speedTimer);
       this.liveStreams.delete(stat.id);
+      controller.abort();
       releaseSlot();
       if (servedBytes === 0) return;
       const elapsed = (Date.now() - startedAt) / 1000;
@@ -757,6 +627,61 @@ export class TelegramStreamService {
     readable.pipe(res);
   }
 
+  private async downloadChunk(
+    source: StreamSource,
+    offset: number,
+    signal: AbortSignal,
+    onClient: (client: TelegramClient) => void,
+    hasConsumers: () => boolean,
+  ): Promise<Buffer> {
+    let client: TelegramClient | undefined;
+    let media: Api.TypeMessageMedia | undefined;
+    let forceRefresh = false;
+    for (let attempt = 0; ; attempt++) {
+      if (signal.aborted) throw new DownloadAbortedError();
+      this.assertDownloadAllowed();
+      try {
+        client ??= await this.telegramClientService.getClient();
+        onClient(client);
+        media ??= await this.resolveMedia(source, forceRefresh);
+        if (signal.aborted) throw new DownloadAbortedError();
+        const iterator = client.iterDownload({
+          file: media, offset: returnBigInt(offset), requestSize: CHUNK_SIZE, limit: 1,
+        })[Symbol.asyncIterator]();
+        const result = await iterator.next();
+        const buffer = result.done ? Buffer.alloc(0) : Buffer.from(result.value);
+        const expected = Math.min(CHUNK_SIZE, source.totalSize - offset);
+        if (buffer.length !== expected) throw new Error(`Incomplete Telegram block at ${offset}.`);
+        return buffer;
+      } catch (error) {
+        const seconds = Number((error as { seconds?: number })?.seconds);
+        if (Number.isFinite(seconds) && seconds > 0) {
+          // Long FLOOD_WAITs escape GramJS's automatic sleep. Remember the
+          // deadline across responses/seeks and fail this request, instead of
+          // letting the chunk timeout recycle a healthy, rate-limited client.
+          this.downloadBlockedUntil = Math.max(this.downloadBlockedUntil, Date.now() + seconds * 1000);
+          throw error;
+        }
+        if (signal.aborted || !hasConsumers()) throw new DownloadAbortedError();
+        if (attempt >= MAX_CHUNK_RETRIES) throw error;
+        const message = String(error);
+        if (message.includes("FILE_REFERENCE") || message.includes("FILEREF_UPGRADE")) {
+          media = undefined;
+          forceRefresh = true;
+        } else {
+          this.logger.warn(`Telegram chunk ${source.cacheKey}:${offset} retry ${attempt + 1}: ${message}`);
+          await abortableDelay(RETRY_BASE_DELAY_MS * (attempt + 1), signal);
+        }
+        client = undefined;
+      }
+    }
+  }
+
+  private assertDownloadAllowed() {
+    const remaining = this.downloadBlockedUntil - Date.now();
+    if (remaining > 0) throw new ServiceUnavailableException(`Telegram FLOOD_WAIT: retry in ${Math.ceil(remaining / 1000)} seconds.`);
+  }
+
   private getParallelChunks() {
     const configured = Number.parseInt(process.env.TELEGRAM_STREAM_PARALLELISM ?? "", 10);
 
@@ -780,28 +705,41 @@ export class TelegramStreamService {
    * Take a slot in the stream-concurrency gate, waiting briefly when all
    * slots are busy (a seek storm). Returns an idempotent release callback.
    */
-  private async acquireStreamSlot(): Promise<() => void> {
+  private async acquireStreamSlot(signal: AbortSignal): Promise<() => void> {
+    if (signal.aborted) throw new DownloadAbortedError();
     // Queue behind existing waiters so slots are handed out in FIFO order.
     if (this.activeStreams >= this.getMaxConcurrentStreams() || this.slotWaiters.length > 0) {
       await new Promise<void>((resolve, reject) => {
         const waiter = () => {
           clearTimeout(timer);
+          signal.removeEventListener("abort", onAbort);
+          // Reserve synchronously, before resolving the next waiter. A new
+          // request cannot steal this slot between promise microtasks.
+          this.activeStreams += 1;
           resolve();
         };
-        const timer = setTimeout(() => {
+        const remove = () => {
           const index = this.slotWaiters.indexOf(waiter);
           if (index !== -1) this.slotWaiters.splice(index, 1);
+          clearTimeout(timer);
+          signal.removeEventListener("abort", onAbort);
+        };
+        const onAbort = () => { remove(); reject(new DownloadAbortedError()); };
+        const timer = setTimeout(() => {
+          remove();
           reject(
             new ServiceUnavailableException(
               "Слишком много одновременных потоков из Telegram — повторите чуть позже.",
             ),
           );
         }, STREAM_SLOT_WAIT_MS);
+        signal.addEventListener("abort", onAbort, { once: true });
         this.slotWaiters.push(waiter);
       });
+    } else {
+      this.activeStreams += 1;
     }
 
-    this.activeStreams += 1;
     let released = false;
 
     return () => {
@@ -860,6 +798,14 @@ export class TelegramStreamService {
       return cached.media;
     }
 
+    const pending = this.mediaRequests.get(source.cacheKey);
+    if (pending) return pending;
+    const request = this.fetchMedia(source).finally(() => this.mediaRequests.delete(source.cacheKey));
+    this.mediaRequests.set(source.cacheKey, request);
+    return request;
+  }
+
+  private async fetchMedia(source: StreamSource) {
     const client = await this.telegramClientService.getClient();
     const entity = await this.telegramClientService.resolveChat(source.chatId);
     const messages = await client.getMessages(entity, {
@@ -883,10 +829,6 @@ export class TelegramStreamService {
 
     return media;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function round1(value: number) {

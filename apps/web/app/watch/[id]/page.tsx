@@ -15,6 +15,7 @@ import { useLanguage } from "../../providers";
 import { ChatReplay } from "../../components/ChatReplay";
 import { WatchSkeleton } from "../../components/Skeleton";
 import { VideoPlayer, type PlayerMode } from "../../components/VideoPlayer";
+import type { PreviewFrames } from "../../lib/timeline-preload";
 import { CloudIcon, DownloadIcon, HardDriveIcon, SendIcon } from "../../components/icons";
 
 /** One piece of the recording, and the tier it is read from. */
@@ -43,7 +44,7 @@ type PublicStreamDetail = {
   fileSizeBytes: string | null;
   videoUrl: string;
   hlsUrl?: string;
-  previewFrames?: { baseUrl: string; count: number; intervalSec: number };
+  previewFrames?: PreviewFrames;
   broadcast?: BroadcastInfo | null;
   storage?: RecordingStorage;
   playbackSources?: PlaybackChoice[];
