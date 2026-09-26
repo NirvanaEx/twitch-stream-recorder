@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx app/lib/media-clock.spec.ts app/lib/media-recovery.spec.ts app/lib/twitch-native-chat.spec.ts app/twitch-chat-widget/timeline.spec.ts",
+    "test": "tsx --tsconfig tsconfig.test.json --test app/lib/media-timeline.spec.ts app/lib/replay-loader.spec.ts app/components/ChatReplay.spec.tsx app/components/ChatText.spec.tsx app/lib/media-clock.spec.ts app/lib/media-recovery.spec.ts app/lib/twitch-native-chat.spec.ts app/twitch-chat-widget/timeline.spec.ts app/lib/media-gap.spec.ts app/lib/media-range.spec.ts",
     "build": "next build",
     "dev": "next dev --turbopack",
     "start": "next start",

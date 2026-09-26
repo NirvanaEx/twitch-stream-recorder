@@ -415,6 +415,13 @@ export function ChatReplay({
     [baseOffsetSec, offset, mediaTimeline],
   );
 
+  // Synchronization uses part-local time; labels use the player's full clock.
+  // Subtracting the active part from an earlier message made it show 0:00.
+  const toDisplayTime = useCallback((relativeTimeSec: number) => {
+    const time = toRenderTime(relativeTimeSec);
+    return videoElement ? partMediaTarget(videoElement, time, mediaPartStartSec) : time;
+  }, [toRenderTime, videoElement, mediaPartStartSec]);
+
   const canSeek = useCallback(
     (relativeTimeSec: number) => {
       if (!videoElement || isLive) return false;
@@ -610,7 +617,7 @@ export function ChatReplay({
               <ChatMessageRow
                 key={entry.message.id}
                 message={entry.message}
-                renderTime={entry.renderTime}
+                renderTime={toDisplayTime(entry.message.relativeTimeSec)}
                 deleted={entry.deleted}
                 emoteMap={emoteMap}
                 gifAssets={data?.gifAssets}
@@ -655,7 +662,7 @@ export function ChatReplay({
             onMentionClick={openMention}
             onSeek={seekTo}
             canSeek={canSeek}
-            toRenderTime={toRenderTime}
+            toRenderTime={toDisplayTime}
             anchorEl={wrapEl}
           />
         ) : null}
