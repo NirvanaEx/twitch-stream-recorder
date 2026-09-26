@@ -25,6 +25,7 @@ import { parseStoredJson, parseStoredJsonString } from "../chat/stored-chat.util
 import { buildStreamTimeline } from "../chat/stream-timeline.utils";
 import { StreamEventsService } from "../stream-events/stream-events.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { resolveAudioReadPath } from "../archive-storage/archive-paths";
 import {
   buildMediaCacheHeaders,
   computeSessionChatOffsetSec,
@@ -502,7 +503,7 @@ export class PublicStreamsController {
       downloadName = `${safeName}-${id}.m4a`;
     }
 
-    const absolutePath = session.audioPath ? resolve(session.audioPath) : null;
+    const absolutePath = session.audioPath ? resolveAudioReadPath(session.audioPath) : null;
 
     if (!absolutePath || !existsSync(absolutePath)) {
       // The local file is gone — stream the Telegram copy instead.

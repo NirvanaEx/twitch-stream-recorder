@@ -88,6 +88,10 @@ services:
       # so an unmounted drive degrades to "disk + Telegram" instead of quietly
       # filling the server's own disk under the mount point.
       ARCHIVE_DIR: ${ARCHIVE_DIR:-/mnt/gdrive/twitch-recorder}
+      # Optional second, read-only mount of the same archive. Its independent
+      # VFS cache prevents large Telegram video jobs from evicting userscript
+      # audio ranges from the main Drive cache.
+      ARCHIVE_AUDIO_READ_DIR: ${ARCHIVE_AUDIO_READ_DIR:-}
     depends_on:
       postgres:
         condition: service_healthy

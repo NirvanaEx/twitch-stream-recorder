@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   buildSessionDir,
   formatStamp,
   isUnderDataRoot,
+  resolveAudioReadPath,
   slugifyTitle,
 } from "./archive-paths";
 
@@ -86,4 +90,55 @@ test("tells the local disk apart from the archive tier", (t) => {
   // prefix must not read as "inside".
   assert.equal(isUnderDataRoot("/data"), false);
   assert.equal(isUnderDataRoot("/database/records/x.mp4"), false);
+});
+
+test("reads archived audio through an independent cache mount", (t) => {
+  const root = join(tmpdir(), `tsr-audio-read-${process.pid}-${Date.now()}`);
+  const primary = join(root, "primary");
+  const audioRead = join(root, "audio-read");
+  const relativeAudio = join("twitch", "strogo", "2026-08", "session", "audio.m4a");
+  const canonical = join(primary, relativeAudio);
+  const cached = join(audioRead, relativeAudio);
+  const previousArchive = process.env.ARCHIVE_DIR;
+  const previousAudioRead = process.env.ARCHIVE_AUDIO_READ_DIR;
+
+  mkdirSync(dirname(cached), { recursive: true });
+  writeFileSync(cached, "audio");
+  process.env.ARCHIVE_DIR = primary;
+  process.env.ARCHIVE_AUDIO_READ_DIR = audioRead;
+
+  t.after(() => {
+    if (previousArchive === undefined) delete process.env.ARCHIVE_DIR;
+    else process.env.ARCHIVE_DIR = previousArchive;
+    if (previousAudioRead === undefined) delete process.env.ARCHIVE_AUDIO_READ_DIR;
+    else process.env.ARCHIVE_AUDIO_READ_DIR = previousAudioRead;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  assert.equal(resolveAudioReadPath(canonical), cached);
+  assert.equal(
+    resolveAudioReadPath(join(root, "local", "audio.m4a")),
+    join(root, "local", "audio.m4a"),
+  );
+});
+
+test("falls back to the canonical archive path while the audio mount is cold", (t) => {
+  const root = join(tmpdir(), `tsr-audio-cold-${process.pid}-${Date.now()}`);
+  const primary = join(root, "primary");
+  const audioRead = join(root, "audio-read");
+  const canonical = join(primary, "twitch", "strogo", "audio.m4a");
+  const previousArchive = process.env.ARCHIVE_DIR;
+  const previousAudioRead = process.env.ARCHIVE_AUDIO_READ_DIR;
+
+  process.env.ARCHIVE_DIR = primary;
+  process.env.ARCHIVE_AUDIO_READ_DIR = audioRead;
+
+  t.after(() => {
+    if (previousArchive === undefined) delete process.env.ARCHIVE_DIR;
+    else process.env.ARCHIVE_DIR = previousArchive;
+    if (previousAudioRead === undefined) delete process.env.ARCHIVE_AUDIO_READ_DIR;
+    else process.env.ARCHIVE_AUDIO_READ_DIR = previousAudioRead;
+  });
+
+  assert.equal(resolveAudioReadPath(canonical), canonical);
 });

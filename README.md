@@ -142,6 +142,12 @@ server disk and go to Telegram, and the backlog moves across on its own once
 the mount is back. That check is the `.archive-root` marker file — see
 `.env.example` for how to create it and why it exists.
 
+For busy servers, `ARCHIVE_AUDIO_READ_DIR` may point at a second read-only
+mount of the same archive with its own bounded VFS cache. Public audio ranges
+use that mount first, so a large video upload cannot continually evict the
+small pieces needed by the Twitch userscript. Archive writes remain on
+`ARCHIVE_DIR`; if the audio mount is unavailable, playback falls back there.
+
 Retention is set in the admin panel, Settings → Storage. `/admin/storage`
 shows the tier's state, its size, what is queued and what failed.
 
@@ -294,3 +300,7 @@ Relevant docs:
 ## Current State
 
 This is still an early scaffold, but channel management and recording can now run either with official Twitch API credentials or in a public `streamlink`-based fallback mode.
+
+## Audio completion for segmented recordings (server)
+
+The host `twitch-segmented-audio.timer` creates missing standalone audio after segmented recordings finish. Implementation, recovery behavior and operational commands: [ops/segmented-audio.md](ops/segmented-audio.md).
