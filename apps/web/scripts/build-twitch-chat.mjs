@@ -8,6 +8,8 @@ const css = (await readFile(path.join(root, 'app/globals.css'), 'utf8'))
 :host { all: initial; display: block; height: 100%; font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #e6e9ef; }
 .tsr-shared-chat { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .tsr-shared-chat > .chat-replay { flex: 1; height: 100%; min-height: 0; border-radius: 0; border: 0; }
+.tsr-shared-chat .chat-bar { padding-left: var(--tsr-chat-header-left, 12px); padding-right: var(--tsr-chat-header-right, 12px); min-height: 42px; flex-shrink: 0; }
+.tsr-shared-chat .chat-bar__title { white-space: nowrap; }
 `;
 await mkdir(path.join(root, 'public'), {recursive: true});
 await build({entryPoints: [path.join(widget, 'entry.tsx')], outfile: path.join(root, 'public/twitch-chat.widget.js'),

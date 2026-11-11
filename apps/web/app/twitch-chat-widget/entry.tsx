@@ -5,6 +5,7 @@ import { loadReplayChat } from "../lib/replay-loader";
 import type { ChatResponse } from "../lib/chat-render";
 import { WidgetContext } from "./context";
 import { apiGet, configureApi, type ReadJson } from "./api";
+import { loadCachedReplay } from "./replay-cache";
 import { mergeChats, onVodTimeline, sessionShift, shiftMetadata, type Session, type ReplayPage } from "./timeline";
 
 declare const __CHAT_CSS__: string;
@@ -19,7 +20,7 @@ function Widget({ options }: { options: Options }) {
   const [failure, setFailure] = useState(false);
   const [retry, setRetry] = useState(0);
   const [activeSession, setActiveSession] = useState("");
-  const key = options.sessions.map((s) => s.id).join(",") + ":" + options.vodStartMs;
+  const key = sessionKey(options);
   const [shifts, setShifts] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -32,13 +33,18 @@ function Widget({ options }: { options: Options }) {
       // Bound request concurrency and retain the site's complete pagination.
       for (const session of options.sessions) {
         const endpoint = `public/streams/${session.id}`;
-        let chat: ChatResponse | null;
-        try {
-          chat = await loadReplayChat(endpoint + "/chat", () => cancelled, (path) => apiGet<ReplayPage>(path));
-        } catch {
-          // Chat remains useful when the local video is no longer available.
-          chat = await apiGet<ChatResponse>(endpoint + "/chat-replay");
-        }
+        const chat = await loadCachedReplay(
+          `${new URL(options.server).origin}:${session.id}:${session.recordingEndedAt ?? "active"}:v1`,
+          Boolean(session.recordingEndedAt), async () => {
+            const readSession = <T,>(path: string) => options.request(new URL(options.server).origin + "/api/" + path) as Promise<T>;
+            // The in-flight request belongs to the cache, so a disappearing
+            // host cannot cancel a load another mounted consumer is awaiting.
+            try {
+              const result = await loadReplayChat(endpoint + "/chat", () => false, (path) => readSession<ReplayPage>(path));
+              if (result) return result;
+            } catch { /* Legacy replay also works without local video. */ }
+            return readSession<ChatResponse>(endpoint + "/chat-replay");
+          });
         if (cancelled || !chat) return;
         const shift = sessionShift(session, options.vodStartMs, chat);
         nextShifts[session.id] = shift;
@@ -102,7 +108,22 @@ export function mount(host: HTMLElement, options: Options) {
   container.className = "tsr-shared-chat";
   shadow.append(style, container);
   const root = createRoot(container);
-  const update = (next: Options) => root.render(<Widget key={next.sessions.map((s) => s.id).join(",") + ":" + next.vodStartMs} options={next} />);
+  let previous: Options | undefined;
+  let previousKey = "";
+  const update = (next: Options) => {
+    const key = sessionKey(next);
+    const unchanged = previous && previousKey === key && previous.server === next.server &&
+      previous.video === next.video && previous.offset === next.offset &&
+      previous.spoilerFree === next.spoilerFree && previous.locale === next.locale;
+    previous = next;
+    previousKey = key;
+    if (!unchanged) root.render(<Widget key={key} options={next} />);
+  };
   update(options);
   return { update, unmount: () => root.unmount() };
+}
+
+function sessionKey(options: Options) {
+  return options.sessions.map((s) => `${s.id}:${s.recordingStartedAt ?? s.startedAt ?? ""}:${s.recordingEndedAt ?? ""}`)
+    .sort().join(",") + ":" + options.vodStartMs;
 }

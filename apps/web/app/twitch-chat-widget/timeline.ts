@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatResponse } from "../lib/chat-render";
 
-export type Session = { id: string; recordingStartedAt?: string; startedAt?: string };
+export type Session = { id: string; recordingStartedAt?: string; startedAt?: string; recordingEndedAt?: string | null };
 export type ReplayPage = ChatResponse & { nextCursor?: string | null };
 export function sessionShift(session: Session, vodStartMs: number, data?: ChatResponse) {
   const anchor = data?.mediaTimeline?.captureAnchorMs || Date.parse(session.recordingStartedAt || session.startedAt || "");

@@ -61,6 +61,18 @@ const wait = async (condition) => { for(let i=0;i<80;i++){if(condition()) return
   assert.ok(!shadow.querySelector('.chat-gif'),'Seeking before message hides future GIF');
   video.currentTime=135; video.dispatchEvent(new w.Event('seeked'));
   await wait(()=>shadow.querySelector('.chat-gif'));
+  const chatRequests = calls.filter(url => /\/chat[?]/.test(url)).length;
+  const firstMessage = shadow.querySelector('.chat-gif');
+  for (let i = 0; i < 20; i++) instance.update({...options, sessions:[...options.sessions]});
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(shadow.querySelector('.chat-gif'), firstMessage, 'Unchanged updates keep the rendered DOM');
+  instance.unmount();
+  const nextHost = w.document.createElement('div');
+  w.document.body.appendChild(nextHost);
+  instance = widget.mount(nextHost, options);
+  await wait(() => nextHost.shadowRoot.querySelector('.chat-gif'));
+  assert.equal(calls.filter(url => /\/chat[?]/.test(url)).length, chatRequests, 'Remount reuses the complete paginated chat');
+  assert.equal(calls.filter(url => url.endsWith('/timeline')).length, 1, 'Metadata requests are reused');
   instance.unmount();
   console.log('PASS shared GIF rendering, complete pagination, poll timeline, settings, persisted preferences, offset sync, seeking and isolated styles');
   dom.window.close();
