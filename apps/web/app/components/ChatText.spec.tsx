@@ -208,3 +208,18 @@ test("an imported archive cannot replace GIF media with executable data or arbit
   }
   assert.equal(resolveArchivedGif(`asset:${key}`, { [key]: "data:image/gif;base64,AAAA" }), "data:image/gif;base64,AAAA");
 });
+
+
+test('small chat emotes load eagerly and a failed mirror is reused through the CDN fallback', async () => {
+  const host=document.createElement('div');const root=createRoot(host);
+  const map=new Map([['catFast',{id:'fast',name:'catFast',url:'https://cdn.example/fast.webp',localUrl:'public/emotes/fast-test.webp',animated:true}]]);
+  const render=async(key:string)=>act(async()=>root.render(<ChatText key={key} text='catFast' emoteMap={map} emotePx={34} />));
+  try {
+    await render('first');const image=host.querySelector('img')!;
+    assert.equal(image.getAttribute('loading'),'eager');assert.equal(image.getAttribute('decoding'),'async');
+    await act(async()=>{image.dispatchEvent(new dom.window.Event('error'));});
+    assert.equal(host.querySelector('img')?.src,'https://cdn.example/fast.webp');
+    await render('next-message');
+    assert.equal(host.querySelector('img')?.src,'https://cdn.example/fast.webp','A new message does not retry the missing mirror');
+  } finally {await act(async()=>root.unmount());}
+});

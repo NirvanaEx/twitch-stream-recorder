@@ -40,6 +40,7 @@ import { SettingsIcon } from "./icons";
 import { SkeletonText } from "./Skeleton";
 import { advanceChatTail, chatTimeAtMedia, mediaTimeAtChat, validatedMediaTimeline } from "../lib/media-timeline";
 import { loadReplayChat } from "../lib/replay-loader";
+import { chatImages, upcomingChatImages } from "../lib/chat-image-cache";
 import { StreamEventCard } from "./StreamEventCard";
 import { StreamMetaStrip } from "./StreamMetaStrip";
 
@@ -321,6 +322,11 @@ export function ChatReplay({
   }, [data, prefs.showDeleted, prefs.hideCommands, hiddenUsers, searchTerm]);
 
   const hiddenCount = (data?.messages.length ?? 0) - timeline.length;
+
+  useEffect(() => {
+    if (isLive || !videoElement) return;
+    chatImages.warm(upcomingChatImages(timeline, emoteMap, chatThreshold, videoElement.playbackRate));
+  }, [timeline, emoteMap, chatThreshold, isLive, videoElement]);
 
   // Twitch-style: show only messages whose render_time has been reached, keep
   // the last MAX_VISIBLE so the chat doesn't grow unbounded. Messages arrive

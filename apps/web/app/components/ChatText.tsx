@@ -3,6 +3,7 @@
 import { memo, useMemo, useState } from "react";
 import { renderTokens, type EmoteEntry, type InlineEmote } from "../lib/chat-render";
 import { resolveArchivedGif } from "../lib/chat-gifs";
+import { chatImages } from "../lib/chat-image-cache";
 
 /**
  * A message body: text with emotes substituted in. Shared by the replay list
@@ -93,28 +94,8 @@ export const ChatText = memo(function ChatText({
           <ChatGif key={`gif-${token.id}-${token.url}-${gifUrls?.[token.url]}-${index}`}
             url={token.url} label={token.name} reference={gifUrls?.[token.url]} assets={gifAssets} />
         ) : token.type === "emote" ? (
-          <img
-            key={`${token.name}-${index}`}
-            src={token.url}
-            alt={token.name}
-            title={token.name}
-            className="chat-emote"
-            style={{ height: `${emotePx}px` }}
-            loading="lazy"
-            onError={
-              token.fallbackUrl
-                ? (event) => {
-                    // Our copy is missing (recorded before the mirror, or the
-                    // file was lost) — retry against 7TV once, then stop, so a
-                    // dead url cannot loop.
-                    const image = event.currentTarget;
-                    if (token.fallbackUrl && image.src !== token.fallbackUrl) {
-                      image.src = token.fallbackUrl;
-                    }
-                  }
-                : undefined
-            }
-          />
+          <ChatEmote key={`${token.url}-${index}`} url={token.url} fallbackUrl={token.fallbackUrl}
+            name={token.name} height={emotePx} />
         ) : (
           <span key={`text-${index}`}>{token.value}</span>
         ),
@@ -122,6 +103,19 @@ export const ChatText = memo(function ChatText({
     </>
   );
 });
+
+function ChatEmote({ url, fallbackUrl, name, height }: {
+  url: string; fallbackUrl?: string; name: string; height: number;
+}) {
+  const [failed, setFailed] = useState(false);
+  const source = failed && fallbackUrl ? fallbackUrl : chatImages.source(url);
+  return <img src={source} alt={name} title={name} className="chat-emote"
+    style={{ height: `${height}px` }} loading="eager" decoding="async"
+    onError={fallbackUrl && source !== fallbackUrl ? () => {
+      chatImages.rememberFallback(url, fallbackUrl);
+      setFailed(true);
+    } : undefined} />;
+}
 
 function ChatGif({ url, label, reference, assets }: {
   url: string; label: string; reference?: string; assets?: Record<string, string>;

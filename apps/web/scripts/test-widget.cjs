@@ -19,7 +19,7 @@ const options = {server:'https://stream.neyron.site', sessions:[{id:'session', r
   video, offset:0, spoilerFree:true, request:async (url) => {
     calls.push(url);
     if (url.includes('/chat?') && !url.includes('cursor=')) return {messages:[{id:'gif', authorLogin:'viewer', textRaw:label, relativeTimeSec:25, gifs:`0-${label.length-1}|joSNxeswxuc74Juo8X|${gif}`}], emotes:null, nextCursor:'next'};
-    if (url.includes('cursor=')) return {messages:[{id:'later', authorLogin:'second', textRaw:'Second page', relativeTimeSec:30}], emotes:null};
+    if (url.includes('cursor=')) return {messages:[{id:'later', authorLogin:'second', textRaw:'Second page', relativeTimeSec:30,isFirstMessage:true}], emotes:null};
     if (url.endsWith('/events')) return {events:[poll]};
     if (url.endsWith('/timeline')) return {points:[{relativeTimeSec:0,viewerCount:50,title:'Title',categoryName:'Game'}],segments:[],titles:[],peakViewers:50,averageViewers:50};
     if (url.endsWith('/emotes/live')) return {emotes:null};
@@ -34,6 +34,8 @@ const wait = async (condition) => { for(let i=0;i<80;i++){if(condition()) return
   await wait(()=>shadow.querySelector('.chat-gif'));
   assert.equal(shadow.querySelector('.chat-gif img').src, gif);
   assert.match(shadow.textContent, /Second page/);
+  const firstRow=shadow.querySelector('.chat-message.is-first');
+  assert.ok(firstRow?.querySelector('.chat-time') && firstRow.querySelector('.chat-author') && firstRow.querySelector('.chat-text'),'First-message highlight encloses the entire row');
   await wait(()=>shadow.textContent.includes('Test poll'));
   assert.ok(calls.some(url=>url.includes('cursor=next')));
   assert.equal(w.document.head.querySelector('style'),null,'Widget styles must remain inside Shadow DOM');
